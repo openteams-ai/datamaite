@@ -1,0 +1,129 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "databridge"
+version = "0.1.0"
+description = "A unified framework for dataset loading, conversion, and quality validation."
+readme = "README.md"
+license = { text = "TBD" }
+authors = [
+    { name = "OpenTeams" },
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+video = [
+    "opencv-python-headless>=4.8",
+]
+dev = [
+    "pre-commit>=3.6",
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "bandit[toml]>=1.7",
+    "pyright>=1.1",
+]
+
+[project.scripts]
+databridge = "databridge._cli:main"
+
+[project.urls]
+Repository = "https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databridge"]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "C90",  # mccabe complexity
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "ISC",  # flake8-implicit-str-concat
+    "ICN",  # flake8-import-conventions
+    "PT",   # flake8-pytest-style
+    "RET",  # flake8-return
+    "SIM",  # flake8-simplify
+    "ARG",  # flake8-unused-arguments
+    "PD",   # pandas-vet
+    "RUF",  # ruff-specific rules
+    "PERF", # perflint
+]
+ignore = [
+    "ISC001",  # conflicts with ruff format
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ARG001", "PLR2004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["databridge"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=databridge",
+    "--cov-report=term-missing",
+    "--cov-report=xml:coverage_report.xml",
+    "--cov-fail-under=90",
+    "-ra",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring external resources",
+]
+
+# ---------------------------------------------------------------------------
+# Pyright
+# ---------------------------------------------------------------------------
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+include = ["src"]
+exclude = ["tests"]
+reportMissingImports = "warning"
+reportMissingTypeStubs = false
+
+# ---------------------------------------------------------------------------
+# Bandit
+# ---------------------------------------------------------------------------
+[tool.bandit]
+targets = ["src"]
+exclude_dirs = ["tests"]

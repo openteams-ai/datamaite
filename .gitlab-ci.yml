@@ -1,0 +1,115 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+default:
+  retry: 1
+  artifacts:
+    expire_in: 1 week
+
+stages:
+  - lint
+  - typecheck
+  - build
+  - test
+  - dr-compliance
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+
+.shared-setup:
+  interruptible: true
+  image: python:${VERSION}-slim
+  before_script:
+    - pip install --quiet uv
+    - uv sync --frozen --all-extras
+  cache:
+    key: "uv-py${VERSION}-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .uv-cache/
+      - .venv/
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - when: never
+
+# ---------------------------------------------------------------------------
+# Lint
+# ---------------------------------------------------------------------------
+lint:
+  extends: .shared-setup
+  stage: lint
+  variables:
+    VERSION: "3.12"
+  script:
+    - uv run pre-commit run --all-files
+
+# ---------------------------------------------------------------------------
+# Type checking
+# ---------------------------------------------------------------------------
+pyright:
+  extends: .shared-setup
+  stage: typecheck
+  variables:
+    VERSION: "3.12"
+  script:
+    - uv run pyright src/
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+build:
+  extends: .shared-setup
+  stage: build
+  variables:
+    VERSION: "3.12"
+  script:
+    - uv build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+# ---------------------------------------------------------------------------
+# Test matrix
+# ---------------------------------------------------------------------------
+.test-base:
+  extends: .shared-setup
+  stage: test
+  script:
+    - uv run pytest
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage_report.xml
+
+test-py310:
+  extends: .test-base
+  variables:
+    VERSION: "3.10"
+
+test-py311:
+  extends: .test-base
+  variables:
+    VERSION: "3.11"
+
+test-py312:
+  extends: .test-base
+  variables:
+    VERSION: "3.12"
+
+# ---------------------------------------------------------------------------
+# DR Compliance (JATIC program requirement)
+# ---------------------------------------------------------------------------
+include:
+  - component: gitlab.jatic.net/jatic/devsecops/components/dr-compliance@0.5.2
+    inputs:
+      stage: dr-compliance
+      sast_excluded_paths: tests
+      image: python:3.12-slim
+      allow_failure: true
