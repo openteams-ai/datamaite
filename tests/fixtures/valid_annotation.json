@@ -1,0 +1,58 @@
+{
+    "task_id": "test-task-001",
+    "status": "completed",
+    "type": "videoannotation",
+    "created_at": "2026-01-01T00:00:00Z",
+    "completed_at": "2026-01-02T00:00:00Z",
+    "project": "test-project",
+    "metadata": {
+        "original_filename": "clip_001.mp4"
+    },
+    "params": {
+        "annotation_frame_rate": 5,
+        "videoMetadata": {
+            "video": {
+                "fps": 30
+            }
+        }
+    },
+    "response": {
+        "annotations": {
+            "track-uuid-001": {
+                "label": "vehicle",
+                "geometry": "box",
+                "frames": [
+                    {
+                        "keyframeType": "start",
+                        "isInferredKeyframe": false,
+                        "left": 100,
+                        "top": 200,
+                        "height": 50,
+                        "width": 80,
+                        "key": 0,
+                        "attributes": {
+                            "is_truncated": "0%",
+                            "is_occluded": "0%"
+                        },
+                        "timestamp_secs": 0.0
+                    },
+                    {
+                        "keyframeType": "middle",
+                        "isInferredKeyframe": false,
+                        "left": 105,
+                        "top": 198,
+                        "height": 51,
+                        "width": 82,
+                        "key": 1,
+                        "attributes": {
+                            "is_truncated": "0%",
+                            "is_occluded": "0%"
+                        },
+                        "timestamp_secs": 0.2
+                    }
+                ]
+            }
+        },
+        "events": {}
+    }
+}

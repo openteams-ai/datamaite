@@ -113,7 +113,6 @@ toml = [
 
 [[package]]
 name = "databridge"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -143,7 +142,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
 ]
-provides-extras = ["video", "dev"]
+provides-extras = ["dev", "video"]
 
 [[package]]
 name = "distlib"

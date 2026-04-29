@@ -1,0 +1,34 @@
+[workspace]
+name = "databridge"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[dependencies]
+python = ">=3.10,<3.13"
+pydantic = ">=2.0"
+
+[feature.video.dependencies]
+opencv = ">=4.8"
+
+[feature.dev.dependencies]
+pre-commit = ">=3.6"
+pytest = ">=8.0"
+pytest-cov = ">=4.1"
+ruff = ">=0.4"
+pyright = ">=1.1"
+bandit = ">=1.7"
+pip = "*"
+
+[environments]
+default = { features = ["dev", "video"], solve-group = "default" }
+# ci runs the same pytest suite as default; tests import cv2 / numpy
+# from the video feature. Omitting it made `pixi run -e ci test` fail
+# at import with ModuleNotFoundError on numpy / cv2.
+ci = { features = ["dev", "video"], solve-group = "default" }
+
+[tasks]
+install = "pip install -e . --no-deps"
+test = { cmd = "pytest -q", depends-on = ["install"] }
+lint = "pre-commit run --all-files"
+typecheck = "pyright src/"
+check = { depends-on = ["lint", "typecheck", "test"] }

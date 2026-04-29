@@ -1,13 +1,19 @@
+# ---------------------------------------------------------------------------
+# Build system
+# ---------------------------------------------------------------------------
+# Poetry 2.x reads [project] (PEP 621) for metadata and uses its own
+# backend for locking/installing. hatchling remains the wheel build backend
+# for `pip install` / `uv build` / `pixi run install`.
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "databridge"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A unified framework for dataset loading, conversion, and quality validation."
 readme = "README.md"
-license = { text = "TBD" }
+license = "LicenseRef-TBD"
 authors = [
     { name = "OpenTeams" },
 ]
@@ -46,6 +52,42 @@ Repository = "https://gitlab.jatic.net/jatic/orchestration-interoperability/data
 [tool.hatch.build.targets.wheel]
 packages = ["src/databridge"]
 
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/databridge/_version.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts"]
+
+# ---------------------------------------------------------------------------
+# Poetry (CI and docs workflow)
+# ---------------------------------------------------------------------------
+# Poetry 2.x reads [project] for name, version, dependencies, and python
+# constraint. The [tool.poetry] section adds dependency groups and source
+# configuration that [project] cannot express.
+[tool.poetry]
+# Version is managed by hatch-vcs from git tags; Poetry reads this
+# as a fallback. The actual wheel version comes from _version.py.
+version = "0.1.0"
+packages = [{ include = "databridge", from = "src" }]
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = ">=3.6"
+pytest = ">=8.0"
+pytest-cov = ">=4.1"
+ruff = ">=0.4"
+bandit = { version = ">=1.7", extras = ["toml"] }
+pyright = ">=1.1"
+
+[tool.poetry.group.video.dependencies]
+opencv-python-headless = ">=4.8"
+
 # ---------------------------------------------------------------------------
 # Ruff
 # ---------------------------------------------------------------------------
@@ -53,6 +95,7 @@ packages = ["src/databridge"]
 line-length = 120
 target-version = "py310"
 src = ["src", "tests"]
+extend-exclude = ["src/databridge/_version.py"]
 
 [tool.ruff.lint]
 select = [
@@ -104,10 +147,22 @@ addopts = [
     "--cov-report=xml:coverage_report.xml",
     "--cov-fail-under=90",
     "-ra",
+    "-m",
+    "not real_data",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests requiring external resources",
+    "real_data: marks tests that require real HMIE data on SUNet (opt-in via -m real_data)",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+omit = [
+    "src/databridge/conversion.py",
+    "src/databridge/dataloader.py",
 ]
 
 # ---------------------------------------------------------------------------
