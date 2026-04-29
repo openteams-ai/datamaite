@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jatic/databridge/docs/schemas/scale-video-playback-v1.schema.json",
+  "title": "Scale Video Playback Annotation Task",
+  "description": "JSON Schema for Scale AI Video Playback annotation task response. Derived from the Scale Video Playback JSON Overview document provided by Scale AI to CDAO. This schema covers the completed task response including annotation tracks and per-frame bounding boxes.",
+  "type": "object",
+  "required": ["task_id", "response"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Unique identifier for a labeled task. Scale-generated."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp for when the task was created."
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "UTC timestamp for when the task was completed. Only filled after completion."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp for when the task was last updated."
+    },
+    "type": {
+      "type": "string",
+      "description": "Type of task request.",
+      "examples": ["videoannotation", "videoplaybackannotation"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "pending", "canceled", "error"],
+      "description": "Status of the task request."
+    },
+    "instruction": {
+      "type": ["string", "null"],
+      "description": "Markdown-enabled string explaining how to do the task."
+    },
+    "is_test": {
+      "type": "boolean",
+      "description": "If true, this is a test task. False indicates normal labeling."
+    },
+    "urgency": {
+      "type": ["string", "null"],
+      "enum": ["URGENT", "HIGH", "MEDIUM", null],
+      "description": "Expected turnaround time or triage level."
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "Key-value pairs attached to the task. Often contains the original video filename.",
+      "additionalProperties": true
+    },
+    "project": {
+      "type": ["string", "null"],
+      "description": "Name of the project this task is associated with."
+    },
+    "unique_id": {
+      "type": ["string", "null"],
+      "description": "Arbitrary ID assigned to the task, unique across all projects under the account."
+    },
+    "params": {
+      "type": "object",
+      "description": "Task parameters including ontology definition and video metadata.",
+      "required": ["annotation_frame_rate"],
+      "properties": {
+        "annotation_frame_rate": {
+          "type": "number",
+          "description": "Annotation Frame Rate (AFR): the number of frames per second that were labeled. May differ from the video's native FPS.",
+          "exclusiveMinimum": 0
+        },
+        "videoMetadata": {
+          "type": ["object", "null"],
+          "description": "Metadata about the original video ingested into Scale's platform.",
+          "properties": {
+            "video": {
+              "type": "object",
+              "properties": {
+                "fps": {
+                  "type": "number",
+                  "description": "Original video frame rate as ingested into Scale.",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": ["fps"]
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "response": {
+      "type": "object",
+      "description": "The annotation response. Contains the annotations and optional global events.",
+      "required": ["annotations"],
+      "properties": {
+        "annotations": {
+          "type": "object",
+          "description": "Dictionary of tracks keyed by unique track UUID. Each track represents one labeled object across multiple frames.",
+          "additionalProperties": {
+            "$ref": "#/$defs/TrackAnnotation"
+          }
+        },
+        "events": {
+          "type": ["object", "null"],
+          "description": "Global attributes that apply to one or many frames (e.g., weather conditions, scene type).",
+          "additionalProperties": true
+        }
+      }
+    },
+    "callback_url": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "description": "Webhook URL for completion notification."
+    },
+    "priority": {
+      "type": ["integer", "null"],
+      "enum": [10, 20, 30, null],
+      "description": "Priority within the project. Higher number = higher priority."
+    },
+    "projectId": {
+      "type": ["string", "null"],
+      "description": "Unique identifier of the Scale project."
+    },
+    "taxonomyVersion": {
+      "type": ["string", "null"],
+      "description": "Taxonomy SRN (Service Resource Name) for tracking ontology versions."
+    },
+    "work_started": {
+      "type": "boolean",
+      "description": "Whether work has been begun by a labeler."
+    },
+    "isProcessed": {
+      "type": "boolean",
+      "description": "Whether Scale's post-processing has completed. If true, safe to consume via API."
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "TrackAnnotation": {
+      "type": "object",
+      "description": "A labeled track representing one object across multiple video frames.",
+      "required": ["label", "geometry", "frames"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "The label of this annotation, chosen from the objects_to_annotate array for its geometry. Same label across all frames for a given track UUID."
+        },
+        "geometry": {
+          "type": "string",
+          "description": "The type of geometric annotation.",
+          "enum": ["box", "polygon", "line", "point", "cuboid", "ellipse"]
+        },
+        "frames": {
+          "type": "array",
+          "description": "List of per-frame annotations for this track. Each entry maps the object to a specific video frame.",
+          "items": {
+            "$ref": "#/$defs/FrameAnnotation"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "description": "Box tracks must carry left/top/width/height on every frame. Non-box geometries (polygon, line, point, cuboid, ellipse) use their own per-geometry fields (e.g. vertices, points) and do not populate the box fields.",
+          "if": {"properties": {"geometry": {"const": "box"}}},
+          "then": {
+            "properties": {
+              "frames": {
+                "items": {
+                  "required": ["key", "left", "top", "height", "width"]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FrameAnnotation": {
+      "type": "object",
+      "description": "A single frame annotation within a track. Box-geometry tracks populate left/top/height/width; non-box geometries carry their own per-geometry fields.",
+      "required": ["key"],
+      "properties": {
+        "key": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Denotes which labeled frame this bounding box correlates to. If labeling at native frame rate, key = frame#; otherwise, frame# = key * fps / afr."
+        },
+        "left": {
+          "type": "number",
+          "description": "The distance, in pixels, between the left border of the bounding box and the left border of the image."
+        },
+        "top": {
+          "type": "number",
+          "description": "The distance, in pixels, between the top border of the bounding box and the top border of the image."
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The height, in pixels, of the bounding box."
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The width, in pixels, of the bounding box."
+        },
+        "keyframeType": {
+          "type": "string",
+          "enum": ["start", "middle", "end"],
+          "description": "Indicates whether the object is at the start, middle, or end of its presence in the video."
+        },
+        "isInferredKeyframe": {
+          "type": "boolean",
+          "description": "Indicates whether the keyframe is inferred (interpolated) rather than manually labeled."
+        },
+        "attributes": {
+          "type": "object",
+          "description": "Additional annotation attributes such as is_truncated, is_occluded.",
+          "additionalProperties": true
+        },
+        "timestamp_secs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The frame's timestamp in seconds."
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

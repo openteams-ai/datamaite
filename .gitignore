@@ -96,6 +96,10 @@ cython_debug/
 .idea/
 .vscode/
 
+# Archives
+*.tar.gz
+*.zip
+
 # macOS
 .DS_Store
 
@@ -105,8 +109,14 @@ artifacts/
 # gitlab-ci-local
 .gitlab-ci-local/
 
+# Pixi
+.pixi/
+pixi.lock
+
 # Beads issue tracker (local)
 .beads/
+AGENTS.md
+*.bak
 
 # Local reference files (not part of the package)
 mattermost.txt

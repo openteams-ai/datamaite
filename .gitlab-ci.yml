@@ -2,9 +2,14 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
 
 default:
-  retry: 1
+  # Only retry on infrastructure failures, never on test/lint failures --
+  # unconditional retry masks flaky tests and hides real intermittents.
+  retry:
+    max: 1
+    when: runner_system_failure
   artifacts:
     expire_in: 1 week
 
@@ -14,25 +19,47 @@ stages:
   - build
   - test
   - dr-compliance
+  - publish
 
 variables:
-  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
+  # Full clone history so hatch-vcs can compute the correct devN version.
+  GIT_DEPTH: "0"
+  # Pin Poetry to avoid silent drift.
+  POETRY_PIN: "2.1.2"
 
 .shared-setup:
   interruptible: true
   image: python:${VERSION}-slim
+  timeout: 20m
   before_script:
-    - pip install --quiet uv
-    - uv sync --frozen --all-extras
+    # Install OS deps required by our toolchain:
+    #   git       -- pre-commit needs it; slim images don't ship it
+    #   libatomic1 -- pyright's embedded Node runtime needs it
+    - apt-get update -qq && apt-get install -y -qq git libatomic1
+    - pip install --quiet --upgrade pip
+    - pip install --quiet "poetry==${POETRY_PIN}"
+    - poetry config virtualenvs.in-project true
+    - python --version
+    - poetry --version
+    - poetry check
   cache:
-    key: "uv-py${VERSION}-${CI_COMMIT_REF_SLUG}"
-    paths:
-      - .uv-cache/
-      - .venv/
+    - key:
+        files:
+          - poetry.lock
+        prefix: "venv-py${VERSION}-${CI_COMMIT_REF_SLUG}"
+      paths:
+        - .venv/
+    - key: pip-downloads
+      paths:
+        - .cache/pip
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: on_success
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - if: $CI_COMMIT_TAG
       when: on_success
     - when: never
 
@@ -43,9 +70,10 @@ lint:
   extends: .shared-setup
   stage: lint
   variables:
-    VERSION: "3.12"
+    VERSION: "3.11"
   script:
-    - uv run pre-commit run --all-files
+    - poetry install --with dev --no-root
+    - poetry run pre-commit run --all-files
 
 # ---------------------------------------------------------------------------
 # Type checking
@@ -54,9 +82,10 @@ pyright:
   extends: .shared-setup
   stage: typecheck
   variables:
-    VERSION: "3.12"
+    VERSION: "3.11"
   script:
-    - uv run pyright src/
+    - poetry install --with dev
+    - poetry run pyright src/
 
 # ---------------------------------------------------------------------------
 # Build
@@ -65,24 +94,55 @@ build:
   extends: .shared-setup
   stage: build
   variables:
-    VERSION: "3.12"
+    VERSION: "3.11"
   script:
-    - uv build
+    - poetry build
   artifacts:
     paths:
       - dist/
     expire_in: 1 week
 
+# Publish to GitLab Package Registry.
+# Only on tagged commits, after all tests pass.
+publish:
+  extends: .shared-setup
+  stage: publish
+  needs:
+    - test-py310
+    - test-py311
+    - test-py312
+    - build
+  resource_group: publish
+  timeout: 10m
+  variables:
+    VERSION: "3.11"
+  script:
+    - poetry build
+    - pip install --quiet "twine>=6.0"
+    - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token
+      twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: on_success
+    - when: never
+
 # ---------------------------------------------------------------------------
-# Test matrix
+# Test matrix (Python 3.10, 3.11, 3.12)
 # ---------------------------------------------------------------------------
 .test-base:
   extends: .shared-setup
   stage: test
+  timeout: 30m
   script:
-    - uv run pytest
+    - poetry install --with dev --with video
+    - poetry run pytest tests -vvv --cov=databridge --cov-report term-missing
+        --cov-report xml:coverage_report.xml --cov-fail-under=90
+  coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
   artifacts:
     when: always
+    paths:
+      - coverage_report.xml
+    expire_in: 1 week
     reports:
       coverage_report:
         coverage_format: cobertura
@@ -105,11 +165,16 @@ test-py312:
 
 # ---------------------------------------------------------------------------
 # DR Compliance (JATIC program requirement)
+#
+# allow_failure: true -- dr-compliance scans can produce false positives
+# against transitive deps. Failing scans are visible in the UI and triaged
+# async, not hidden.
 # ---------------------------------------------------------------------------
 include:
   - component: gitlab.jatic.net/jatic/devsecops/components/dr-compliance@0.5.2
     inputs:
       stage: dr-compliance
       sast_excluded_paths: tests
-      image: python:3.12-slim
+      image: harbor.jatic.net:443/platform-team/base-images/python-base-image:3.11
+      full_execution_on_commit: true
       allow_failure: true
