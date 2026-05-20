@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from databridge._types import DatasetFormat, Severity
-from databridge.validation import validate, validate_annotation
+from databridge.validation import validate, validate_annotation, validate_batches
 
 
 def _raise_in_worker(pair, *, check_video):  # type: ignore[no-untyped-def]
@@ -173,3 +173,153 @@ class TestParallelWorkerCrash:
         # All labels come from successfully-validated pairs. If every
         # pair crashed, histogram must stay empty (not partial).
         assert result.label_histogram == Counter()
+
+
+def _make_two_batch_root(tmp_path: Path, valid_annotation_text: str) -> Path:
+    """Create a root with two sibling batch directories.
+
+    Mirrors the ``single_snippet_hmie`` fixture layout so ``find_batch_roots``
+    recognises each child as a batch (snippet child with ``seq_*/`` container).
+    """
+    root = tmp_path / "root_with_batches"
+    root.mkdir()
+    for batch_name in ("batch_a", "batch_b"):
+        batch = root / batch_name
+        batch.mkdir()
+        snippet = batch / f"{batch_name}_000001"
+        snippet.mkdir()
+        labeler = snippet / "labeler_a"
+        labeler.mkdir()
+        (labeler / "CDAO_test.json").write_text(valid_annotation_text)
+        (snippet / "seq_mp4").mkdir()
+        (snippet / "seq_mp4" / f"{batch_name}_000001.mp4").write_bytes(b"fake mp4")
+    return root
+
+
+class TestValidateBatches:
+    def test_discovers_under_root_and_yields_tuples(self, tmp_path: Path, valid_annotation: Path) -> None:
+        root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
+
+        results = list(validate_batches(root, check_video_integrity=False))
+
+        assert len(results) == 2
+        paths = [p for p, _ in results]
+        assert paths == sorted(paths), "order should match find_batch_roots (sorted)"
+        for batch_path, result in results:
+            assert batch_path.is_dir()
+            assert result.dataset_path == batch_path
+            assert result.dataset_format == DatasetFormat.HMIE
+
+    def test_accepts_iterable_of_batch_paths(self, tmp_path: Path, valid_annotation: Path) -> None:
+        root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
+        batches = [root / "batch_b", root / "batch_a"]  # caller-chosen order
+
+        results = list(validate_batches(batches, check_video_integrity=False))
+
+        assert [p for p, _ in results] == batches, "iterable order must be preserved"
+
+    def test_returns_iterator_not_list(self, tmp_path: Path, valid_annotation: Path) -> None:
+        """Streaming matters at 60K batches -- caller shouldn't have to wait
+        for every batch before iterating."""
+        import collections.abc
+
+        root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
+        it = validate_batches(root, check_video_integrity=False)
+        assert isinstance(it, collections.abc.Iterator)
+        assert not isinstance(it, list)
+
+    def test_raises_on_empty_root_discovery(self, tmp_path: Path) -> None:
+        """A typo'd root path is the common error; raise loudly rather than
+        silently returning an empty iterator."""
+        empty = tmp_path / "does_not_contain_batches"
+        empty.mkdir()
+
+        with pytest.raises(ValueError, match=r"[Nn]o batches"):
+            list(validate_batches(empty))
+
+    def test_empty_iterable_yields_nothing(self) -> None:
+        """An explicit empty iterable is a legitimate input (caller did their
+        own discovery and got nothing). Don't raise -- just yield nothing."""
+        out = list(validate_batches([], check_video_integrity=False))
+        assert out == []
+
+    def test_crash_becomes_validate_crash_finding(
+        self, tmp_path: Path, valid_annotation: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If validate() raises for one batch, the helper must yield a
+        ValidationResult carrying a validate_crash ERROR finding, not
+        propagate the exception and kill the loop."""
+        root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
+
+        from databridge import validation as validation_module
+
+        original = validation_module.validate
+        bad_batch = root / "batch_a"
+
+        def flaky_validate(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if Path(path) == bad_batch:
+                msg = "boom"
+                raise RuntimeError(msg)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(validation_module, "validate", flaky_validate)
+
+        results = list(validate_batches(root, check_video_integrity=False))
+
+        assert len(results) == 2
+        by_path = dict(results)
+        crash_result = by_path[bad_batch]
+        assert crash_result.passed is False
+        crash_findings = [f for f in crash_result.findings if f.check == "validate_crash"]
+        assert len(crash_findings) == 1
+        assert crash_findings[0].severity == Severity.ERROR
+        assert "RuntimeError" in crash_findings[0].message
+        assert "boom" in crash_findings[0].message
+        # The other batch must still have been validated normally.
+        other = by_path[root / "batch_b"]
+        assert not any(f.check == "validate_crash" for f in other.findings)
+
+    def test_crash_result_summary_does_not_raise(
+        self, tmp_path: Path, valid_annotation: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rendering a validate_crash result via summary()/HTML/CLI text
+        path must not blow up. _categorize_findings raises KeyError for
+        check names missing from _CHECK_CATEGORIES; if validate_crash is
+        not registered, the entire text/HTML output path explodes."""
+        root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
+
+        from databridge import validation as validation_module
+
+        bad_batch = root / "batch_a"
+
+        def always_crash(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(validation_module, "validate", always_crash)
+
+        crash_result = next(r for _, r in validate_batches([bad_batch], check_video_integrity=False))
+        # The bug surfaces here -- _categorize_findings via summary().
+        text = crash_result.summary(use_color=False)
+        assert "FAIL" in text
+
+    def test_forwards_check_video_integrity_kwarg(
+        self, tmp_path: Path, valid_annotation: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Kwargs must reach validate(); otherwise the helper silently
+        strips caller intent (e.g. CHECK_VIDEO=False gets ignored)."""
+        root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
+
+        seen: list[bool] = []
+        from databridge import validation as validation_module
+
+        original = validation_module.validate
+
+        def spy(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+            seen.append(kwargs.get("check_video_integrity"))
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(validation_module, "validate", spy)
+
+        list(validate_batches(root, check_video_integrity=False))
+        assert seen == [False, False]

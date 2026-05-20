@@ -64,8 +64,12 @@ _CHECK_CATEGORIES: dict[str, str] = {
     "consistency_fps_invalid": "scale_spec",
     "consistency_frame_bounds": "scale_spec",
     "consistency_bbox_bounds": "scale_spec",
-    # Worker crash
+    # Worker / batch crashes -- internal validator failures, bucketed with
+    # scale_spec so they surface as scale-column reds rather than getting
+    # silently dropped by _categorize_findings (which raises on unknown
+    # check names). worker_crash is per-pair, validate_crash is per-batch.
     "worker_crash": "scale_spec",
+    "validate_crash": "scale_spec",
 }
 
 _CATEGORY_LABELS: dict[str, str] = {

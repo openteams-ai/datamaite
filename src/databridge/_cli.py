@@ -385,12 +385,20 @@ def _run_batches(
     batch_dirs: list[Path],
     cache: ValidationCache | None = None,
 ) -> list[tuple[Path, Any]]:
-    """Run validation for each batch directory and return results."""
-    from databridge.validation import validate
+    """Run validation for each batch directory and return results.
+
+    Mirrors ``validate_batches`` on crash isolation: if ``validate()`` raises
+    for one batch, build a ``validate_crash`` result via the shared helper
+    so the rest of the run still proceeds. The library helper and the CLI
+    both converge on the same finding shape.
+    """
+    from databridge._types import DatasetFormat
+    from databridge.validation import _build_validate_crash_result, validate
 
     results: list[tuple[Path, Any]] = []
     n_batches = len(batch_dirs)
     show = _show_progress(args)
+    dataset_format = args.format if isinstance(args.format, DatasetFormat) else DatasetFormat(args.format.lower())
 
     for i, batch_dir in enumerate(batch_dirs, 1):
         callback = _make_batch_progress(i, n_batches, batch_dir.name, show)
@@ -405,16 +413,19 @@ def _run_batches(
             sys.stderr.write(f"  {prefix}...\n")
             sys.stderr.flush()
 
-        result = validate(
-            batch_dir,
-            dataset_format=args.format,
-            check_video_integrity=not args.skip_video_check,
-            workers=args.workers,
-            max_findings_per_check=args.max_findings_per_check,
-            progress_callback=callback,
-            status_callback=_on_status,
-            cache=cache,
-        )
+        try:
+            result = validate(
+                batch_dir,
+                dataset_format=dataset_format,
+                check_video_integrity=not args.skip_video_check,
+                workers=args.workers,
+                max_findings_per_check=args.max_findings_per_check,
+                progress_callback=callback,
+                status_callback=_on_status,
+                cache=cache,
+            )
+        except Exception as exc:
+            result = _build_validate_crash_result(batch_dir, dataset_format, exc)
         results.append((batch_dir, result))
 
         if show:
