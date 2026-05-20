@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -121,6 +121,116 @@ def validate_annotation(
         label_histogram=label_counter,
         finding_counts=finding_counts,
         finding_severity_counts=severity_counts,
+    )
+
+
+def validate_batches(
+    root: str | Path | Iterable[Path],
+    *,
+    dataset_format: DatasetFormat | str = DatasetFormat.HMIE,
+    check_video_integrity: bool = True,
+    workers: int | None = None,
+    max_findings_per_check: int | None = None,
+    progress_callback: Callable[[], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
+    cache: ValidationCache | None = None,
+) -> Iterator[tuple[Path, ValidationResult]]:
+    """Validate multiple batches, yielding ``(batch_path, result)`` pairs.
+
+    Parameters
+    ----------
+    root
+        Either a single directory (``str`` or ``Path``) to discover batches
+        under via :func:`find_batch_roots`, or an iterable of batch paths
+        the caller has already discovered.
+    dataset_format, check_video_integrity, workers, max_findings_per_check,
+    progress_callback, status_callback, cache
+        Forwarded to :func:`validate` for every batch.
+
+    Yields
+    ------
+    tuple[Path, ValidationResult]
+        One tuple per batch, in ``find_batch_roots`` order when ``root`` is
+        a path, or in iteration order when ``root`` is an iterable.
+
+    Raises
+    ------
+    ValueError
+        If ``root`` is a path and discovery returns no batches -- a typo'd
+        root is the common error, so we raise rather than silently yield
+        nothing. An explicit empty iterable is respected (yields nothing).
+
+    Notes
+    -----
+    Generator, not list: at scale (tens of thousands of batches) the caller
+    should aggregate incrementally rather than buffer every result.
+
+    Per-batch crash isolation: if :func:`validate` raises for a batch, the
+    exception is converted into a ``ValidationResult`` carrying a single
+    ``validate_crash`` ERROR finding. The loop continues with the next
+    batch. This mirrors the ``worker_crash`` pattern used inside
+    :func:`validate` for per-pair failures.
+    """
+    if isinstance(root, (str, Path)):
+        from databridge._formats.hmie.discovery import find_batch_roots
+
+        batch_paths: list[Path] = find_batch_roots(Path(root))
+        if not batch_paths:
+            msg = f"No batches found under {root}"
+            raise ValueError(msg)
+    else:
+        batch_paths = list(root)
+
+    if isinstance(dataset_format, str):
+        dataset_format = DatasetFormat(dataset_format.lower())
+
+    for batch in batch_paths:
+        try:
+            result = validate(
+                batch,
+                dataset_format=dataset_format,
+                check_video_integrity=check_video_integrity,
+                workers=workers,
+                max_findings_per_check=max_findings_per_check,
+                progress_callback=progress_callback,
+                status_callback=status_callback,
+                cache=cache,
+            )
+        except Exception as exc:
+            result = _build_validate_crash_result(batch, dataset_format, exc)
+        yield batch, result
+
+
+def _build_validate_crash_result(
+    batch: Path,
+    dataset_format: DatasetFormat,
+    exc: BaseException,
+) -> ValidationResult:
+    """Convert an uncaught exception from ``validate()`` into a
+    ``ValidationResult`` carrying a single ``validate_crash`` ERROR finding.
+
+    Shared by :func:`validate_batches` and ``_cli._run_batches`` so both
+    multi-batch paths apply the same isolation: one bad batch becomes one
+    failed result, not a run-wide abort.
+    """
+    logger.exception("validate() raised for batch %s", batch, exc_info=exc)
+    crash = Finding(
+        severity=Severity.ERROR,
+        path=batch,
+        check="validate_crash",
+        message=f"{type(exc).__name__}: {exc}",
+    )
+    return ValidationResult(
+        dataset_path=batch,
+        dataset_format=dataset_format,
+        passed=False,
+        findings=[crash],
+        label_histogram=Counter(),
+        finding_counts=Counter({"validate_crash": 1}),
+        finding_severity_counts={
+            "error": Counter({"validate_crash": 1}),
+            "warning": Counter(),
+        },
     )
 
 

@@ -63,7 +63,9 @@ local_scheme = "no-local-version"
 version-file = "src/databridge/_version.py"
 
 [tool.hatch.build.targets.sdist]
-exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts"]
+# docs/ excluded so customer-facing tutorial notebooks (and any saved
+# cell outputs) never ship inside a distributed sdist.
+exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
 
 # ---------------------------------------------------------------------------
 # Poetry (CI and docs workflow)

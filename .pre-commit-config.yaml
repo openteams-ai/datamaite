@@ -36,3 +36,14 @@ repos:
       - id: bandit
         args: ["-c", "pyproject.toml", "-r", "src/"]
         additional_dependencies: ["bandit[toml]"]
+
+  # -----------------------------------------------------------------------
+  # nbstripout -- strip cell outputs from committed .ipynb files
+  # -----------------------------------------------------------------------
+  # Stripping notebook outputs at commit time keeps any sensitive data
+  # that ended up in cell outputs during exploration from being pushed
+  # back to the repo by mistake.
+  - repo: https://github.com/kynan/nbstripout
+    rev: "0.7.1"
+    hooks:
+      - id: nbstripout

@@ -290,6 +290,47 @@ class TestMultiBatchCLI:
         rc = main(["validate", str(multi_batch_hmie), "--skip-video-check"])
         assert rc == 2
 
+    def test_multi_batch_one_crashing_validate_does_not_kill_run(
+        self, multi_batch_hmie: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """A per-batch crash in validate() must surface as a validate_crash
+        finding on that batch (exit 2) and must not prevent the sibling
+        batch from being validated.
+
+        Without crash isolation in the multi-batch CLI path, a single
+        blown-up batch aborts the entire run -- the same pathology the
+        notebook's try/except was working around. Pinning this here so
+        the CLI stays consistent with validate_batches().
+        """
+        from databridge import validation as validation_module
+
+        bad_batch = multi_batch_hmie / "batch-a"
+        original = validation_module.validate
+
+        def flaky(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if Path(path) == bad_batch:
+                msg = "boom"
+                raise RuntimeError(msg)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(validation_module, "validate", flaky)
+
+        rc = main(["validate", str(multi_batch_hmie), "--skip-video-check", "--json"])
+
+        assert rc == 2, "crash in one batch must propagate as exit 2, not raise"
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)
+        assert len(data) == 2, "both batches must appear in the report"
+
+        by_name = {Path(d["dataset_path"]).name: d for d in data}
+        crash_batch = by_name["batch-a"]
+        assert any(f["check"] == "validate_crash" for f in crash_batch["findings"])
+        assert crash_batch["passed"] is False
+
+        # Sibling batch must have been validated normally.
+        clean_batch = by_name["batch-b"]
+        assert not any(f["check"] == "validate_crash" for f in clean_batch["findings"])
+
 
 class TestFindBatchDirs:
     def test_single_batch_returns_self(self, single_snippet_hmie: Path) -> None:
