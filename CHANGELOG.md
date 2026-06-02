@@ -51,6 +51,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swaps to per-batch detail; deep-linkable via `#batch=<name>` URL hash.
 - Finding cap (`--max-findings-per-check`) to bound memory on
   pathological datasets; `finding_counts` stays accurate under caps.
+- Neutral in-memory dataset model (`databridge.model`): `Dataset` /
+  `VideoSequence` / `BoxAnnotation` form the format-agnostic hub that
+  every loader produces and every converter will consume, so any loader
+  can feed any output format (N-to-M bridge).
+- Loader architecture (`databridge.loaders`): a `Loader` base class
+  defines the input-side contract, `register_loader` is the extension
+  point, and `databridge.load(root, dataset_format=…)` dispatches across
+  registered formats (with a `sniff`-based autodetection hook). `HmieLoader`
+  is the reference implementation; adding a format is additive (subclass +
+  register). See the "Loader architecture" section in `docs/architecture.md`.
+- HMIE dataloader (`databridge.load_hmie`): loads an HMIE/Scale dataset
+  into the neutral `Dataset` model (`VideoSequence` / `BoxAnnotation`
+  records with a dataset-wide ontology-URI → category-id map). Reuses the
+  existing discovery + Scale-schema layers instead of the hard-coded
+  notebook walk; supports `annotation_dir` / `video_dir` overrides for
+  flat layouts and an opt-in `require_video` mode that reads true frame
+  counts via the `video` extra.
+
+### Fixed
+
+- Batch-level `scale/` discovery now **merges per batch** with the
+  snippet-centric pass instead of being an all-or-nothing `root/scale`
+  fallback, so per-batch `scale/` under a multi-batch parent and trees mixing
+  both layouts are fully discovered. `SnippetPair` carries a `snippet_dir` so
+  `snippet_count` no longer collapses centralized-`scale/` annotations onto
+  the batch root; non-annotation JSON in a `scale/` dir is skipped; and
+  `match_annotation_to_video` returns an orphan instead of guessing when two
+  videos share a basename.
+- Frame-key mapping snaps to a near integer before flooring (fixes a
+  floating-point off-by-one on rates like 29.97/14.985); relative
+  `annotation_dir`/`video_dir` overrides resolve against `root` not the CWD;
+  non-finite bbox coordinates and NaN/Inf/non-positive fps & duration are
+  rejected.
 
 ### Documentation
 

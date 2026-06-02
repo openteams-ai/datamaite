@@ -164,7 +164,6 @@ markers = [
 [tool.coverage.run]
 omit = [
     "src/databridge/conversion.py",
-    "src/databridge/dataloader.py",
 ]
 
 # ---------------------------------------------------------------------------

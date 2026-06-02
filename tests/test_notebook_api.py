@@ -1,6 +1,6 @@
 """Contract tests for the HMIE validator tutorial notebook.
 
-The notebook at ``docs/tool-usage/hmie_validator.ipynb`` imports from the
+The notebook at ``docs/tool-usage/validators/hmie.ipynb`` imports from the
 public ``databridge`` surface and calls methods with specific kwargs.
 These tests codify that contract so a rename or signature change in the
 library fails CI before it ships, rather than surfacing as an
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-NOTEBOOK_PATH = Path(__file__).resolve().parent.parent / "docs" / "tool-usage" / "hmie_validator.ipynb"
+NOTEBOOK_PATH = Path(__file__).resolve().parent.parent / "docs" / "tool-usage" / "validators" / "hmie.ipynb"
 
 
 @pytest.fixture(scope="module")

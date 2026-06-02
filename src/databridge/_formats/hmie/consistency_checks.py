@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from databridge._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
 from databridge._formats.hmie.schema import ScaleAnnotation, TrackAnnotation
 from databridge._formats.hmie.video_checks import VideoProperties
 from databridge._types import Finding, Severity
@@ -108,59 +109,60 @@ def _check_frame_and_bbox_bounds(
     findings: list[Finding],
 ) -> None:
     """Check frame key bounds and bounding box bounds against video dimensions."""
-    frame_ratio = _frame_key_to_index_ratio(annotation, video_fps, video_frame_count)
+    # _usable_afr returns the annotation AFR when the key->index mapping is
+    # usable, or None to skip the frame-bounds check. The actual mapping is
+    # done by the shared frame_key_to_index() so loader and validator agree.
+    afr = _usable_afr(annotation, video_fps, video_frame_count)
     check_bbox = video_width > 0 and video_height > 0
 
     for track_id, track in annotation.response.annotations.items():
         if len(track.frames) == 0:
             continue
 
-        if frame_ratio is not None:
-            _check_track_frame_bounds(track_id, track, video_path, frame_ratio, video_frame_count, findings)
+        if afr is not None:
+            _check_track_frame_bounds(track_id, track, video_path, video_fps, afr, video_frame_count, findings)
 
         if check_bbox and track.geometry == "box":
             _check_track_bbox_bounds(track_id, track, video_path, video_width, video_height, findings)
 
 
-def _frame_key_to_index_ratio(
+def _usable_afr(
     annotation: ScaleAnnotation,
     video_fps: float,
     video_frame_count: int,
 ) -> float | None:
-    """Return the ``fps / afr`` multiplier for mapping frame keys to indices.
+    """Return the annotation AFR if frame keys can be mapped, else None.
 
-    Returns None when any input needed for the mapping is missing or
-    non-positive, signalling that the frame-bounds check should be
-    skipped. Centralising this guard keeps the caller's complexity down.
+    Returns None (skip the frame-bounds check) when the video has no frames
+    or the fps/afr pair is not mappable. The fps/afr mappability rule is the
+    shared :func:`is_mappable`, so this guard and the loader cannot drift.
     """
-    # Non-finite values silently pass ``<= 0`` comparisons (NaN/Inf) and
-    # then crash math.floor(...) downstream, so check math.isfinite too.
-    if not math.isfinite(video_fps) or video_fps <= 0 or video_frame_count <= 0:
+    if video_frame_count <= 0:
         return None
-    if annotation.params is None:
+    afr = annotation.params.annotation_frame_rate if annotation.params is not None else None
+    if not is_mappable(video_fps, afr):
         return None
-    afr = annotation.params.annotation_frame_rate
-    if afr is None or not math.isfinite(afr) or afr <= 0:
-        return None
-    return video_fps / afr
+    return afr
 
 
 def _check_track_frame_bounds(
     track_id: str,
     track: TrackAnnotation,
     video_path: Path,
-    key_to_index_ratio: float,
+    video_fps: float,
+    afr: float | None,
     video_frame_count: int,
     findings: list[Finding],
 ) -> None:
     """Flag a track whose max frame key maps past the end of the video.
 
-    Frame index math: ``frame# = floor(key * fps / afr)``. Valid frame
-    indices are ``0..video_frame_count-1``, so we fail when the derived
-    frame index is ``>= video_frame_count``.
+    Frame index math: ``frame# = floor(key * fps / afr)`` (via the shared
+    :func:`frame_key_to_index`). Valid frame indices are
+    ``0..video_frame_count-1``, so we fail when the derived frame index is
+    ``>= video_frame_count``.
     """
     max_key = max(f.key for f in track.frames)
-    max_frame_index = math.floor(max_key * key_to_index_ratio)
+    max_frame_index = frame_key_to_index(max_key, video_fps, afr)
     if max_frame_index < video_frame_count:
         return
 

@@ -413,13 +413,15 @@ def _validate_hmie(
         )
 
     # Count unique snippet directories. Multiple labelers per snippet produce
-    # multiple pairs for the same snippet dir, so deduplicate via parent.parent
-    # (annotation is at snippet_dir/<labeler>/file.json).
+    # multiple pairs for the same snippet dir, so deduplicate by snippet dir.
+    # Prefer pair.snippet_dir (correct for batch-level scale/ layouts, where
+    # annotation_path.parent.parent collapses every annotation onto the batch
+    # root); fall back to parent.parent for the per-snippet labeler layout.
     # Note: orphan_videos is a list of video paths, not snippet dirs, so it is
     # NOT added to this count -- adding it inflates snippet_count incorrectly.
     snippet_dirs_seen = set()
     for pair in discovery.pairs:
-        snippet_dirs_seen.add(pair.annotation_path.parent.parent)
+        snippet_dirs_seen.add(pair.snippet_dir or pair.annotation_path.parent.parent)
     snippet_count = len(snippet_dirs_seen)
     annotation_count = len(discovery.pairs)
 

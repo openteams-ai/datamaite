@@ -23,6 +23,61 @@ databridge -v validate /path/to/dataset
 databridge validate /path/to/dataset -o report.txt
 ```
 
+## Supported formats
+
+databridge is a bridge: a **loader** reads an input format into one neutral
+in-memory model (`Dataset`), a **validator** checks a format on disk, and a
+**converter** writes the model out to an output format. Today HMIE/Scale is the
+implemented input format; converters are in progress (MOTChallenge first).
+
+| Format | Load | Validate | Export |
+|---|---|---|---|
+| HMIE / Scale (FMV) | ✅ | ✅ | planned |
+| MOTChallenge | planned | — | planned |
+| YOLO | planned | planned | planned |
+| COCO | planned | planned | planned |
+
+See [docs/architecture.md](docs/architecture.md) for the loader/converter
+design and [how to add a new loader](docs/architecture.md).
+
+## Loading datasets (Python)
+
+Load an HMIE/Scale dataset into the neutral `Dataset` model:
+
+```python
+from databridge import load_hmie
+
+ds = load_hmie("/path/to/dataset")
+print(len(ds), "sequences,", ds.num_boxes, "boxes")
+
+for seq in ds:
+    for box in seq.boxes:
+        print(box.frame_index, box.track_id, box.category_name, box.bbox)
+```
+
+Or via the format-dispatching entry point (same result):
+
+```python
+from databridge import load
+
+ds = load("/path/to/dataset", dataset_format="hmie")
+```
+
+For non-standard layouts (flat annotation/video directories) and true frame
+counts probed from the videos:
+
+```python
+ds = load_hmie(
+    "/path/to/dataset",
+    annotation_dir="annotations/",
+    video_dir="videos/",
+    require_video=True,  # needs the `video` extra
+)
+```
+
+For a full load → verify → export-ready walkthrough on synthetic data, see
+[docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
+
 ## CLI Usage
 
 ```
