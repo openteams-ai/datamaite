@@ -7,6 +7,9 @@ from databridge._formats.hmie.discovery import find_batch_roots
 from databridge._report import render_html_report
 from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
 from databridge._version import __version__, __version_tuple__
+from databridge.dataloader import HmieLoader, load_hmie
+from databridge.loaders import Loader, available_formats, get_loader, load, register_loader
+from databridge.model import BoxAnnotation, Dataset, VideoSequence
 from databridge.validation import validate, validate_annotation, validate_batches
 
 # Library convention: attach a NullHandler so downstream applications
@@ -15,14 +18,24 @@ from databridge.validation import validate, validate_annotation, validate_batche
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
+    "BoxAnnotation",
+    "Dataset",
     "DatasetFormat",
     "Finding",
+    "HmieLoader",
+    "Loader",
     "Severity",
     "ValidationCache",
     "ValidationResult",
+    "VideoSequence",
     "__version__",
     "__version_tuple__",
+    "available_formats",
     "find_batch_roots",
+    "get_loader",
+    "load",
+    "load_hmie",
+    "register_loader",
     "render_html_report",
     "validate",
     "validate_annotation",

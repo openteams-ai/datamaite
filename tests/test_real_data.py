@@ -80,3 +80,25 @@ class TestRealHmieValidation:
 
         # The only hard assertion: validation completed
         assert result.dataset_path == hmie_root
+
+
+class TestRealHmieLoader:
+    def test_load_produces_sequences(self, hmie_root: Path) -> None:
+        """Load real data and report what the dataloader produced.
+
+        Verifies the loader's discovery + parsing assumptions hold against
+        the actual SUNet layout: at least one sequence with boxes, and a
+        non-empty category map.
+        """
+        from databridge import load_hmie
+
+        ds = load_hmie(hmie_root)
+
+        print("\n=== Real HMIE Load Report ===")
+        print(f"Root: {hmie_root}")
+        print(f"Sequences: {len(ds)}")
+        print(f"Total boxes: {ds.num_boxes}")
+        print(f"Categories: {len(ds.categories)}")
+
+        assert len(ds) > 0, "Loader found no sequences -- folder/schema assumptions may be wrong"
+        assert ds.num_boxes > 0, "Sequences loaded but no boxes parsed"

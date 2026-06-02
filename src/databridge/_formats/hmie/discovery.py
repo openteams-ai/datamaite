@@ -48,10 +48,19 @@ _METADATA_DIR_SUFFIXES = ("_metadata",)
 
 @dataclass(frozen=True)
 class SnippetPair:
-    """A matched annotation JSON and video file for one snippet."""
+    """A matched annotation JSON and video file for one snippet.
+
+    ``snippet_dir`` is the snippet directory this pair belongs to, used to
+    count distinct snippets even when annotations are centralised in a
+    batch-level ``scale/`` dir (where ``annotation_path.parent.parent`` would
+    collapse every annotation onto the batch root). It is the matched video's
+    snippet dir for batch-level pairs, the snippet dir for per-snippet pairs,
+    and ``None`` only when neither is determinable.
+    """
 
     annotation_path: Path
     video_path: Path | None
+    snippet_dir: Path | None = None
 
 
 @dataclass
@@ -88,79 +97,182 @@ def _is_annotation_dir(dirname: str) -> bool:
 def discover_hmie_pairs(root: Path) -> DiscoveryResult:
     """Walk an HMIE dataset root and discover annotation/video pairs.
 
-    Uses a **snippet-centric**, **location-based** approach:
+    Uses a **snippet-centric**, **location-based** approach, plus a
+    **batch-level ``scale/``** path that *merges* with it (rather than only
+    falling back when per-snippet discovery is empty):
 
     1. Single ``os.walk`` pass to collect JSON and video files.
     2. Derive snippet directories from ``seq_*`` video containers.
     3. For each snippet, annotations are JSONs in subdirectories
        (``scale/``, labeler dirs). Snippet-level JSONs are metadata.
-    4. Pair annotations with the best video (prefer ``seq_mp4``).
-    5. Snippets with no annotation subdirectory have no annotations.
+    4. Any ``scale/`` directory that is *not* inside a snippet (i.e. a
+       batch-level ``scale/`` holding annotations for sibling snippets) is
+       paired by matching each annotation's embedded video filename to the
+       videos within that batch. These pairs merge with the per-snippet ones,
+       so a tree mixing both layouts -- or a parent of several batches each
+       with its own ``scale/`` -- is fully discovered.
+    5. Annotations with the best video (prefer ``seq_mp4``); unmatched ones
+       become orphan annotations.
     """
     if not root.is_dir():
         return DiscoveryResult(errors=[f"Root path is not a directory: {root}"])
 
-    annotation_files, video_dirs, snippet_dirs = _collect_files(root)
+    annotation_files, video_dirs, snippet_dirs, scale_dirs = _collect_files(root)
 
-    if not snippet_dirs:
+    # Batch-level scale dirs are those whose parent is not itself a snippet
+    # dir (a snippet's own scale/ is already handled by per-snippet discovery).
+    batch_scale_dirs = sorted(d for d in scale_dirs if d.parent not in snippet_dirs)
+
+    if not snippet_dirs and not batch_scale_dirs:
         logger.info("No snippet directories (containing seq_*/) found under %s", root)
         return DiscoveryResult(errors=[f"No snippet directories (containing seq_*/) found under {root}"])
 
     logger.info(
-        "Walk complete: %d annotation files, %d video dirs, %d snippet dirs under %s",
+        "Walk complete: %d annotation files, %d video dirs, %d snippet dirs, %d batch-level scale dirs under %s",
         len(annotation_files),
         len(video_dirs),
         len(snippet_dirs),
+        len(batch_scale_dirs),
         root,
     )
 
     result = _build_pairs(annotation_files, video_dirs, snippet_dirs)
+    batch_pairs = _build_batch_scale_pairs(batch_scale_dirs, video_dirs)
 
-    # When we came up empty, check whether the dataset used the
-    # batch-level ``scale/`` layout that this snippet-centric walker
-    # intentionally does not support -- silent ignoring produces a
-    # confusing "no annotations found" error on datasets that clearly
-    # have annotations on disk.
-    if not result.pairs:
-        batch_scale_jsons = _batch_level_scale_jsons(root)
-        if batch_scale_jsons:
-            result.errors.append(
-                f"Found {len(batch_scale_jsons)} annotation file(s) under "
-                f"{root / 'scale'}/ (batch-level layout). The validator "
-                "currently pairs annotations per-snippet only; batch-level "
-                "annotations are not yet supported and were ignored."
-            )
+    pairs = result.pairs + batch_pairs
+    if not pairs:
+        return DiscoveryResult(
+            errors=[f"No annotation files found under {len(snippet_dirs)} snippet dirs or batch-level scale/ dirs"]
+        )
 
-    return result
+    all_videos = {v for vids in video_dirs.values() for v in vids}
+    matched = {p.video_path for p in pairs if p.video_path is not None}
+    orphan_annotations = [p.annotation_path for p in pairs if p.video_path is None]
+    orphan_videos = sorted(all_videos - matched)
+    logger.info(
+        "Discovery complete: %d pairs (%d batch-level), %d orphan annotations, %d orphan videos",
+        len(pairs),
+        len(batch_pairs),
+        len(orphan_annotations),
+        len(orphan_videos),
+    )
+    return DiscoveryResult(
+        pairs=pairs,
+        orphan_annotations=orphan_annotations,
+        orphan_videos=orphan_videos,
+        multi_video_dirs=result.multi_video_dirs,
+    )
 
 
-def _batch_level_scale_jsons(root: Path) -> list[Path]:
-    """Return annotation JSONs at ``root/scale/*.json`` if that dir exists.
+def _build_batch_scale_pairs(
+    scale_dirs: list[Path],
+    video_dirs: dict[Path, list[Path]],
+) -> list[SnippetPair]:
+    """Pair batch-level ``scale/`` annotations with videos, scoped per batch.
 
-    Some batches use a ``scale/`` directory at batch root (sibling to
-    snippet dirs) instead of the per-snippet labeler-subdir layout. The
-    walker only handles the per-snippet variant, so callers use this
-    detector to produce a helpful error instead of silently dropping
-    the data. See ``docs/architecture.md`` for the full layout taxonomy.
+    Each batch-level ``scale/`` (sibling to snippet dirs, not inside one)
+    holds annotations for that batch's snippets. There is no directory
+    relationship to pair on, so each Scale annotation name embeds its source
+    video filename, matched (:func:`match_annotation_to_video`) against the
+    videos *within that batch* (the scale dir's parent subtree) -- scoping per
+    batch avoids cross-batch mismatches. Non-annotation JSONs (``metadata.json``
+    and the like, whose names embed no video filename) are skipped.
+
+    Each pair's ``snippet_dir`` is the matched video's snippet dir
+    (``video.parent.parent``), or ``None`` when unmatched. The caller merges
+    these with the per-snippet pairs.
     """
-    scale_dir = root / "scale"
-    if not scale_dir.is_dir():
-        return []
-    return sorted(p for p in scale_dir.iterdir() if p.is_file() and p.suffix.lower() == ".json")
+    pairs: list[SnippetPair] = []
+    for scale_dir in scale_dirs:
+        batch = scale_dir.parent
+        batch_videos = sorted(v for vids in video_dirs.values() for v in vids if batch in v.parents)
+        for ann_path in sorted(scale_dir.glob("*.json")):
+            if not _looks_like_scale_annotation_name(ann_path.name):
+                logger.debug("Skipping non-annotation JSON in %s: %s", scale_dir, ann_path.name)
+                continue
+            video_path = match_annotation_to_video(ann_path.name, batch_videos)
+            pairs.append(
+                SnippetPair(
+                    annotation_path=ann_path,
+                    video_path=video_path,
+                    snippet_dir=video_path.parent.parent if video_path is not None else None,
+                )
+            )
+    return pairs
 
 
-def _collect_files(root: Path) -> tuple[list[Path], dict[Path, list[Path]], set[Path]]:
-    """Single os.walk pass collecting annotation files, videos, and snippet dirs.
+def _looks_like_scale_annotation_name(name: str) -> bool:
+    """Heuristic: does a filename look like a Scale annotation (vs metadata)?
 
-    Returns (annotation_files, video_dirs, snippet_dirs) where:
+    Scale exports embed the source video filename: ``<prefix>_<video>.<ext>_<hash>.json``
+    (e.g. ``CDAO_SRC1_clip.mp4_abc.json``), so an annotation name contains a
+    video-extension token. Centralised ``scale/`` dirs can also hold
+    non-annotation JSON (``metadata.json``, ``seqinfo.json``) that embed no
+    video name. Filename-only so discovery stays filesystem-bound (no parse).
+    """
+    lower = name.lower()
+    return any(ext in lower for ext in _VIDEO_EXTENSIONS)
+
+
+def match_annotation_to_video(annotation_name: str, videos: list[Path]) -> Path | None:
+    """Return the video whose filename is embedded in a Scale annotation name.
+
+    Scale annotation names embed the source video filename followed by a
+    hash: ``<prefix>_<video-name>_<hash>.json`` (e.g.
+    ``CDAO_SRC1_clip_a.mp4_abc.json``). The match is anchored on both sides
+    -- the embedded name must be preceded by ``_`` (or the start) and
+    followed by ``_`` or ``.`` -- so a shorter stem (``clip``) does not match
+    an annotation for a longer one (``clip_a``). When a shorter embedded name
+    also matches (e.g. ``a.mp4`` inside ``clip_a.mp4``), the longest filename
+    wins. If two *distinct* videos share the winning filename (same basename
+    in different directories), the match is **ambiguous** and ``None`` is
+    returned (logged) -- an arbitrary pick is worse than an orphan. Single
+    source of truth, used by batch-level discovery and the loader's override
+    mode.
+    """
+    matches: list[Path] = []
+    for video in videos:
+        token = video.name  # full filename incl. extension, e.g. "clip_a.mp4"
+        idx = annotation_name.find(token)
+        while idx != -1:
+            before_ok = idx == 0 or annotation_name[idx - 1] == "_"
+            after = idx + len(token)
+            after_ok = after >= len(annotation_name) or annotation_name[after] in "_."
+            if before_ok and after_ok:
+                matches.append(video)
+                break
+            idx = annotation_name.find(token, idx + 1)
+    if not matches:
+        return None
+    longest = max(len(v.name) for v in matches)
+    best = [v for v in matches if len(v.name) == longest]
+    if len(best) > 1:
+        logger.warning(
+            "Ambiguous video match for annotation %r: %d candidates tie (%s); treating as orphan",
+            annotation_name,
+            len(best),
+            ", ".join(sorted(v.name for v in best)),
+        )
+        return None
+    return best[0]
+
+
+def _collect_files(root: Path) -> tuple[list[Path], dict[Path, list[Path]], set[Path], set[Path]]:
+    """Single os.walk pass collecting annotation files, videos, snippet/scale dirs.
+
+    Returns (annotation_files, video_dirs, snippet_dirs, scale_dirs) where:
     - annotation_files: ``.json`` files inside annotation subdirectories
       of snippet dirs (not at snippet level, not in metadata/seq dirs)
     - video_dirs: maps each ``seq_*`` directory to its video file paths
     - snippet_dirs: directories that contain at least one ``seq_*`` child
+    - scale_dirs: every directory named ``scale`` (both per-snippet and
+      batch-level; the caller partitions them by whether the parent is a
+      snippet dir)
     """
     annotation_files: list[Path] = []
     video_dirs: dict[Path, list[Path]] = {}
     snippet_dirs: set[Path] = set()
+    scale_dirs: set[Path] = set()
     annotation_parent_dirs: set[Path] = set()
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -169,13 +281,16 @@ def _collect_files(root: Path) -> tuple[list[Path], dict[Path, list[Path]], set[
         # Prune metadata directories from traversal.
         dirnames[:] = _prune_metadata(dirnames, current)
 
+        if current.name == "scale":
+            scale_dirs.add(current)
+
         # Register snippet dirs and their annotation subdirs.
         _register_snippet(current, dirnames, snippet_dirs, annotation_parent_dirs)
 
         # Collect files based on directory role.
         _collect_dir_files(current, filenames, video_dirs, annotation_files, annotation_parent_dirs)
 
-    return annotation_files, video_dirs, snippet_dirs
+    return annotation_files, video_dirs, snippet_dirs, scale_dirs
 
 
 def _prune_metadata(dirnames: list[str], current: Path) -> list[str]:
@@ -260,7 +375,7 @@ def _emit_pairs_for_snippet(
     for ann_path in ann_paths:
         if video_path is not None:
             matched.add(video_path)
-        pairs.append(SnippetPair(annotation_path=ann_path, video_path=video_path))
+        pairs.append(SnippetPair(annotation_path=ann_path, video_path=video_path, snippet_dir=snippet_dir))
         logger.debug(
             "Paired: %s -> %s",
             ann_path.name,
@@ -294,26 +409,18 @@ def _build_pairs(
         matched_videos.update(snippet_matched)
         multi_video_dirs.extend(extras)
 
+    # No early error on empty pairs: a tree may have its annotations only in
+    # a batch-level scale/ dir, which the caller merges in. The caller emits
+    # the final "nothing found" error if both paths come up empty.
     if not pairs:
         logger.info(
-            "No annotations found in subdirs of %d snippet dirs (dataset may not be annotated)",
+            "No per-snippet annotations under %d snippet dirs (may be batch-level scale/ or unannotated)",
             len(snippet_videos),
-        )
-        return DiscoveryResult(
-            errors=[f"No annotation files found in subdirectories of {len(snippet_videos)} snippet directories"]
         )
 
     orphan_annotations = [p.annotation_path for p in pairs if p.video_path is None]
     all_videos = {v for vids in video_dirs.values() for v in vids}
     orphan_videos = sorted(all_videos - matched_videos)
-
-    logger.info(
-        "Discovery complete: %d pairs, %d orphan annotations, %d orphan videos, %d multi-video dirs",
-        len(pairs),
-        len(orphan_annotations),
-        len(orphan_videos),
-        len(multi_video_dirs),
-    )
 
     return DiscoveryResult(
         pairs=pairs,
