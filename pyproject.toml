@@ -34,6 +34,23 @@ dependencies = [
 video = [
     "opencv-python-headless>=4.8",
 ]
+# Jupyter kernel for running the docs/tutorial notebooks. Optional so it does
+# not pull the Jupyter stack into a production install.
+notebook = [
+    "ipykernel>=7.2,<8",
+]
+# MAITE interoperability (databridge.maite). Optional: core `import databridge`
+# never imports these. ``numpy`` + ``av`` (PyAV) are the real runtime deps --
+# they build/decode the MOT view. ``maite`` itself is NOT imported at runtime
+# (BoxTrackDataset conforms to maite.protocols *structurally*); it's shipped in
+# this extra for the consumer's convenience -- anyone consuming the MAITE
+# surface has maite installed anyway -- and the test suite uses it to verify
+# conformance (isinstance + a maite.tasks.predict round-trip).
+maite = [
+    "maite>=0.9,<0.10",
+    "numpy>=1.24",
+    "av>=11",
+]
 dev = [
     "pre-commit>=3.6",
     "pytest>=8.0",
@@ -89,6 +106,14 @@ pyright = ">=1.1"
 
 [tool.poetry.group.video.dependencies]
 opencv-python-headless = ">=4.8"
+
+[tool.poetry.group.maite.dependencies]
+maite = ">=0.9,<0.10"
+numpy = ">=1.24"
+av = ">=11"
+
+[tool.poetry.group.notebook.dependencies]
+ipykernel = ">=7.2,<8"
 
 # ---------------------------------------------------------------------------
 # Ruff

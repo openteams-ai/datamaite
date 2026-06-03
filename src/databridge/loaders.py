@@ -1,9 +1,10 @@
 """Loader architecture: the contract every dataset loader implements.
 
 databridge is an N-to-M bridge. A *loader* reads a dataset of one input
-format from disk and produces the neutral :class:`databridge.model.Dataset`
-model; a *converter* writes that model out to an output format. This module
-defines the input-side architecture:
+format from disk and produces the neutral
+:class:`databridge.model.BoxTrackDataset` model; a *converter* writes that
+model out to an output format. This module defines the input-side
+architecture:
 
 * :class:`Loader` -- the base class every loader subclasses;
 * :func:`register_loader` -- the extension point that adds a format;
@@ -17,15 +18,17 @@ Conventions every loader follows
 --------------------------------
 * **Return, don't raise, on bad data.** Loading is best-effort: an item that
   cannot be parsed is skipped and logged at WARNING, never fatal. A loader
-  returns a (possibly empty) :class:`Dataset` rather than aborting the load.
-  The authoritative "*why* is this dataset bad" answer comes from
+  returns a (possibly empty) :class:`BoxTrackDataset` rather than aborting the
+  load. The authoritative "*why* is this dataset bad" answer comes from
   :func:`databridge.validate`, which is deliberately a separate pass.
 * **Options are keyword-only.** ``load(root, **options)`` -- each loader
   documents its own options (e.g. HMIE's ``require_video``). Where an option
   is shared across loaders (``require_video`` for any FMV format), keep the
   name and meaning consistent.
-* **One model out.** Every loader produces the same :class:`Dataset`, so any
-  converter can consume the result regardless of which format it came from.
+* **One model out.** Every loader produces the same :class:`BoxTrackDataset`,
+  so any converter can consume the result regardless of which format it came
+  from. :class:`BoxTrackDataset` is MAITE-MOT-capable by default; see
+  :mod:`databridge.maite` for details.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from databridge._types import DatasetFormat
-from databridge.model import Dataset
+from databridge.model import BoxTrackDataset
 
 
 class Loader(ABC):
@@ -50,11 +53,11 @@ class Loader(ABC):
     format: ClassVar[DatasetFormat]
 
     @abstractmethod
-    def load(self, root: str | Path, **options: Any) -> Dataset:
-        """Read the dataset under ``root`` into a :class:`Dataset`.
+    def load(self, root: str | Path, **options: Any) -> BoxTrackDataset:
+        """Read the dataset under ``root`` into a :class:`BoxTrackDataset`.
 
         Best-effort by contract: unparseable items are skipped and logged,
-        not raised; an empty :class:`Dataset` is returned when nothing
+        not raised; an empty :class:`BoxTrackDataset` is returned when nothing
         loadable is found. ``options`` are loader-specific keyword arguments.
         """
         raise NotImplementedError
@@ -117,7 +120,7 @@ def load(
     *,
     dataset_format: DatasetFormat | str | None = DatasetFormat.HMIE,
     **options: Any,
-) -> Dataset:
+) -> BoxTrackDataset:
     """Load a dataset of any registered format into the neutral model.
 
     Parameters

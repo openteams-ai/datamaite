@@ -93,6 +93,25 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    stats_parser = sub.add_parser("stats", help="Summarize a dataset's duration/frame/box distributions.")
+    stats_parser.add_argument("path", type=Path, help="Path to the dataset root.")
+    stats_parser.add_argument(
+        "--format",
+        default=DatasetFormat.HMIE.value,
+        choices=[f.value for f in DatasetFormat],
+        help="Dataset format (default: hmie).",
+    )
+    stats_parser.add_argument(
+        "--require-video",
+        action="store_true",
+        help="Probe each video for true frame counts (slower; needs the `video` extra).",
+    )
+    stats_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the statistics as a single JSON object on stdout.",
+    )
+
     args = parser.parse_args(argv)
 
     if hasattr(args, "workers") and args.workers is not None:
@@ -112,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "validate":
         return _cmd_validate(args)
+
+    if args.command == "stats":
+        return _cmd_stats(args)
 
     return 0
 
@@ -252,6 +274,26 @@ def _install_sigint_flush(cache: ValidationCache | None) -> Callable[[], None]:
             signal.signal(signal.SIGINT, prev_sigint)
 
     return _restore
+
+
+def _cmd_stats(args: argparse.Namespace) -> int:
+    """Run the stats subcommand: load the dataset and print distributions."""
+    from databridge._stats import dataset_stats, format_stats
+    from databridge.loaders import load
+
+    show = _show_progress(args)
+    if show:
+        sys.stderr.write(f"\r\033[K  Loading {args.path}...\n")
+        sys.stderr.flush()
+
+    ds = load(args.path, dataset_format=args.format, require_video=args.require_video)
+    stats = dataset_stats(ds)
+
+    if args.json:
+        print(json.dumps(stats, indent=2))
+    else:
+        print(format_stats(stats, root=str(args.path)))
+    return 0
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:

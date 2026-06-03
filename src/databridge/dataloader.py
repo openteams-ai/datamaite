@@ -1,8 +1,8 @@
 """HMIE/Scale loader -- the reference implementation of the loader contract.
 
 :class:`HmieLoader` is databridge's first :class:`~databridge.loaders.Loader`:
-it reads the HMIE/Scale on-disk layout and produces the neutral
-:class:`databridge.model.Dataset` model that every converter consumes. The
+it reads the HMIE/Scale on-disk layout and produces the MAITE-MOT-capable
+:class:`databridge.model.BoxTrackDataset` that every converter consumes. The
 generic, format-agnostic machinery (the ``Loader`` base class, the registry,
 and the :func:`databridge.load` dispatcher) lives in
 :mod:`databridge.loaders`; this module is what a new format loader is modeled
@@ -36,7 +36,7 @@ from databridge._formats.hmie.discovery import _VIDEO_EXTENSIONS, SnippetPair, m
 from databridge._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
 from databridge._types import DatasetFormat
 from databridge.loaders import Loader, register_loader
-from databridge.model import BoxAnnotation, Dataset, VideoSequence
+from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence, category_name_from_uri
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,8 @@ class HmieLoader(Loader):
         video_dir: str | Path | None = None,
         require_video: bool = False,
         **_: Any,
-    ) -> Dataset:
-        """Read an HMIE/Scale dataset under ``root`` into a :class:`Dataset`.
+    ) -> BoxTrackDataset:
+        """Read an HMIE/Scale dataset under ``root`` into a :class:`BoxTrackDataset`.
 
         Parameters
         ----------
@@ -109,7 +109,7 @@ class HmieLoader(Loader):
 
         Returns
         -------
-        Dataset
+        BoxTrackDataset
             Loaded sequences and the dataset-wide category map. Empty when no
             annotation/video pairs are found.
         """
@@ -134,7 +134,9 @@ class HmieLoader(Loader):
                 sequences.append(seq)
 
         logger.info("Loaded %d sequence(s), %d categories from %s", len(sequences), len(categories), root)
-        return Dataset(sequences=sequences, categories=categories)
+        # tuple(): BoxTrackDataset stores an immutable sequence set so its cached
+        # MAITE item list (_mot_sequences) cannot go stale.
+        return BoxTrackDataset(sequences=tuple(sequences), categories=categories)
 
 
 def load_hmie(
@@ -143,7 +145,7 @@ def load_hmie(
     annotation_dir: str | Path | None = None,
     video_dir: str | Path | None = None,
     require_video: bool = False,
-) -> Dataset:
+) -> BoxTrackDataset:
     """Load an HMIE/Scale dataset from disk into the neutral model.
 
     Thin convenience wrapper around :meth:`HmieLoader.load` (equivalent to
@@ -230,9 +232,11 @@ def _load_sequence(
         return None
 
     video_meta = _extract_video_meta(annotation)
+    width, height = _extract_dimensions(video_meta)
 
     video_path = pair.video_path
     num_frames: int | None = None
+    num_frames_exact = False  # True only once a probe supplies the real count
     # fps source order: the annotation's declared video fps, then the
     # top-level seq_fps / fps extras (the prototype used seq_fps then fps).
     # First finite, positive fps wins; NaN/Inf/<=0 are treated as "unknown"
@@ -245,15 +249,12 @@ def _load_sequence(
     )
 
     if require_video:
-        probed = _probe_for_load(video_path)
-        if probed is None:
+        resolved = _resolve_from_probe(video_path, fps=fps, width=width, height=height)
+        if resolved is None:
             logger.warning("Skipping snippet with missing/unreadable video: %s", pair.annotation_path)
             return None
-        probe_fps, frame_count = probed
-        if probe_fps > 0:
-            fps = probe_fps
-        if frame_count > 0:
-            num_frames = frame_count
+        fps, num_frames, width, height = resolved
+        num_frames_exact = num_frames is not None
 
     # Build boxes only after fps is resolved (incl. the require_video probe
     # override) so frame_index and num_frames share one clock.
@@ -279,6 +280,8 @@ def _load_sequence(
     if duration is None:
         duration = num_frames / fps if num_frames and fps > 0 else None
 
+    size_bytes = _file_size(video_path)
+
     return VideoSequence(
         video_id=next_video_id,
         video_path=str(video_path) if video_path is not None else None,
@@ -290,6 +293,10 @@ def _load_sequence(
         video_meta=video_meta,
         metadata=dict(annotation.metadata or {}),
         boxes=boxes,
+        width=width,
+        height=height,
+        size_bytes=size_bytes,
+        num_frames_exact=num_frames_exact,
     )
 
 
@@ -368,7 +375,7 @@ def _resolve_category(category_uri: str, categories: dict[str, int]) -> tuple[in
         return -1, None
     if category_uri not in categories:
         categories[category_uri] = len(categories) + 1
-    return categories[category_uri], category_uri.rstrip("/").split("/")[-1]
+    return categories[category_uri], category_name_from_uri(category_uri)
 
 
 def _extract_video_meta(annotation: ScaleAnnotation) -> dict[str, Any]:
@@ -394,6 +401,35 @@ def _extract_video_meta(annotation: ScaleAnnotation) -> dict[str, Any]:
         meta["global_attributes"] = global_attributes
 
     return meta
+
+
+def _extract_dimensions(video_meta: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Read (width, height) in pixels from the harvested video metadata.
+
+    Accepts the real-data height misspelling ``heigth`` as a fallback for
+    ``height``. Values that are missing or non-positive collapse to ``None``;
+    when ``require_video`` probes the file, the measured dimensions override
+    these.
+    """
+
+    def _dim(*keys: str) -> int | None:
+        for key in keys:
+            value = _coerce_positive_float(video_meta.get(key))
+            if value is not None:
+                return int(value)
+        return None
+
+    return _dim("width"), _dim("height", "heigth")
+
+
+def _file_size(video_path: Path | None) -> int | None:
+    """Return the video file size in bytes, or None if there is no readable file."""
+    if video_path is None:
+        return None
+    try:
+        return video_path.stat().st_size
+    except OSError:
+        return None
 
 
 def _coerce_duration(extra: dict[str, Any] | None) -> float | None:
@@ -433,12 +469,39 @@ def _coerce_positive_float(value: Any) -> float | None:
     return result if result is not None and result > 0 else None
 
 
-def _probe_for_load(video_path: Path | None) -> tuple[float, int] | None:
-    """Probe a video for (fps, frame_count), or None if unusable.
+def _resolve_from_probe(
+    video_path: Path | None,
+    *,
+    fps: float,
+    width: int | None,
+    height: int | None,
+) -> tuple[float, int | None, int | None, int | None] | None:
+    """Probe the video and merge measured values over the annotation's.
+
+    Returns ``(fps, num_frames, width, height)`` with the probe's values
+    preferred where positive (the probe measures the real fps, frame count,
+    and pixel dimensions; the annotation's declared values can be missing or
+    mistyped), or ``None`` when the video is missing/unreadable so the caller
+    can skip the snippet.
+    """
+    probed = _probe_for_load(video_path)
+    if probed is None:
+        return None
+    probe_fps, frame_count, probe_w, probe_h = probed
+    return (
+        probe_fps if probe_fps > 0 else fps,
+        frame_count if frame_count > 0 else None,
+        probe_w if probe_w > 0 else width,
+        probe_h if probe_h > 0 else height,
+    )
+
+
+def _probe_for_load(video_path: Path | None) -> tuple[float, int, int, int] | None:
+    """Probe a video for (fps, frame_count, width, height), or None if unusable.
 
     Returns None when the path is absent, missing on disk, or cannot be
     opened. Reuses the validator's :func:`probe_video`; integrity findings
-    are discarded -- loading only needs fps and frame count.
+    are discarded -- loading only needs fps, frame count, and dimensions.
     """
     if video_path is None or not video_path.exists():
         return None
@@ -447,4 +510,4 @@ def _probe_for_load(video_path: Path | None) -> tuple[float, int] | None:
     props, _findings = probe_video(video_path)
     if not props.opened:
         return None
-    return props.fps, props.frame_count
+    return props.fps, props.frame_count, props.width, props.height

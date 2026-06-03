@@ -84,7 +84,9 @@ pyright:
   variables:
     VERSION: "3.11"
   script:
-    - poetry install --with dev
+    # video + maite groups so cv2/numpy/av/maite resolve and pyright stays at
+    # 0 warnings (reportMissingImports would otherwise fire on the adapters).
+    - poetry install --with dev --with video --with maite
     - poetry run pyright src/
 
 # ---------------------------------------------------------------------------
@@ -134,7 +136,9 @@ publish:
   stage: test
   timeout: 30m
   script:
-    - poetry install --with dev --with video
+    # maite group adds the MAITE adapters' deps (maite/numpy/av) so the
+    # databridge.maite tests run and count toward the 90% coverage gate.
+    - poetry install --with dev --with video --with maite
     - poetry run pytest tests -vvv --cov=databridge --cov-report term-missing
         --cov-report xml:coverage_report.xml --cov-fail-under=90
   coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'

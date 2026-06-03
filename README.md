@@ -42,18 +42,22 @@ design and [how to add a new loader](docs/architecture.md).
 
 ## Loading datasets (Python)
 
-Load an HMIE/Scale dataset into the neutral `Dataset` model:
+Load an HMIE/Scale dataset into the neutral `BoxTrackDataset` model:
 
 ```python
 from databridge import load_hmie
 
 ds = load_hmie("/path/to/dataset")
-print(len(ds), "sequences,", ds.num_boxes, "boxes")
+print(ds.sequence_count, "sequences,", ds.num_boxes, "boxes")
 
-for seq in ds:
+for seq in ds.iter_sequences():
     for box in seq.boxes:
         print(box.frame_index, box.track_id, box.category_name, box.bbox)
 ```
+
+> `ds` is also a MAITE dataset (see below), so `len(ds)` / `ds[i]` / `for x in ds`
+> are the **MAITE item** view (one per video). Use `ds.sequence_count` /
+> `ds.iter_sequences()` / `ds.sequences` for the **record** view shown above.
 
 Or via the format-dispatching entry point (same result):
 
@@ -77,6 +81,49 @@ ds = load_hmie(
 
 For a full load → verify → export-ready walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
+
+## MAITE interoperability
+
+A loaded dataset **is** a [MAITE](https://github.com/mit-ll-ai-technology/maite)
+multi-object-tracking dataset — no adapter or on-disk conversion step — so it can
+feed MAITE-compatible models, metrics, and augmentations directly. Install the extra:
+
+```bash
+pip install databridge[maite]
+```
+
+Video/FMV maps to MAITE's **multi-object-tracking** task (one item per video).
+Index the loaded dataset directly:
+
+```python
+from databridge import load_hmie
+
+ds = load_hmie("/path/to/dataset")               # already a MAITE MOT Dataset
+
+video_stream, target, metadata = ds[0]
+frame = next(iter(video_stream))                 # VideoFrame: pixels (C,H,W), time_s, pts
+boxes = target.frame_tracks[0].boxes             # xyxy, shape (N, 4)
+```
+
+The MAITE surface probes each video's dimensions/time base itself (via PyAV), so the
+quick snippet above needs only the `maite` extra. Loading with `require_video=True`
+(true frame counts up front, which the `empty_frame_policy="all"` view requires)
+additionally uses the OpenCV probe — install both extras for that:
+`pip install databridge[maite,video]`.
+
+To configure the MOT view, copy the dataset with options (it's not a conversion —
+the dataset is already MAITE):
+
+```python
+ds = ds.with_mot_options(empty_frame_policy="all", dataset_id="my-set")
+```
+
+Conventions: boxes are converted from `xywh` to MAITE's `xyxy`; ground-truth
+`scores` are `1.0`; frames are decoded with PyAV (inject your own backend via
+`with_mot_options(decoder=...)`); by default only annotated frames are emitted
+(`empty_frame_policy="all"` emits every frame, and needs a probed frame count).
+The `BoxTrackDataset` model is a box-track IR — labels that are not bounding
+boxes, and tasks other than multi-object tracking, are out of scope.
 
 ## CLI Usage
 
