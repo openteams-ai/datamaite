@@ -10,7 +10,7 @@ from databridge import load, load_hmie
 from databridge._types import DatasetFormat
 from databridge.dataloader import HmieLoader
 from databridge.loaders import Loader, available_formats, get_loader, register_loader
-from databridge.model import Dataset
+from databridge.model import BoxTrackDataset
 
 from ._hmie_factory import default_happy_dataset
 
@@ -56,7 +56,7 @@ class TestLoaderContract:
 
     def test_register_requires_format(self) -> None:
         class NoFormat(Loader):
-            def load(self, root: str | Path, **options: object) -> Dataset:
+            def load(self, root: str | Path, **options: object) -> BoxTrackDataset:
                 raise NotImplementedError  # never called; register_loader rejects it first
 
         with pytest.raises(TypeError, match="must set `format`"):
@@ -73,15 +73,15 @@ class TestRegisterAndDispatch:
         class DummyLoader(Loader):
             format = DatasetFormat.HMIE
 
-            def load(self, root: str | Path, **options: object) -> Dataset:
+            def load(self, root: str | Path, **options: object) -> BoxTrackDataset:
                 captured["root"] = str(root)
                 captured["options"] = options
-                return Dataset(sequences=[], categories={})
+                return BoxTrackDataset(sequences=[], categories={})
 
         register_loader(DummyLoader)
         ds = load(tmp_path, dataset_format=DatasetFormat.HMIE, custom_option=7)
 
-        assert isinstance(ds, Dataset)
+        assert isinstance(ds, BoxTrackDataset)
         assert captured["root"] == str(tmp_path)
         assert captured["options"] == {"custom_option": 7}
 
@@ -95,11 +95,11 @@ class TestAutodetect:
             def sniff(cls, _root: str | Path) -> bool:
                 return True
 
-            def load(self, _root: str | Path, **_options: object) -> Dataset:
-                return Dataset(sequences=[], categories={})
+            def load(self, _root: str | Path, **_options: object) -> BoxTrackDataset:
+                return BoxTrackDataset(sequences=[], categories={})
 
         monkeypatch.setattr("databridge.loaders._LOADERS", {DatasetFormat.HMIE: SniffLoader})
-        assert isinstance(load(tmp_path, dataset_format=None), Dataset)
+        assert isinstance(load(tmp_path, dataset_format=None), BoxTrackDataset)
 
     def test_autodetect_failure_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr("databridge.loaders._LOADERS", {})
@@ -122,4 +122,4 @@ class TestEquivalenceWithLoadHmie:
         # only if unreadable; here the factory writes openable videos, so this
         # simply confirms the option is forwarded without error.
         ds = load(tmp_path, dataset_format="hmie", require_video=True)
-        assert isinstance(ds, Dataset)
+        assert isinstance(ds, BoxTrackDataset)

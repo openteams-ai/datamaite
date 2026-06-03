@@ -96,9 +96,9 @@ class TestRealHmieLoader:
 
         print("\n=== Real HMIE Load Report ===")
         print(f"Root: {hmie_root}")
-        print(f"Sequences: {len(ds)}")
+        print(f"Sequences: {len(ds.sequences)}")
         print(f"Total boxes: {ds.num_boxes}")
         print(f"Categories: {len(ds.categories)}")
 
-        assert len(ds) > 0, "Loader found no sequences -- folder/schema assumptions may be wrong"
+        assert len(ds.sequences) > 0, "Loader found no sequences -- folder/schema assumptions may be wrong"
         assert ds.num_boxes > 0, "Sequences loaded but no boxes parsed"

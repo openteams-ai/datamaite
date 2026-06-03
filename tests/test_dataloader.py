@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from databridge import BoxAnnotation, Dataset, VideoSequence, load_hmie
+from databridge import BoxAnnotation, BoxTrackDataset, VideoSequence, load_hmie
 
 from ._hmie_factory import (
     AnnotationSpec,
@@ -32,17 +32,17 @@ class TestDefaultLoad:
         default_happy_dataset(tmp_path)
         ds = load_hmie(tmp_path)
 
-        assert isinstance(ds, Dataset)
+        assert isinstance(ds, BoxTrackDataset)
         # 2 full-length videos x 2 snippets each
-        assert len(ds) == 4
-        assert all(isinstance(s, VideoSequence) for s in ds)
+        assert len(ds.sequences) == 4
+        assert all(isinstance(s, VideoSequence) for s in ds.sequences)
         # Each happy snippet: 1 track x 5 labeled frames.
         assert ds.num_boxes == 20
 
     def test_video_ids_are_sequential(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
         ds = load_hmie(tmp_path)
-        assert sorted(s.video_id for s in ds) == [0, 1, 2, 3]
+        assert sorted(s.video_id for s in ds.sequences) == [0, 1, 2, 3]
 
     def test_sequence_carries_paths_and_metadata(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
@@ -284,7 +284,7 @@ class TestBatchLevelScaleLayout:
 
         ds = load_hmie(tmp_path)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         seq = ds.sequences[0]
         assert seq.annotation_path.endswith("CDAO_SRC1_clip_a.mp4_hash.json")
         assert seq.video_path is not None
@@ -297,7 +297,7 @@ class TestCategoryMap:
         default_happy_dataset(tmp_path)
         ds = load_hmie(tmp_path)
         assert ds.categories == {"vehicle": 1}
-        assert {b.category_id for s in ds for b in s.boxes} == {1}
+        assert {b.category_id for s in ds.sequences for b in s.boxes} == {1}
 
     def test_ids_stable_across_sequences(self, tmp_path: Path) -> None:
         single_video_dataset(
@@ -325,7 +325,7 @@ class TestCategoryMap:
         # Two distinct labels -> two ids; "boat" reuses its id in both snippets.
         assert set(ds.categories) == {"boat", "plane"}
         boat_id = ds.categories["boat"]
-        boat_boxes = [b for s in ds for b in s.boxes if b.category_uri == "boat"]
+        boat_boxes = [b for s in ds.sequences for b in s.boxes if b.category_uri == "boat"]
         assert {b.category_id for b in boat_boxes} == {boat_id}
 
 
@@ -346,7 +346,7 @@ class TestRequireVideo:
         )
         ds = load_hmie(tmp_path, require_video=True)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         seq = ds.sequences[0]
         # Exact probed frame count, not the annotation-derived estimate.
         assert seq.num_frames == 24
@@ -360,12 +360,12 @@ class TestRequireVideo:
         )
         # Default mode: loaded with no video.
         default_ds = load_hmie(tmp_path)
-        assert len(default_ds) == 1
+        assert len(default_ds.sequences) == 1
         assert default_ds.sequences[0].video_path is None
 
         # require_video mode: snippet with no video is skipped.
         strict_ds = load_hmie(tmp_path, require_video=True)
-        assert len(strict_ds) == 0
+        assert len(strict_ds.sequences) == 0
 
 
 class TestTolerance:
@@ -383,11 +383,11 @@ class TestTolerance:
         )
         ds = load_hmie(tmp_path)
         # Only the parseable snippet loads.
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
 
     def test_empty_root_returns_empty_dataset(self, tmp_path: Path) -> None:
         ds = load_hmie(tmp_path)
-        assert len(ds) == 0
+        assert len(ds.sequences) == 0
         assert ds.num_boxes == 0
         assert ds.categories == {}
 
@@ -414,7 +414,7 @@ class TestTolerance:
         _write_annotation(ann_dir / "CDAO_SRC1_clip.mp4_h.json", data)
         ds = load_hmie(tmp_path, annotation_dir=ann_dir)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         # Only the complete frame survives as a box.
         assert len(ds.sequences[0].boxes) == 1
         assert ds.sequences[0].boxes[0].frame_index == 0
@@ -496,7 +496,7 @@ class TestOverrideMode:
         ann_dir, video_dir = self._make_flat(tmp_path, with_video=True)
         ds = load_hmie(tmp_path, annotation_dir=ann_dir, video_dir=video_dir)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         assert ds.sequences[0].video_path is not None
         assert ds.sequences[0].video_path.endswith("clip_a.mp4")
 
@@ -517,7 +517,7 @@ class TestOverrideMode:
 
         ds = load_hmie(tmp_path, annotation_dir=ann_dir, video_dir=video_dir)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         assert ds.sequences[0].video_path is not None
         assert ds.sequences[0].video_path.endswith("clip_a.mp4")
 
@@ -536,14 +536,14 @@ class TestOverrideMode:
 
         ds = load_hmie(tmp_path, annotation_dir=ann_dir, video_dir=video_dir)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         assert ds.sequences[0].video_path is None
 
     def test_annotation_dir_only_leaves_video_none(self, tmp_path: Path) -> None:
         ann_dir, _ = self._make_flat(tmp_path, with_video=False)
         ds = load_hmie(tmp_path, annotation_dir=ann_dir)
 
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         assert ds.sequences[0].video_path is None
 
     def test_metadata_json_is_skipped(self, tmp_path: Path) -> None:
@@ -557,11 +557,11 @@ class TestOverrideMode:
             make_annotation_dict(AnnotationSpec(task_id="t"), FactoryVideoSpec()),
         )
         ds = load_hmie(tmp_path, annotation_dir=ann_dir)
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
 
     def test_missing_annotation_dir_returns_empty(self, tmp_path: Path) -> None:
         ds = load_hmie(tmp_path, annotation_dir=tmp_path / "does_not_exist")
-        assert len(ds) == 0
+        assert len(ds.sequences) == 0
 
 
 class TestFpsFallback:
@@ -598,16 +598,16 @@ class TestMalformedInputs:
             [SnippetSpec(name="video_001_000001", video=FactoryVideoSpec(corrupt=True))],
         )
         # Corrupt video won't open: require_video drops the snippet.
-        assert len(load_hmie(tmp_path, require_video=True)) == 0
+        assert len(load_hmie(tmp_path, require_video=True).sequences) == 0
         # ...but default mode still loads the annotation.
-        assert len(load_hmie(tmp_path)) == 1
+        assert len(load_hmie(tmp_path).sequences) == 1
 
     def test_non_json_file_in_annotation_dir_skipped(self, tmp_path: Path) -> None:
         ann_dir = tmp_path / "anns"
         ann_dir.mkdir()
         (ann_dir / "broken.json").write_text("{not valid json")
         ds = load_hmie(tmp_path, annotation_dir=ann_dir)
-        assert len(ds) == 0
+        assert len(ds.sequences) == 0
 
     def test_deeply_nested_json_skipped_override_mode(self, tmp_path: Path) -> None:
         # Pathologically nested JSON makes json.load raise RecursionError.
@@ -622,7 +622,7 @@ class TestMalformedInputs:
             make_annotation_dict(AnnotationSpec(task_id="t-ok"), FactoryVideoSpec()),
         )
         ds = load_hmie(tmp_path, annotation_dir=ann_dir)
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
 
     def test_deeply_nested_json_skipped_default_mode(self, tmp_path: Path) -> None:
         # Same pathological input reached through discovery (default mode),
@@ -633,15 +633,15 @@ class TestMalformedInputs:
         depth = 60_000
         ann.write_text("[" * depth + "]" * depth)
         ds = load_hmie(tmp_path)  # must not raise
-        assert len(ds) == 0
+        assert len(ds.sequences) == 0
 
 
 class TestDatasetContainer:
-    def test_len_iter_and_num_boxes(self, tmp_path: Path) -> None:
+    def test_sequences_len_and_num_boxes(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
         ds = load_hmie(tmp_path)
-        assert len(ds) == len(list(ds)) == 4
-        assert ds.num_boxes == sum(len(s.boxes) for s in ds)
+        assert len(ds.sequences) == 4
+        assert ds.num_boxes == sum(len(s.boxes) for s in ds.sequences)
 
 
 def _one_box_annotation(frames: list[dict[str, Any]], *, afr: float = 5.0, fps: float = 30.0) -> dict[str, Any]:
@@ -662,7 +662,7 @@ class TestReviewFixes:
             _one_box_annotation([{"key": 0, "left": 1.0, "top": 2.0, "width": 3.0, "height": 4.0}]),
         )
         ds = load_hmie(tmp_path, annotation_dir="annotations")
-        assert len(ds) == 1
+        assert len(ds.sequences) == 1
         assert ds.num_boxes == 1
 
     def test_non_finite_bbox_coords_dropped(self, tmp_path: Path) -> None:

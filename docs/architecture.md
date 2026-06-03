@@ -11,16 +11,18 @@ implemented is HMIE (Scale Video Playback JSON + snippet folder layout).
 Everything is structured so other formats can be added behind the same
 public entrypoint without touching the CLI or reporting layers.
 
-## The bridge — loaders × converters
+## The bridge — loaders × consumers
 
 The longer-term shape is an **N-to-M bridge**. A *loader* parses an
-on-disk dataset into one neutral in-memory model (`model.py`); a
-*converter / writer* serialises that same model back out to another
-format. Because every loader produces the identical `Dataset` and every
-converter consumes it, any input format can feed any output format —
-adding a loader gains an input, adding a converter gains an output, and
-neither side knows about the other. Solid = implemented today; dashed =
-planned.
+on-disk dataset into one neutral in-memory model (`model.py`,
+`BoxTrackDataset`). That model is then consumed two ways: **directly as a
+MAITE dataset** by models and metrics (the model *is* a MAITE
+multi-object-tracking dataset — no conversion step), and by
+*converters / writers* that serialise it back out to another on-disk
+format. Because every loader produces the identical `BoxTrackDataset`,
+any input format can reach any consumer — adding a loader gains an input,
+adding a converter gains an output, and neither side knows about the
+other. Solid = implemented today; dashed = planned.
 
 ```mermaid
 flowchart LR
@@ -36,15 +38,17 @@ flowchart LR
         LY["load_yolo"]
     end
 
-    HUB[/"<b>model.py</b><br/>Dataset<br/>VideoSequence · BoxAnnotation"/]
+    HUB[/"<b>model.py</b><br/>BoxTrackDataset<br/>VideoSequence · BoxAnnotation"/]
 
-    subgraph writers [Converters / writers — conversion.py]
+    subgraph consumers [Consumers]
+        MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(the model IS one)"]
         TM["to_mot"]
         TY["to_yolo"]
         TC["to_coco"]
     end
 
-    subgraph out [Output on disk]
+    subgraph out [Output]
+        MAITEOUT([model / metric<br/>in-memory])
         MOTOUT([MOTChallenge])
         YOLOUT([YOLO])
         COCOUT([COCO])
@@ -56,9 +60,11 @@ flowchart LR
     LH --> HUB
     LC -.-> HUB
     LY -.-> HUB
+    HUB --> MAITE
     HUB --> TM
     HUB --> TY
     HUB --> TC
+    MAITE --> MAITEOUT
     TM -.-> MOTOUT
     TY -.-> YOLOUT
     TC -.-> COCOUT
@@ -67,14 +73,17 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB hub;
-    class LH impl;
+    class LH,MAITE impl;
+    class MAITEOUT impl;
     class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
 ```
 
-Today only the HMIE loader (`load_hmie`) and the validation pipeline are
-implemented; the converters are not yet written. See
-[Loading](#loading--dataloaderpy) for how `load_hmie` builds the model and
-[Converters](#converters--conversionpy) for the writer contract.
+Today the HMIE loader (`load_hmie`), the validation pipeline, and the
+MAITE surface (`databridge.maite`) are implemented; the on-disk converters
+are not yet written. See [Loading](#loading--dataloaderpy) for how
+`load_hmie` builds the model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset)
+for the MAITE surface, and [Converters](#converters--conversionpy) for the
+writer contract.
 
 ## Project layout
 
@@ -86,11 +95,16 @@ src/databridge/
     _cache.py                On-disk cache for expensive video probes
     _report.py               Text / JSON / JSONL / HTML report rendering
     _version.py              Package version
-    model.py                 Neutral dataset model: Dataset, VideoSequence, BoxAnnotation
+    model.py                 Neutral model + MAITE MOT surface: BoxTrackDataset, VideoSequence, BoxAnnotation
     loaders.py               Loader contract (ABC) + registry + load() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
-    dataloader.py            HmieLoader: the reference loader (on-disk HMIE -> Dataset)
-    conversion.py            Converters/writers: Dataset model -> output format (placeholder)
+    dataloader.py            HmieLoader: the reference loader (on-disk HMIE -> BoxTrackDataset)
+    conversion.py            Converters/writers: BoxTrackDataset model -> output format (placeholder)
+    maite/                   Optional MAITE surface (databridge[maite] extra)
+        __init__.py              package doc; the model is MAITE directly (no adapter)
+        _mot.py                  build_mot_item: the MOT view computed from the model
+        _decode.py               Decoder protocol + PyAV backend (lazy)
+        _common.py               numpy-array + datum-metadata helpers
     _formats/
         __init__.py          Format registry
         hmie/
@@ -365,7 +379,7 @@ format loader looks the same and a new format is additive. Three pieces:
 flowchart TD
     LOAD["<b>load(root, dataset_format=…)</b><br/>public dispatch"]
     REG[("<b>registry</b><br/>DatasetFormat → Loader")]
-    BASE["<b>Loader (ABC)</b><br/>load(root, **options) → Dataset<br/>sniff(root) → bool"]
+    BASE["<b>Loader (ABC)</b><br/>load(root, **options) → BoxTrackDataset<br/>sniff(root) → bool"]
     HMIE["<b>HmieLoader</b><br/>(dataloader.py)"]
     NEW["CocoLoader, YoloLoader, …<br/>(future)"]
 
@@ -389,7 +403,7 @@ flowchart TD
 
 - **`Loader` (ABC).** The contract: a concrete loader sets a `format`
   (`DatasetFormat`) class attribute and implements
-  `load(self, root, **options) -> Dataset`. An optional `sniff(root) -> bool`
+  `load(self, root, **options) -> BoxTrackDataset`. An optional `sniff(root) -> bool`
   classmethod is the autodetection hook (default `False`).
 - **`register_loader`.** A decorator that records `format → loader-class` in
   the registry. This is the extension point — adding a loader does not touch
@@ -411,23 +425,23 @@ Every loader honors the same contract so callers and converters can rely on it:
 
 - **Return, don't raise, on bad data.** Loading is best-effort: an item that
   cannot be parsed is skipped and logged at WARNING; the loader returns a
-  (possibly empty) `Dataset`. The authoritative "*why* is it bad" answer is a
+  (possibly empty) `BoxTrackDataset`. The authoritative "*why* is it bad" answer is a
   separate pass — `validate()`.
 - **Keyword-only options, consistent names.** Loader-specific options are
   keyword-only; shared semantics (e.g. `require_video` for any FMV format)
   keep the same name and meaning across loaders.
-- **One model out.** Every loader produces the same `Dataset`, so any
+- **One model out.** Every loader produces the same `BoxTrackDataset`, so any
   converter consumes the result regardless of input format.
 
 ### Common data model (images vs. FMV)
 
 The neutral model (`model.py`) is the agreed common representation, and the
 `Loader` contract is intentionally model-shaped, not format-shaped. Today the
-model is FMV-centric: a `Dataset` holds `VideoSequence`s of `BoxAnnotation`s.
+model is FMV-centric: a `BoxTrackDataset` holds `VideoSequence`s of `BoxAnnotation`s.
 **Image datasets** (COCO, image-mode YOLO) will be represented by an
 `ImageSample` sibling of `VideoSequence` carrying the same `BoxAnnotation`,
-added together with the first image loader — at which point `Dataset` holds a
-mix of sequence and image samples. The `Loader.load() -> Dataset` contract does
+added together with the first image loader — at which point `BoxTrackDataset` holds a
+mix of sequence and image samples. The `Loader.load() -> BoxTrackDataset` contract does
 not change when that lands, which is the whole point of fixing the contract
 now. (We deliberately do not define `ImageSample` ahead of a loader that
 produces it, to avoid a consumer-less abstraction we'd likely get wrong.)
@@ -440,7 +454,7 @@ To support a new input format `foo`:
 2. Create `_formats/foo/` with that format's discovery + schema/parse helpers
    (mirrors `_formats/hmie/`), keeping format specifics isolated.
 3. Write a `FooLoader(Loader)` with `format = DatasetFormat.FOO` and a `load`
-   that returns a `Dataset`, following the conventions above. Decorate it with
+   that returns a `BoxTrackDataset`, following the conventions above. Decorate it with
    `@register_loader`. (Use `HmieLoader` in `dataloader.py` as the template.)
 4. Ensure the module is imported so registration runs (export it from the
    package `__init__`).
@@ -467,13 +481,13 @@ discover_hmie_pairs(root) ─► [SnippetPair]
         VideoSequence(boxes=[BoxAnnotation, ...], video_meta, fps, ...)
                                   │
                                   ▼
-        Dataset(sequences=[...], categories={uri: id})
+        BoxTrackDataset(sequences=[...], categories={uri: id})
 ```
 
-`Dataset` / `VideoSequence` / `BoxAnnotation` live in `model.py`, not in
+`BoxTrackDataset` / `VideoSequence` / `BoxAnnotation` live in `model.py`, not in
 `dataloader.py`, on purpose: the model is the **format-neutral hub** of the
 bridge. `load_hmie` is one loader that produces it; future loaders (COCO,
-YOLO, ...) produce the same `Dataset`, and converters consume `Dataset`
+YOLO, ...) produce the same `BoxTrackDataset`, and converters consume `BoxTrackDataset`
 without depending on any loader. That is what makes databridge an N-to-M
 bridge (loaders × converters) rather than an HMIE-to-X path.
 
@@ -499,15 +513,103 @@ Design points:
   discovery for flat (non-nested) layouts, pairing by matching a
   video's stem against the annotation filename.
 
+## The model as a MAITE dataset
+
+`BoxTrackDataset` does double duty. It is the neutral hub every converter
+consumes, **and it natively implements the MAITE multi-object-tracking
+protocol** — so `load_hmie(root)` returns an object a MAITE model or metric
+can consume directly, with no adapter call:
+
+```python
+ds = load_hmie(root)
+stream, target, metadata = ds[0]      # MAITE MOT item — one per video
+ds = ds.with_mot_options(empty_frame_policy="all")   # configure the MOT view
+```
+
+The MAITE surface is a *view computed from the typed records*, which stay
+on the object. That is the whole point: a stock MAITE target carries only
+boxes / labels / scores / track-ids, but converting to on-disk formats
+needs the source detail (ontology URIs, per-box attributes like
+truncation / occlusion, keyframe-vs-interpolated, string track UUIDs).
+Keeping the typed `VideoSequence` / `BoxAnnotation` records behind the
+MAITE view lets the same object serve both consumers without losing
+anything on the conversion path.
+
+```mermaid
+flowchart TB
+    subgraph src [On-disk source — HMIE / Scale]
+        direction TB
+        S1[ontology<br/>category_uri]
+        S2[per-box attrs<br/>truncation /<br/>occlusion]
+        S3[keyframe_type<br/>is_inferred]
+        S4[track_uuid<br/>track_id]
+        S5[bbox<br/>category_id]
+    end
+
+    src ==> L["<b>load_hmie</b>"]
+    L ==> M[/"<b>BoxTrackDataset</b><br/>typed VideoSequence · BoxAnnotation<br/>— all source detail retained —"/]
+
+    M -. computed view .-> V["MAITE MOT view<br/>ds[i] → (VideoStream,<br/>target, metadata)"]
+    M ==> W["converters / writers<br/>read the typed records"]
+    V --> MC([MAITE model<br/>/ metric])
+    W --> O([MOTChallenge · VisDrone<br/>COCO · YOLO])
+
+    classDef hub fill:#fff8e1,stroke:#f57c00,stroke-width:2px;
+    classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
+    classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
+    classDef src fill:#fafafa,stroke:#bdbdbd,color:#424242;
+    class M hub;
+    class L,V,MC impl;
+    class W,O planned;
+    class S1,S2,S3,S4,S5 src;
+```
+
+Mechanics that keep this honest:
+
+- **`databridge.maite` is optional and lazy.** Core `import databridge`,
+  `load`, and `validate` never import `maite`, `numpy`, or a video decoder.
+  The view machinery is imported lazily inside `ds[i]`; indexing without the
+  `databridge[maite]` extra raises an actionable error. Conformance is
+  *structural* (no runtime `maite` import) — `BoxTrackDataset` satisfies
+  `maite.protocols.multiobject_tracking.Dataset` by shape. (The `maite`
+  package itself is only used in tests; the `[maite]` extra ships it for the
+  consumer's convenience since anyone using the MAITE surface has it anyway.)
+- **MOT is the format.** For video box-tracks the MOT surface is the whole
+  surface (`ds[i]` is one video). Object-detection is a *different AI task*,
+  not a conversion target, so there is no OD projection here.
+- **Two length / iteration views.** `len(ds)` / `ds[i]` / `for x in ds` are
+  the MAITE **item** view — one item per *video-bearing* sequence. The
+  **record** view is `ds.sequence_count` / `ds.iter_sequences()` /
+  `ds.sequences` — every loaded sequence, including video-less ones (which
+  the validator and converters walk). They differ when a sequence has
+  annotations but no video. `sequences` is stored as a tuple, so the cached
+  video-bearing item list (`_mot_sequences`) is O(1) and never stale.
+- **`ds.with_mot_options(...)` configures the MOT view** (`empty_frame_policy`,
+  `decoder`, `dataset_id`) by returning a copy — it is *not* an
+  adapter/conversion call (the model is already MAITE).
+- **`empty_frame_policy="all"` needs an exact frame count.** It only streams
+  every frame when `VideoSequence.num_frames_exact` is set (the loader sets
+  it under `require_video=True`); otherwise the count is an estimate and the
+  view falls back to annotated frames with a warning.
+
+Verification: beyond `isinstance`, the suite drives the dataset through
+MAITE's own `maite.tasks.predict` with a stub model — proving the object is
+actually consumable by MAITE tooling (dataloader + collation + iteration),
+not merely shaped right.
+
+`databridge.maite` layout: `_mot.py` (`build_mot_item` — the MOT view),
+`_decode.py` (the pluggable `Decoder` protocol + PyAV backend), `_common.py`
+(numpy-array + datum-metadata helpers).
+
 ## Converters — `conversion.py`
 
 The writer half of the bridge (the writer side of the original notebook)
 is not yet implemented. A converter is the mirror of a loader: it takes a
-`Dataset` and writes an output format to disk.
+`BoxTrackDataset` and writes an output format to disk.
 
 ```mermaid
 flowchart LR
-    HUB[/"<b>Dataset</b><br/>(from any loader)"/]
+    HUB[/"<b>BoxTrackDataset</b><br/>(from any loader)"/]
     CONV["<b>to_mot / to_yolo / ...</b><br/>conversion.py"]
     OUT([output files on disk])
 
@@ -519,7 +621,7 @@ flowchart LR
 
 The contract is what keeps the bridge N-to-M:
 
-- **Converters bind to `Dataset`, never to a loader.** Nothing in
+- **Converters bind to `BoxTrackDataset`, never to a loader.** Nothing in
   `conversion.py` imports `dataloader.py`; a converter only sees the
   neutral model, so the same `to_mot` works whether the data came from
   `load_hmie`, `load_coco`, or any future loader.
