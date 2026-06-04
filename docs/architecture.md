@@ -8,8 +8,10 @@ One pipeline: **walk a dataset root on disk → pair each annotation JSON
 with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout).
-Everything is structured so other formats can be added behind the same
-public entrypoint without touching the CLI or reporting layers.
+On the loading side, MOTChallenge is also implemented as a standard
+image-sequence benchmark loader. Everything is structured so other formats
+can be added behind the same public entrypoint without touching the CLI or
+reporting layers.
 
 ## The bridge — loaders × consumers
 
@@ -28,12 +30,14 @@ other. Solid = implemented today; dashed = planned.
 flowchart LR
     subgraph in [Input on disk]
         HMIE([HMIE / Scale])
+        MOTIN([MOTChallenge])
         COCOIN([COCO])
         YOLOIN([YOLO])
     end
 
-    subgraph loaders [Loaders — dataloader.py]
+    subgraph loaders [Loaders]
         LH["<b>load_hmie</b>"]
+        LM["<b>load_motchallenge</b>"]
         LC["load_coco"]
         LY["load_yolo"]
     end
@@ -55,9 +59,11 @@ flowchart LR
     end
 
     HMIE --> LH
+    MOTIN --> LM
     COCOIN -.-> LC
     YOLOIN -.-> LY
     LH --> HUB
+    LM --> HUB
     LC -.-> HUB
     LY -.-> HUB
     HUB --> MAITE
@@ -73,17 +79,18 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB hub;
-    class LH,MAITE impl;
-    class MAITEOUT impl;
+    class LH,LM,MAITE impl;
+    class MAITEOUT,MOTIN impl;
     class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
 ```
 
-Today the HMIE loader (`load_hmie`), the validation pipeline, and the
-MAITE surface (`databridge.maite`) are implemented; the on-disk converters
-are not yet written. See [Loading](#loading--dataloaderpy) for how
-`load_hmie` builds the model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset)
-for the MAITE surface, and [Converters](#converters--conversionpy) for the
-writer contract.
+Today the HMIE loader (`load_hmie`), the MOTChallenge loader
+(`load_motchallenge`), the HMIE validation pipeline, and the MAITE surface
+(`databridge.maite`) are implemented; the on-disk converters are not yet
+written. See [Loading](#loading--dataloaderpy) for how loaders build the
+model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the
+MAITE surface, and [Converters](#converters--conversionpy) for the writer
+contract.
 
 ## Project layout
 
@@ -99,6 +106,7 @@ src/databridge/
     loaders.py               Loader contract (ABC) + registry + load() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
     dataloader.py            HmieLoader: the reference loader (on-disk HMIE -> BoxTrackDataset)
+    motchallenge.py          MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
     conversion.py            Converters/writers: BoxTrackDataset model -> output format (placeholder)
     maite/                   Optional MAITE surface (databridge[maite] extra)
         __init__.py              package doc; the model is MAITE directly (no adapter)
@@ -381,14 +389,18 @@ flowchart TD
     REG[("<b>registry</b><br/>DatasetFormat → Loader")]
     BASE["<b>Loader (ABC)</b><br/>load(root, **options) → BoxTrackDataset<br/>sniff(root) → bool"]
     HMIE["<b>HmieLoader</b><br/>(dataloader.py)"]
+    MOT["<b>MotChallengeLoader</b><br/>(motchallenge.py)"]
     NEW["CocoLoader, YoloLoader, …<br/>(future)"]
 
     LOAD -->|get_loader| REG
     REG --> HMIE
+    REG --> MOT
     REG -.-> NEW
     HMIE -->|subclasses| BASE
+    MOT -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_loader| REG
+    MOT -->|@register_loader| REG
     NEW -.->|@register_loader| REG
 
     classDef entry fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
@@ -397,7 +409,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class LOAD entry;
     class REG store;
-    class HMIE impl;
+    class HMIE,MOT impl;
     class NEW planned;
 ```
 
@@ -413,7 +425,8 @@ flowchart TD
   a `DatasetFormat` or its string value; pass `None` to autodetect via
   `sniff` (no format implements detection rules yet, so an explicit format is
   required in practice). `**options` pass through to the loader (e.g. HMIE's
-  `require_video`). `load_hmie(...)` remains as a thin convenience wrapper.
+  `require_video`, or MOTChallenge's `annotation_source`). `load_hmie(...)`
+  and `load_motchallenge(...)` are thin convenience wrappers.
 
 This mirrors the validator: `validate(path, dataset_format=…)` dispatches the
 same way. Loaders and validators are siblings — both are thin, format-specific
@@ -433,18 +446,21 @@ Every loader honors the same contract so callers and converters can rely on it:
 - **One model out.** Every loader produces the same `BoxTrackDataset`, so any
   converter consumes the result regardless of input format.
 
-### Common data model (images vs. FMV)
+### Common data model (temporal sequences vs. still images)
 
 The neutral model (`model.py`) is the agreed common representation, and the
 `Loader` contract is intentionally model-shaped, not format-shaped. Today the
-model is FMV-centric: a `BoxTrackDataset` holds `VideoSequence`s of `BoxAnnotation`s.
-**Image datasets** (COCO, image-mode YOLO) will be represented by an
-`ImageSample` sibling of `VideoSequence` carrying the same `BoxAnnotation`,
-added together with the first image loader — at which point `BoxTrackDataset` holds a
-mix of sequence and image samples. The `Loader.load() -> BoxTrackDataset` contract does
-not change when that lands, which is the whole point of fixing the contract
-now. (We deliberately do not define `ImageSample` ahead of a loader that
-produces it, to avoid a consumer-less abstraction we'd likely get wrong.)
+model is a temporal box-track IR: a `BoxTrackDataset` holds `VideoSequence`s of
+`BoxAnnotation`s. A `VideoSequence` may be backed by a single video file
+(`video_path`, HMIE) or by a directory of ordered frame images (`frame_dir`
+plus `frame_filename()` / `frame_path()`, MOTChallenge). **Still-image datasets** (COCO, image-mode
+YOLO) will be represented by an `ImageSample` sibling of `VideoSequence`
+carrying the same `BoxAnnotation`, added together with the first still-image
+loader — at which point `BoxTrackDataset` holds a mix of sequence and image
+samples. The `Loader.load() -> BoxTrackDataset` contract does not change when
+that lands, which is the whole point of fixing the contract now. (We deliberately
+do not define `ImageSample` ahead of a loader that produces it, to avoid a
+consumer-less abstraction we'd likely get wrong.)
 
 ### Adding a new loader
 
@@ -460,6 +476,13 @@ To support a new input format `foo`:
    package `__init__`).
 5. Optionally add format-specific validation under `_formats/foo/` and a
    `DatasetFormat.FOO` branch in `validation.py`.
+
+`MotChallengeLoader` in `motchallenge.py` is the image-sequence example: it
+expects a standard benchmark root with `train/` and/or `test/`, reads
+`gt/gt.txt` or `det/det.txt`, supports optional `class_names={id: name}` for
+MOT-style datasets with custom labels, and sets image-sequence metadata +
+helpers (`VideoSequence.frame_dir`, `frame_filename()`, `frame_path()`)
+instead of `video_path`.
 
 `databridge.load(root, dataset_format="foo")` then works with no changes to
 the dispatcher, and any existing converter accepts the result.

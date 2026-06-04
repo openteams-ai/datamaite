@@ -33,7 +33,7 @@ implemented input format; converters are in progress (MOTChallenge first).
 | Format | Load | Validate | Export |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | planned |
-| MOTChallenge | planned | — | planned |
+| MOTChallenge | ✅ | — | planned |
 | YOLO | planned | planned | planned |
 | COCO | planned | planned | planned |
 
@@ -78,6 +78,35 @@ ds = load_hmie(
     require_video=True,  # needs the `video` extra
 )
 ```
+
+Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
+splits) the same way:
+
+```python
+from databridge import load_motchallenge
+
+ds = load_motchallenge(
+    "/path/to/MOT17",
+    annotation_source="gt",       # or "det"
+    include_ignored=False,
+    classes={1, 42},              # optional allowlist; omit/None to keep all classes
+    class_names={42: "vehicle"},  # optional names for non-standard class IDs
+)
+
+for seq in ds.iter_sequences():
+    print(seq.frame_dir, seq.frame_filename(0), len(seq.boxes))
+```
+
+MOTChallenge is image-sequence based, so loaded sequences have
+`video_path=None` and carry their frame image location in `frame_dir`. Use
+`seq.frame_filename(frame_index)` or `seq.frame_path(frame_index)` with the
+model's 0-based `frame_index`; those helpers handle MOTChallenge's 1-based
+image filenames. Standard MOTChallenge class IDs get their canonical names;
+unknown/non-standard IDs default to `class_<id>`. For MOT-style datasets with
+custom labels, pass `class_names={42: "vehicle"}`. Missing IDs, or an empty
+`class_names={}`, still fall back to the built-in names and `class_<id>`.
+To optionally probe the first frame image with OpenCV for metadata, call
+`load_motchallenge(..., probe_images=True)` after installing `databridge[video]`.
 
 For a full load → verify → export-ready walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).

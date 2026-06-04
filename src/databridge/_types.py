@@ -159,6 +159,7 @@ class DatasetFormat(enum.Enum):
     """Supported dataset formats."""
 
     HMIE = "hmie"
+    MOTCHALLENGE = "motchallenge"
 
 
 class Severity(enum.Enum):

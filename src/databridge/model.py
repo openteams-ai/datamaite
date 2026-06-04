@@ -31,6 +31,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import cached_property
+from pathlib import Path
 from typing import Any
 
 # Bounding box as (left, top, width, height) in pixels.
@@ -56,7 +57,9 @@ class BoxAnnotation:
     per-frame fields of the source annotation. ``category_id`` is assigned
     per dataset (stable across all sequences in the same
     :class:`BoxTrackDataset`), and ``category_name`` is the final path segment
-    of the ontology URI.
+    of the ontology URI. ``category_id`` values are loader-defined and may be
+    sparse for formats with fixed class IDs; use the dataset's ``categories`` /
+    ``index2label()`` mapping rather than assuming dense IDs.
 
     ``keyframe_type`` (start/middle/end) and ``is_inferred`` come straight
     from the source frame: ``is_inferred=True`` marks a tool-interpolated
@@ -79,17 +82,20 @@ class BoxAnnotation:
 
 @dataclass(frozen=True)
 class VideoSequence:
-    """One snippet: a video plus all of its box annotations.
+    """One temporal sequence plus all of its box annotations.
 
     ``video_path`` is ``None`` when the snippet has an annotation but no
-    discoverable video (and the loader was not asked to require one).
+    discoverable video (and the loader was not asked to require one), or
+    when the source format is an image sequence rather than a video file.
+    Image-sequence loaders set ``frame_dir`` and ``frame_pattern`` instead.
 
-    ``num_frames`` is the video's *true* frame count only when the loader
-    probed the video. Otherwise it is a lower-bound *estimate* -- the
-    maximum annotated ``frame_index`` plus one (``None`` when the snippet
-    has no boxes). Because labeling usually stops before the end of a
-    snippet, this estimate understates the true video length; do not treat
-    the non-probed value as the real frame count. ``duration``
+    ``num_frames`` is the sequence's *true* frame count only when the loader
+    has an authoritative source for it (e.g. a video probe, MOTChallenge
+    ``seqinfo.ini``, or counted image frames). Otherwise it is a lower-bound
+    *estimate* -- the maximum annotated ``frame_index`` plus one (``None``
+    when the snippet has no boxes). Because labeling may stop before the end
+    of a sequence, this estimate can understate the true length; do not treat
+    the non-authoritative value as the real frame count. ``duration``
     (``num_frames / fps``) inherits the same caveat.
 
     ``status`` is the source task status (``completed``/``pending``/etc.),
@@ -98,10 +104,11 @@ class VideoSequence:
     ``metadata`` is the source task-level ``metadata`` object (which may
     carry the original video filename).
 
-    ``width``/``height`` (pixels) and ``size_bytes`` (file size) are the
-    video-level fields a MAITE datum-metadata record needs. They are
-    ``None`` when neither the source annotation metadata nor a video probe
-    supplied them; the MAITE surface then probes the video lazily.
+    ``width``/``height`` (pixels) and ``size_bytes`` (file size) are
+    sequence-level media metadata. For video-backed sources they are the
+    fields a MAITE datum-metadata record needs; for image-sequence sources
+    they describe the frame images. They are ``None`` when neither source
+    metadata nor an optional media probe supplied them.
     """
 
     video_id: int
@@ -117,15 +124,49 @@ class VideoSequence:
     width: int | None = None
     height: int | None = None
     size_bytes: int | None = None
-    # True only when ``num_frames`` is the video's *probed* frame count (the
-    # loader sets it under ``require_video=True``). When False, ``num_frames``
-    # is the lower-bound estimate (max annotated frame + 1) and must not be
-    # treated as the true length -- e.g. ``empty_frame_policy="all"`` refuses
-    # to emit every frame against a merely-estimated count.
+    # Image-sequence sources (e.g. MOTChallenge) have no single video file.
+    # ``frame_dir`` points at the directory of frame images, and
+    # ``frame_pattern`` is the filename pattern for source frame numbers
+    # (for example ``"{frame:06d}.jpg"``). Use ``frame_filename`` /
+    # ``frame_path`` with model 0-based frame indices instead of formatting
+    # this pattern directly.
+    frame_dir: str | None = None
+    frame_pattern: str | None = None
+    frame_number_base: int = 0
+    # True when ``num_frames`` came from an authoritative source (video probe,
+    # seqinfo.ini, counted image frames). When False, ``num_frames`` is the
+    # lower-bound estimate (max annotated frame + 1) and must not be treated
+    # as the true length -- e.g. ``empty_frame_policy="all"`` refuses to emit
+    # every video frame against a merely-estimated count.
     num_frames_exact: bool = False
 
+    def frame_filename(self, frame_index: int) -> str:
+        """Return the source frame filename for a model 0-based frame index.
+
+        Image-sequence formats may name files with a different frame base than
+        the model uses. MOTChallenge, for example, stores boxes at
+        ``frame_index == 0`` for the first frame but names that image
+        ``000001.jpg``. This helper applies ``frame_number_base`` so callers
+        do not need to remember the source convention.
+        """
+        if self.frame_pattern is None:
+            raise ValueError("frame_filename requires frame_pattern")
+        if frame_index < 0:
+            raise ValueError("frame_index must be >= 0")
+        return self.frame_pattern.format(frame=frame_index + self.frame_number_base)
+
+    def frame_path(self, frame_index: int) -> Path | None:
+        """Return the source frame path for a model 0-based frame index.
+
+        Returns ``None`` for video-backed sequences that do not have
+        ``frame_dir`` / ``frame_pattern``.
+        """
+        if self.frame_dir is None or self.frame_pattern is None:
+            return None
+        return Path(self.frame_dir) / self.frame_filename(frame_index)
+
     def boxes_by_frame(self) -> dict[int, list[BoxAnnotation]]:
-        """Group this sequence's boxes by video frame index.
+        """Group this sequence's boxes by temporal frame index.
 
         ``boxes`` is stored flat (all tracks, all frames); per-frame
         consumers -- the MOTChallenge writer, the MAITE MOT/OD surfaces --

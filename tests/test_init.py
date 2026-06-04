@@ -13,17 +13,22 @@ def test_public_api() -> None:
     from databridge import (
         DatasetFormat,
         Finding,
+        MotChallengeLoader,
         Severity,
         ValidationResult,
+        load_motchallenge,
         validate,
         validate_annotation,
     )
 
     assert DatasetFormat.HMIE.value == "hmie"
+    assert DatasetFormat.MOTCHALLENGE.value == "motchallenge"
     assert Severity.ERROR.value == "error"
     assert Severity.WARNING.value == "warning"
     assert Finding is not None
     assert ValidationResult is not None
+    assert MotChallengeLoader is not None
+    assert callable(load_motchallenge)
     assert callable(validate)
     assert callable(validate_annotation)
 

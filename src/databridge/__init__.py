@@ -11,6 +11,7 @@ from databridge._version import __version__, __version_tuple__
 from databridge.dataloader import HmieLoader, load_hmie
 from databridge.loaders import Loader, available_formats, get_loader, load, register_loader
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from databridge.motchallenge import MotChallengeLoader, load_motchallenge
 from databridge.validation import validate, validate_annotation, validate_batches
 
 # Library convention: attach a NullHandler so downstream applications
@@ -25,6 +26,7 @@ __all__ = [
     "Finding",
     "HmieLoader",
     "Loader",
+    "MotChallengeLoader",
     "Severity",
     "ValidationCache",
     "ValidationResult",
@@ -37,6 +39,7 @@ __all__ = [
     "get_loader",
     "load",
     "load_hmie",
+    "load_motchallenge",
     "register_loader",
     "render_html_report",
     "validate",

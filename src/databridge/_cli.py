@@ -33,8 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     val_parser.add_argument(
         "--format",
         default=DatasetFormat.HMIE.value,
-        choices=[f.value for f in DatasetFormat],
-        help="Dataset format (default: hmie).",
+        choices=[DatasetFormat.HMIE.value],
+        help="Dataset format to validate (default: hmie).",
     )
     val_parser.add_argument("--skip-video-check", action="store_true", help="Skip FMV integrity checks.")
     val_parser.add_argument(
