@@ -90,6 +90,10 @@ class TestValidateAnnotation:
         result = validate_annotation(valid_annotation, video_path=None, check_video_integrity=False)
         assert result.passed is True
 
+    def test_supported_but_unimplemented_format_raises(self, valid_annotation: Path) -> None:
+        with pytest.raises(NotImplementedError, match="motchallenge"):
+            validate_annotation(valid_annotation, dataset_format="motchallenge")
+
 
 class TestParallelWorkerCrash:
     def test_worker_side_exception_surfaces_as_finding(self, single_snippet_hmie: Path, monkeypatch) -> None:

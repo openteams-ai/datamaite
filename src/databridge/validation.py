@@ -79,10 +79,7 @@ def validate(
             cache=cache,
         )
 
-    # DatasetFormat is exhaustive; DatasetFormat(value) already raises for
-    # unknown strings, so this is unreachable. The assertion satisfies
-    # the type checker without dead ValueError handling.
-    raise AssertionError(f"Unhandled format: {dataset_format}")  # pragma: no cover
+    raise NotImplementedError(f"Validation for format {dataset_format.value!r} is not implemented")
 
 
 def validate_annotation(
@@ -106,6 +103,9 @@ def validate_annotation(
     video_path = Path(video_path) if video_path is not None else None
     if isinstance(dataset_format, str):
         dataset_format = DatasetFormat(dataset_format.lower())
+
+    if dataset_format != DatasetFormat.HMIE:
+        raise NotImplementedError(f"Annotation validation for format {dataset_format.value!r} is not implemented")
 
     findings, label_counter = _validate_pair(annotation_path, video_path, check_video=check_video_integrity)
     has_errors = any(f.severity == Severity.ERROR for f in findings)
