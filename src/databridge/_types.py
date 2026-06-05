@@ -158,6 +158,7 @@ def _shorten_label(label: str) -> str:
 class DatasetFormat(enum.Enum):
     """Supported dataset formats."""
 
+    FLAT_MP4 = "flat_mp4"
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"

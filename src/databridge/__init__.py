@@ -11,6 +11,7 @@ from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
 from databridge._version import __version__, __version_tuple__
 from databridge.conversion import convert
 from databridge.dataloader import HmieLoader, load_hmie
+from databridge.flat_mp4 import FlatMp4Loader, load_flat_mp4
 from databridge.loaders import Loader, available_formats, get_loader, load, register_loader
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.motchallenge import MotChallengeLoader, load_motchallenge
@@ -29,6 +30,7 @@ __all__ = [
     "BoxTrackDataset",
     "DatasetFormat",
     "Finding",
+    "FlatMp4Loader",
     "HmieLoader",
     "HmieWriter",
     "Loader",
@@ -50,6 +52,7 @@ __all__ = [
     "get_loader",
     "get_writer",
     "load",
+    "load_flat_mp4",
     "load_hmie",
     "load_motchallenge",
     "load_tao",

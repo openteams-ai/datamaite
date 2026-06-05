@@ -13,11 +13,13 @@ def test_public_api() -> None:
     from databridge import (
         DatasetFormat,
         Finding,
+        FlatMp4Loader,
         MotChallengeLoader,
         Severity,
         TaoLoader,
         ValidationResult,
         VisDroneVideoLoader,
+        load_flat_mp4,
         load_motchallenge,
         load_tao,
         load_visdrone_video,
@@ -25,6 +27,7 @@ def test_public_api() -> None:
         validate_annotation,
     )
 
+    assert DatasetFormat.FLAT_MP4.value == "flat_mp4"
     assert DatasetFormat.HMIE.value == "hmie"
     assert DatasetFormat.MOTCHALLENGE.value == "motchallenge"
     assert DatasetFormat.TAO.value == "tao"
@@ -33,9 +36,11 @@ def test_public_api() -> None:
     assert Severity.WARNING.value == "warning"
     assert Finding is not None
     assert ValidationResult is not None
+    assert FlatMp4Loader is not None
     assert MotChallengeLoader is not None
     assert TaoLoader is not None
     assert VisDroneVideoLoader is not None
+    assert callable(load_flat_mp4)
     assert callable(load_motchallenge)
     assert callable(load_tao)
     assert callable(load_visdrone_video)
