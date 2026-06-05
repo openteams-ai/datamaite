@@ -85,12 +85,12 @@ flowchart LR
 ```
 
 Today the HMIE loader (`load_hmie`), the MOTChallenge loader
-(`load_motchallenge`), the HMIE validation pipeline, and the MAITE surface
-(`databridge.maite`) are implemented; the on-disk converters are not yet
-written. See [Loading](#loading--dataloaderpy) for how loaders build the
-model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the
-MAITE surface, and [Converters](#converters--conversionpy) for the writer
-contract.
+(`load_motchallenge`), the HMIE validation pipeline, the HMIE reference writer,
+and the MAITE surface (`databridge.maite`) are implemented. See
+[Loading](#loading--dataloaderpy) for how loaders build the model,
+[The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
+surface, and [Writer architecture](#writer-architecture--writerspy) for the
+writer contract.
 
 ## Project layout
 
@@ -104,10 +104,11 @@ src/databridge/
     _version.py              Package version
     model.py                 Neutral model + MAITE MOT surface: BoxTrackDataset, VideoSequence, BoxAnnotation
     loaders.py               Loader contract (ABC) + registry + load() dispatch
+    writers.py               Writer contract (ABC) + registry + write() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
     dataloader.py            HmieLoader: the reference loader (on-disk HMIE -> BoxTrackDataset)
     motchallenge.py          MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
-    conversion.py            Converters/writers: BoxTrackDataset model -> output format (placeholder)
+    conversion.py            convert(): end-to-end load + write (on-disk -> on-disk)
     maite/                   Optional MAITE surface (databridge[maite] extra)
         __init__.py              package doc; the model is MAITE directly (no adapter)
         _mot.py                  build_mot_item: the MOT view computed from the model
@@ -123,6 +124,7 @@ src/databridge/
             annotation_checks.py     Scale schema + semantic checks on JSONs
             video_checks.py          FMV open / decode / corruption checks
             consistency_checks.py    Annotation <-> video cross-references
+            writer.py                HmieWriter: reference writer (BoxTrackDataset -> on-disk HMIE)
 docs/
     architecture.md                              This file
     schemas/
@@ -624,33 +626,94 @@ not merely shaped right.
 `_decode.py` (the pluggable `Decoder` protocol + PyAV backend), `_common.py`
 (numpy-array + datum-metadata helpers).
 
-## Converters — `conversion.py`
+## Writer architecture — `writers.py`
 
-The writer half of the bridge (the writer side of the original notebook)
-is not yet implemented. A converter is the mirror of a loader: it takes a
-`BoxTrackDataset` and writes an output format to disk.
+The output side mirrors the loader architecture: a small, explicit contract so
+every format writer looks the same and a new output format is additive. A
+*writer* takes the neutral `BoxTrackDataset` and serialises it to one on-disk
+format; `conversion.convert` pairs a loader and a writer for end-to-end
+on-disk → on-disk conversion.
 
 ```mermaid
-flowchart LR
-    HUB[/"<b>BoxTrackDataset</b><br/>(from any loader)"/]
-    CONV["<b>to_mot / to_yolo / ...</b><br/>conversion.py"]
-    OUT([output files on disk])
+flowchart TD
+    CONVERT["<b>convert(src, dest, input_format=…, output_format=…)</b><br/>conversion.py — load + write"]
+    WRITE["<b>write(dataset, dest, output_format=…)</b><br/>writers.py — public dispatch"]
+    REG[("<b>registry</b><br/>DatasetFormat → Writer")]
+    BASE["<b>Writer (ABC)</b><br/>write(dataset, dest, **options) → list[Path]"]
+    HMIE["<b>HmieWriter</b><br/>(_formats/hmie/writer.py)"]
+    NEW["MotWriter, YoloWriter, …<br/>(future)"]
 
-    HUB --> CONV --> OUT
+    CONVERT -->|load → write| WRITE
+    WRITE -->|get_writer| REG
+    REG --> HMIE
+    REG -.-> NEW
+    HMIE -->|subclasses| BASE
+    NEW -.->|subclasses| BASE
+    HMIE -->|@register_writer| REG
+    NEW -.->|@register_writer| REG
 
-    classDef hub fill:#fff8e1,stroke:#f57c00,stroke-width:2px;
-    class HUB hub;
+    classDef entry fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
+    classDef store fill:#f3e5f5,stroke:#7b1fa2;
+    classDef impl fill:#e8f5e9,stroke:#2e7d32;
+    classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
+    class CONVERT,WRITE entry;
+    class REG store;
+    class HMIE impl;
+    class NEW planned;
 ```
 
-The contract is what keeps the bridge N-to-M:
+- **`Writer` (ABC).** A concrete writer sets a `format` (`DatasetFormat`) class
+  attribute and implements `write(self, dataset, dest, **options) -> list[Path]`
+  (the files it created).
+- **`register_writer`.** A decorator that records `format → writer-class` in the
+  registry. This is the extension point — adding a writer touches no dispatch code.
+- **`write(dataset, dest, *, output_format, **options)`.** The public entry
+  point; resolves the writer from the registry and calls it.
+- **`convert(src, dest, *, input_format, output_format, read_options=…, **write_options)`**
+  (`conversion.py`). End-to-end: `write(load(src, input_format), dest, output_format)`.
+  It binds to the neutral model on both sides, so any registered input format
+  can be converted to any registered output format.
 
-- **Converters bind to `BoxTrackDataset`, never to a loader.** Nothing in
-  `conversion.py` imports `dataloader.py`; a converter only sees the
-  neutral model, so the same `to_mot` works whether the data came from
-  `load_hmie`, `load_coco`, or any future loader.
-- **Frame indices are already video-frame-space.** `BoxAnnotation.frame_index`
-  is mapped (not the raw label key), so frame-indexed targets like
+### Writer conventions
+
+- **Consume the neutral model, never a loader or raw format.** A writer's only
+  inputs are a `BoxTrackDataset` and a destination.
+- **Map best-effort; drop with a warning, don't crash.** Data the target format
+  cannot represent is dropped and logged at WARNING; destination/IO failures raise.
+- **Keyword-only options.** Format variants (e.g. MOT16 vs MOT20 columns) are a
+  writer option, not a separate `DatasetFormat`.
+
+### Reference writer: HMIE (round-trip proof)
+
+`HmieWriter` (`_formats/hmie/writer.py`) is the reference writer that proves the
+architecture. Because databridge also has the HMIE *loader*, it closes a full
+round trip:
+
+```
+load_hmie(src) → BoxTrackDataset → write(…, output_format="hmie") → load_hmie(dest)
+```
+
+recovers the same box/category content — verifying both the writer contract and
+that `BoxTrackDataset` is a lossless hub. The writer emits annotations with
+`annotation_frame_rate == video fps` (so `key == frame_index` maps straight
+back) and labels as ontology URIs (so categories re-resolve to the same names);
+the integer `category_id` is reassigned on reload, so round-trip equivalence is
+by `category_uri`, not by id.
+
+### Adding a new writer
+
+1. Add the format to `DatasetFormat` (`_types.py`) if it isn't there yet.
+2. Create `_formats/<fmt>/writer.py` with a `Writer` subclass
+   (`format = DatasetFormat.<FMT>`), decorated with `@register_writer`.
+3. Import it from the package `__init__` so registration runs.
+4. `databridge.write(ds, dest, output_format="<fmt>")` and `convert(...)` then
+   work with no changes to the dispatcher.
+
+### What the model already gives writers
+
+- **Frame indices are video-frame-space.** `BoxAnnotation.frame_index` is the
+  mapped index (not the raw label key), so frame-indexed targets like
   MOTChallenge map straight across without re-deriving the clock.
-- **Tracks and stable category ids are already in the model**
-  (`track_id`, dataset-wide `category_id`), which the track-centric (MOT)
-  and class-indexed (YOLO) formats need.
+- **Tracks and dataset-wide category ids** (`track_id`, `category_id`) are
+  already in the model, which the track-centric (MOT) and class-indexed (YOLO)
+  formats need.

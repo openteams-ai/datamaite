@@ -68,6 +68,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notebook walk; supports `annotation_dir` / `video_dir` overrides for
   flat layouts and an opt-in `require_video` mode that reads true frame
   counts via the `video` extra.
+- Writer architecture (`databridge.writers`): a `Writer` base class defines
+  the output-side contract (`BoxTrackDataset` → `list[Path]`), `register_writer`
+  is the extension point, and `databridge.write(ds, dest, output_format=…)`
+  dispatches across registered formats. `databridge.conversion.convert` pairs a
+  loader and a writer for end-to-end on-disk → on-disk conversion. See the
+  "Writer architecture" section in `docs/architecture.md`.
+- HMIE writer (`HmieWriter`): the reference writer that serialises a
+  `BoxTrackDataset` back to the HMIE on-disk layout. With the HMIE loader it
+  closes a `load → write → load` round trip that recovers the same
+  box/category content, proving the writer architecture and that
+  `BoxTrackDataset` is a lossless hub.
 
 ### Fixed
 

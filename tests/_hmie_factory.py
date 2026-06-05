@@ -48,6 +48,13 @@ class AnnotationSpec:
     tracks: list[TrackSpec] = field(default_factory=lambda: [TrackSpec()])
     valid_json: bool = True  # if False, write garbage
     include_task_id: bool = True  # if False, omit required field (schema violation)
+    # Optional metadata exercised by the writer round trip. ``video_meta`` is
+    # the set of top-level video-level keys the loader harvests (origin_id,
+    # codec_name, width/heigth, duration, ...); ``metadata`` is the task-level
+    # metadata object; ``global_attributes`` are merged into response.events.
+    video_meta: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    global_attributes: dict[str, Any] | None = None
 
 
 @dataclass
@@ -148,6 +155,7 @@ def make_annotation_dict(spec: AnnotationSpec, video: VideoSpec) -> dict[str, An
             "frames": frames,
         }
 
+    events: Any = [{"attributes": spec.global_attributes}] if spec.global_attributes else {}
     data: dict[str, Any] = {
         "status": spec.status,
         "type": "videoannotation",
@@ -155,8 +163,14 @@ def make_annotation_dict(spec: AnnotationSpec, video: VideoSpec) -> dict[str, An
             "annotation_frame_rate": spec.afr,
             "videoMetadata": {"video": {"fps": spec.video_fps}},
         },
-        "response": {"annotations": annotations, "events": {}},
+        "response": {"annotations": annotations, "events": events},
     }
+    if spec.video_meta:
+        # Top-level video-level metadata keys (origin_id, codec_name, ...). The
+        # loader reads these from the annotation's top level.
+        data.update(spec.video_meta)
+    if spec.metadata is not None:
+        data["metadata"] = spec.metadata
     if spec.include_task_id:
         data["task_id"] = spec.task_id
     return data

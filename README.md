@@ -26,19 +26,21 @@ databridge validate /path/to/dataset -o report.txt
 ## Supported formats
 
 databridge is a bridge: a **loader** reads an input format into one neutral
-in-memory model (`Dataset`), a **validator** checks a format on disk, and a
-**converter** writes the model out to an output format. Today HMIE/Scale is the
-implemented input format; converters are in progress (MOTChallenge first).
+in-memory model (`BoxTrackDataset`), a **validator** checks a format on disk,
+and a **writer** serialises the model out to an output format (`convert` pairs a
+loader and a writer for on-disk → on-disk conversion). HMIE/Scale is the
+implemented input format and the reference output format (proving the writer
+architecture via a load → write → load round trip); other writers are planned.
 
-| Format | Load | Validate | Export |
+| Format | Load | Validate | Write |
 |---|---|---|---|
-| HMIE / Scale (FMV) | ✅ | ✅ | planned |
+| HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | MOTChallenge | ✅ | — | planned |
 | YOLO | planned | planned | planned |
 | COCO | planned | planned | planned |
 
-See [docs/architecture.md](docs/architecture.md) for the loader/converter
-design and [how to add a new loader](docs/architecture.md).
+See [docs/architecture.md](docs/architecture.md) for the loader / writer design
+and how to add a new loader or writer.
 
 ## Loading datasets (Python)
 
@@ -153,6 +155,29 @@ Conventions: boxes are converted from `xywh` to MAITE's `xyxy`; ground-truth
 (`empty_frame_policy="all"` emits every frame, and needs a probed frame count).
 The `BoxTrackDataset` model is a box-track IR — labels that are not bounding
 boxes, and tasks other than multi-object tracking, are out of scope.
+
+## Writing & converting datasets (Python)
+
+A **writer** serialises a loaded `BoxTrackDataset` to an output format on disk;
+`convert` pairs a loader and a writer for end-to-end on-disk → on-disk
+conversion. Any registered loader can feed any registered writer.
+
+```python
+from databridge import load_hmie, write, convert
+
+# Write an in-memory dataset to disk
+ds = load_hmie("/path/to/dataset")
+files = write(ds, "/path/to/out", output_format="hmie")   # -> list of files written
+
+# Or convert on disk → on disk in one call
+convert("/path/to/dataset", "/path/to/out", input_format="hmie", output_format="hmie")
+```
+
+HMIE is the reference writer: `load_hmie → write(output_format="hmie") →
+load_hmie` recovers the same box/category content (the round trip that proves
+the writer architecture and that `BoxTrackDataset` is a lossless hub). Adding a
+new output format is a `Writer` subclass + `@register_writer` — see
+[docs/architecture.md](docs/architecture.md).
 
 ## CLI Usage
 
