@@ -14,6 +14,7 @@ from databridge.dataloader import HmieLoader, load_hmie
 from databridge.loaders import Loader, available_formats, get_loader, load, register_loader
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.motchallenge import MotChallengeLoader, load_motchallenge
+from databridge.tao import TaoLoader, load_tao
 from databridge.validation import validate, validate_annotation, validate_batches
 from databridge.writers import Writer, available_output_formats, get_writer, register_writer, write
 
@@ -32,6 +33,7 @@ __all__ = [
     "Loader",
     "MotChallengeLoader",
     "Severity",
+    "TaoLoader",
     "ValidationCache",
     "ValidationResult",
     "VideoSequence",
@@ -48,6 +50,7 @@ __all__ = [
     "load",
     "load_hmie",
     "load_motchallenge",
+    "load_tao",
     "register_loader",
     "register_writer",
     "render_html_report",

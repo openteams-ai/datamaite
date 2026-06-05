@@ -28,14 +28,16 @@ databridge validate /path/to/dataset -o report.txt
 databridge is a bridge: a **loader** reads an input format into one neutral
 in-memory model (`BoxTrackDataset`), a **validator** checks a format on disk,
 and a **writer** serialises the model out to an output format (`convert` pairs a
-loader and a writer for on-disk → on-disk conversion). HMIE/Scale is the
-implemented input format and the reference output format (proving the writer
-architecture via a load → write → load round trip); other writers are planned.
+loader and a writer for on-disk → on-disk conversion). HMIE/Scale,
+MOTChallenge, and TAO are implemented input formats; HMIE/Scale is the
+reference output format (proving the writer architecture via a load → write →
+load round trip), and other writers are planned.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | MOTChallenge | ✅ | — | planned |
+| TAO | ✅ | — | planned |
 | YOLO | planned | planned | planned |
 | COCO | planned | planned | planned |
 
@@ -109,6 +111,23 @@ custom labels, pass `class_names={42: "vehicle"}`. Missing IDs, or an empty
 `class_names={}`, still fall back to the built-in names and `class_<id>`.
 To optionally probe the first frame image with OpenCV for metadata, call
 `load_motchallenge(..., probe_images=True)` after installing `databridge[video]`.
+
+Load an official TAO dataset root (COCO-style `annotations/*.json` plus frame
+files) similarly:
+
+```python
+from databridge import load_tao
+
+ds = load_tao("/path/to/TAO", probe_images=False)
+
+for seq in ds.iter_sequences():
+    print(seq.video_meta["sequence_name"], seq.frame_path(0), len(seq.boxes))
+```
+
+TAO `images.file_name` entries are resolved under `<root>/frames` (with an
+already-present leading `frames/` supported for derived datasets). Category IDs
+are preserved as their raw sparse IDs. Non-box annotation fields such as
+`segmentation`, `area`, and `iscrowd` are preserved in each box's `attributes`.
 
 For a full load → verify → export-ready walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).

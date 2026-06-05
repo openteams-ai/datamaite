@@ -15,20 +15,25 @@ def test_public_api() -> None:
         Finding,
         MotChallengeLoader,
         Severity,
+        TaoLoader,
         ValidationResult,
         load_motchallenge,
+        load_tao,
         validate,
         validate_annotation,
     )
 
     assert DatasetFormat.HMIE.value == "hmie"
     assert DatasetFormat.MOTCHALLENGE.value == "motchallenge"
+    assert DatasetFormat.TAO.value == "tao"
     assert Severity.ERROR.value == "error"
     assert Severity.WARNING.value == "warning"
     assert Finding is not None
     assert ValidationResult is not None
     assert MotChallengeLoader is not None
+    assert TaoLoader is not None
     assert callable(load_motchallenge)
+    assert callable(load_tao)
     assert callable(validate)
     assert callable(validate_annotation)
 

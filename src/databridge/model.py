@@ -126,10 +126,12 @@ class VideoSequence:
     size_bytes: int | None = None
     # Image-sequence sources (e.g. MOTChallenge) have no single video file.
     # ``frame_dir`` points at the directory of frame images, and
-    # ``frame_pattern`` is the filename pattern for source frame numbers
-    # (for example ``"{frame:06d}.jpg"``). Use ``frame_filename`` /
-    # ``frame_path`` with model 0-based frame indices instead of formatting
-    # this pattern directly.
+    # ``frame_files`` is an explicit model-indexed frame path table for
+    # sources with arbitrary filenames (e.g. TAO). Pattern-based sources
+    # (e.g. MOTChallenge) instead set ``frame_dir`` / ``frame_pattern``.
+    # Use ``frame_filename`` / ``frame_path`` with model 0-based frame indices
+    # instead of formatting ``frame_pattern`` directly.
+    frame_files: tuple[str | None, ...] = ()
     frame_dir: str | None = None
     frame_pattern: str | None = None
     frame_number_base: int = 0
@@ -147,10 +149,13 @@ class VideoSequence:
         the model uses. MOTChallenge, for example, stores boxes at
         ``frame_index == 0`` for the first frame but names that image
         ``000001.jpg``. This helper applies ``frame_number_base`` so callers
-        do not need to remember the source convention.
+        do not need to remember the source convention. For TAO-style arbitrary
+        filenames, it uses the explicit ``frame_files`` table.
         """
+        if self.frame_files:
+            return Path(self._frame_file_at(frame_index)).name
         if self.frame_pattern is None:
-            raise ValueError("frame_filename requires frame_pattern")
+            raise ValueError("frame_filename requires frame_files or frame_pattern")
         if frame_index < 0:
             raise ValueError("frame_index must be >= 0")
         return self.frame_pattern.format(frame=frame_index + self.frame_number_base)
@@ -161,9 +166,23 @@ class VideoSequence:
         Returns ``None`` for video-backed sequences that do not have
         ``frame_dir`` / ``frame_pattern``.
         """
+        if self.frame_files:
+            return Path(self._frame_file_at(frame_index))
         if self.frame_dir is None or self.frame_pattern is None:
             return None
         return Path(self.frame_dir) / self.frame_filename(frame_index)
+
+    def _frame_file_at(self, frame_index: int) -> str:
+        """Return a non-empty explicit frame file for ``frame_index``."""
+        if frame_index < 0:
+            raise ValueError("frame_index must be >= 0")
+        try:
+            frame_file = self.frame_files[frame_index]
+        except IndexError as exc:
+            raise IndexError(f"frame_index out of range: {frame_index}") from exc
+        if frame_file is None:
+            raise ValueError(f"no frame file for frame_index {frame_index}")
+        return frame_file
 
     def boxes_by_frame(self) -> dict[int, list[BoxAnnotation]]:
         """Group this sequence's boxes by temporal frame index.

@@ -160,6 +160,7 @@ class DatasetFormat(enum.Enum):
 
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
+    TAO = "tao"
 
 
 class Severity(enum.Enum):
