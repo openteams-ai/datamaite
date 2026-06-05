@@ -28,14 +28,16 @@ databridge validate /path/to/dataset -o report.txt
 databridge is a bridge: a **loader** reads an input format into one neutral
 in-memory model (`BoxTrackDataset`), a **validator** checks a format on disk,
 and a **writer** serialises the model out to an output format (`convert` pairs a
-loader and a writer for on-disk → on-disk conversion). HMIE/Scale,
-MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale
-is the reference output format (proving the writer architecture via a load →
-write → load round trip), and other writers are planned.
+loader and a writer for on-disk → on-disk conversion). HMIE/Scale, flat MP4
+video folders, MOTChallenge, TAO, and VisDrone Video are implemented input
+formats; HMIE/Scale is the reference output format (proving the writer
+architecture via a load → write → load round trip), and other writers are
+planned.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
+| Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
 | MOTChallenge | ✅ | — | planned |
 | TAO | ✅ | — | planned |
 | VisDrone Video (VID/MOT) | ✅ | — | planned |
@@ -83,6 +85,21 @@ ds = load_hmie(
     require_video=True,  # needs the `video` extra
 )
 ```
+
+Load a flat folder of `.mp4` videos (immediate children only, H.264 or
+MPEG-2 codec) as video-backed sequences:
+
+```python
+from databridge import load_flat_mp4
+
+ds = load_flat_mp4("/path/to/mp4-folder")  # requires databridge[video]
+
+for seq in ds.iter_sequences():
+    print(seq.video_path, seq.video_meta["codec"], seq.num_frames)
+```
+
+The flat MP4 loader does not recurse into subdirectories and carries no
+annotations, so `seq.boxes` is empty and `ds.categories == {}`.
 
 Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
 splits) the same way:

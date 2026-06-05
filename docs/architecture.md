@@ -8,10 +8,10 @@ One validation pipeline: **walk a dataset root on disk → pair each annotation
 JSON with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only validation format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout). On
-the loading side, MOTChallenge, TAO, and VisDrone Video are also implemented as
-standard image-sequence loaders. Everything is structured so other formats can
-be added behind the same public entrypoint without touching the CLI or
-reporting layers.
+the loading side, flat-folder MP4 video, MOTChallenge, TAO, and VisDrone Video
+are also implemented loaders. Everything is structured so other formats can be
+added behind the same public entrypoint without touching the CLI or reporting
+layers.
 
 ## The bridge — loaders × consumers
 
@@ -30,6 +30,7 @@ other. Solid = implemented today; dashed = planned.
 flowchart LR
     subgraph in [Input on disk]
         HMIE([HMIE / Scale])
+        MP4IN([Flat MP4<br/>H.264 / MPEG-2])
         MOTIN([MOTChallenge])
         TAOIN([TAO])
         VISIN([VisDrone Video])
@@ -39,6 +40,7 @@ flowchart LR
 
     subgraph loaders [Loaders]
         LH["<b>load_hmie</b>"]
+        LF["<b>load_flat_mp4</b>"]
         LM["<b>load_motchallenge</b>"]
         LT["<b>load_tao</b>"]
         LV["<b>load_visdrone_video</b>"]
@@ -63,12 +65,14 @@ flowchart LR
     end
 
     HMIE --> LH
+    MP4IN --> LF
     MOTIN --> LM
     TAOIN --> LT
     VISIN --> LV
     COCOIN -.-> LC
     YOLOIN -.-> LY
     LH --> HUB
+    LF --> HUB
     LM --> HUB
     LT --> HUB
     LV --> HUB
@@ -87,19 +91,19 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB hub;
-    class LH,LM,LT,LV,MAITE impl;
-    class MAITEOUT,MOTIN,TAOIN,VISIN impl;
+    class LH,LF,LM,LT,LV,MAITE impl;
+    class MAITEOUT,MP4IN,MOTIN,TAOIN,VISIN impl;
     class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
 ```
 
-Today the HMIE loader (`load_hmie`), the MOTChallenge loader
-(`load_motchallenge`), the TAO loader (`load_tao`), the VisDrone Video loader
-(`load_visdrone_video`), the HMIE validation pipeline, the HMIE reference
-writer, and the MAITE surface
-(`databridge.maite`) are implemented. See [Loading](#loading--dataloaderpy)
-for how loaders build the model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset)
-for the MAITE surface, and [Writer architecture](#writer-architecture--writerspy)
-for the writer contract.
+Today the HMIE loader (`load_hmie`), the flat MP4 loader (`load_flat_mp4`),
+the MOTChallenge loader (`load_motchallenge`), the TAO loader (`load_tao`),
+the VisDrone Video loader (`load_visdrone_video`), the HMIE validation
+pipeline, the HMIE reference writer, and the MAITE surface (`databridge.maite`)
+are implemented. See [Loading](#loading--dataloaderpy) for how loaders build the
+model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the
+MAITE surface, and [Writer architecture](#writer-architecture--writerspy) for
+the writer contract.
 
 ## Project layout
 
@@ -116,6 +120,7 @@ src/databridge/
     writers.py               Writer contract (ABC) + registry + write() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
     dataloader.py            HmieLoader: the reference loader (on-disk HMIE -> BoxTrackDataset)
+    flat_mp4.py              FlatMp4Loader: flat .mp4 video folder -> BoxTrackDataset
     motchallenge.py          MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
     tao.py                   TaoLoader: official TAO JSON -> BoxTrackDataset
     visdrone.py              VisDroneVideoLoader: VisDrone VID/MOT video -> BoxTrackDataset
@@ -501,11 +506,15 @@ To support a new input format `foo`:
 5. Optionally add format-specific validation under `_formats/foo/` and a
    `DatasetFormat.FOO` branch in `validation.py`.
 
-`MotChallengeLoader` in `motchallenge.py`, `TaoLoader` in `tao.py`, and
-`VisDroneVideoLoader` in `visdrone.py` are the image-sequence examples.
-MOTChallenge expects a standard benchmark root with `train/` and/or `test/` and
-reads `gt/gt.txt` or `det/det.txt`; TAO expects `annotations/train.json`,
-`validation.json`, and/or `test.json` / the official
+`FlatMp4Loader` in `flat_mp4.py` is the video-only example for IR-3.3-S-1:
+it reads only immediate `.mp4` children (no nested discovery), probes codecs
+with OpenCV, accepts H.264 and MPEG-2, and creates video-backed sequences with
+empty `boxes`. `MotChallengeLoader` in `motchallenge.py`, `TaoLoader` in
+`tao.py`, and `VisDroneVideoLoader` in `visdrone.py` are the image-sequence
+examples. MOTChallenge expects a standard benchmark root with `train/` and/or
+`test/` and reads `gt/gt.txt` or `det/det.txt` (with optional
+`class_names={id: name}` for MOT-style datasets with custom labels); TAO expects
+`annotations/train.json`, `validation.json`, and/or `test.json` / the official
 `test_without_annotations.json`; VisDrone Video expects official VID/MOT split
 roots with `sequences/<name>/0000001.jpg` and `annotations/<name>.txt`, or a
 parent that contains multiple such split roots. All set image-sequence metadata

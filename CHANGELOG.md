@@ -79,6 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closes a `load → write → load` round trip that recovers the same
   box/category content, proving the writer architecture and that
   `BoxTrackDataset` is a lossless hub.
+- Flat-folder MP4 loader (`databridge.load_flat_mp4`, IR-3.3-S-1): loads
+  immediate `.mp4` children encoded as H.264 or MPEG-2 into video-backed
+  `VideoSequence` records with media metadata and no annotations.
 
 ### Fixed
 
