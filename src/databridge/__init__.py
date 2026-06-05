@@ -16,6 +16,7 @@ from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.motchallenge import MotChallengeLoader, load_motchallenge
 from databridge.tao import TaoLoader, load_tao
 from databridge.validation import validate, validate_annotation, validate_batches
+from databridge.visdrone import VisDroneVideoLoader, load_visdrone_video
 from databridge.writers import Writer, available_output_formats, get_writer, register_writer, write
 
 # Library convention: attach a NullHandler so downstream applications
@@ -37,6 +38,7 @@ __all__ = [
     "ValidationCache",
     "ValidationResult",
     "VideoSequence",
+    "VisDroneVideoLoader",
     "Writer",
     "__version__",
     "__version_tuple__",
@@ -51,6 +53,7 @@ __all__ = [
     "load_hmie",
     "load_motchallenge",
     "load_tao",
+    "load_visdrone_video",
     "register_loader",
     "register_writer",
     "render_html_report",

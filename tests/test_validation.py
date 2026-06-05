@@ -41,6 +41,10 @@ class TestValidate:
         with pytest.raises(ValueError, match="not a valid"):
             validate(tmp_path, dataset_format="unsupported")
 
+    def test_supported_but_unimplemented_format_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(NotImplementedError, match="visdrone_video"):
+            validate(tmp_path, dataset_format="visdrone_video")
+
     def test_nonexistent_path_fails(self, tmp_path: Path) -> None:
         result = validate(tmp_path / "nope")
         assert result.passed is False
@@ -93,6 +97,8 @@ class TestValidateAnnotation:
     def test_supported_but_unimplemented_format_raises(self, valid_annotation: Path) -> None:
         with pytest.raises(NotImplementedError, match="motchallenge"):
             validate_annotation(valid_annotation, dataset_format="motchallenge")
+        with pytest.raises(NotImplementedError, match="visdrone_video"):
+            validate_annotation(valid_annotation, dataset_format="visdrone_video")
 
 
 class TestParallelWorkerCrash:
