@@ -6,6 +6,6 @@ check functions specific to one dataset format. The top-level
 based on ``DatasetFormat``.
 
 This layout keeps format-specific logic (currently HMIE validation helpers;
-future YOLO/COCO/VisDrone validators/loaders) behind clear ownership
-boundaries.
+future YOLO/COCO validators/loaders and VisDrone validators) behind clear
+ownership boundaries.
 """

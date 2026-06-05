@@ -161,6 +161,7 @@ class DatasetFormat(enum.Enum):
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"
+    VISDRONE_VIDEO = "visdrone_video"
 
 
 class Severity(enum.Enum):

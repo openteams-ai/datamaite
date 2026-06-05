@@ -29,15 +29,16 @@ databridge is a bridge: a **loader** reads an input format into one neutral
 in-memory model (`BoxTrackDataset`), a **validator** checks a format on disk,
 and a **writer** serialises the model out to an output format (`convert` pairs a
 loader and a writer for on-disk → on-disk conversion). HMIE/Scale,
-MOTChallenge, and TAO are implemented input formats; HMIE/Scale is the
-reference output format (proving the writer architecture via a load → write →
-load round trip), and other writers are planned.
+MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale
+is the reference output format (proving the writer architecture via a load →
+write → load round trip), and other writers are planned.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | MOTChallenge | ✅ | — | planned |
 | TAO | ✅ | — | planned |
+| VisDrone Video (VID/MOT) | ✅ | — | planned |
 | YOLO | planned | planned | planned |
 | COCO | planned | planned | planned |
 
@@ -128,6 +129,30 @@ TAO `images.file_name` entries are resolved under `<root>/frames` (with an
 already-present leading `frames/` supported for derived datasets). Category IDs
 are preserved as their raw sparse IDs. Non-box annotation fields such as
 `segmentation`, `area`, and `iscrowd` are preserved in each box's `attributes`.
+
+Load an official VisDrone video split (VID object detection in videos or MOT
+multi-object tracking), or a parent containing multiple split roots:
+
+```python
+from databridge import load_visdrone_video
+
+ds = load_visdrone_video(
+    "/path/to/VisDrone2019-VID-train",
+    variant="auto",          # inferred from VID/MOT in the split name; or "vid" / "mot"
+    include_ignored=False,   # skip score=0 and ignored-region category rows
+    classes={1, 4, 9},       # optional category allowlist
+)
+
+for seq in ds.iter_sequences():
+    print(seq.video_meta["variant"], seq.frame_filename(0), len(seq.boxes))
+```
+
+VisDrone Video uses image sequences with seven-digit, 1-based `.jpg` filenames
+(e.g. `0000001.jpg`). Loaded sequences set `video_path=None`, `frame_dir`,
+`frame_pattern="{frame:07d}.jpg"`, and `frame_number_base=1`; use
+`seq.frame_filename(frame_index)` / `seq.frame_path(frame_index)` with the
+model's 0-based frame index. The loader preserves raw VisDrone category IDs
+(`0` ignored region, `1` pedestrian, ..., `11` others) in `category_id`.
 
 For a full load → verify → export-ready walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
