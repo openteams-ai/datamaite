@@ -74,6 +74,46 @@ def _status_detail(errors: int, warnings: int, *, use_color: bool | None = None)
     return ", ".join(parts)
 
 
+def _category_indicator_detail(
+    cat_key: str,
+    errors: int,
+    warnings: int,
+    *,
+    skipped: bool,
+    struct_failed: bool,
+    no_annotations: bool,
+    use_color: bool | None,
+) -> tuple[str, str]:
+    """Return the (indicator, detail) strings for one requirement-category row.
+
+    Precedence: a by-request SKIPPED outranks the N/A states (structure
+    failed, or no annotations to validate), which in turn outrank the live
+    error/warning status -- BUT a real FAIL/WARN outranks SKIPPED. Some
+    checks in a "skipped" category still run (e.g. discovery emits
+    ``multiple_videos_in_seq_mp4`` in the video category even with video
+    checks off), and SKIPPED must not mask those findings.
+    """
+    if skipped and errors == 0 and warnings == 0:
+        return (
+            _dim("SKIPPED", use_color=use_color),
+            _dim("checks not run", use_color=use_color),
+        )
+    if struct_failed and cat_key != "structure":
+        return (
+            _dim("N/A", use_color=use_color),
+            _dim("requires passing structure check", use_color=use_color),
+        )
+    if no_annotations and cat_key in ("video", "scale_spec"):
+        return (
+            _dim("N/A", use_color=use_color),
+            _dim("no annotations to validate", use_color=use_color),
+        )
+    return (
+        _status_indicator(errors, warnings, use_color=use_color),
+        _status_detail(errors, warnings, use_color=use_color),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
@@ -218,6 +258,11 @@ class ValidationResult:
     annotation_count: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
+    # Checks intentionally not run (e.g. video integrity when
+    # check_video_integrity=False). Informational only -- never affects
+    # `passed`. Opaque logical names; the HMIE layer maps them to display
+    # categories. Always serialized sorted for stable output.
+    skipped_checks: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         # Backfill severity counts from findings when callers construct a
@@ -292,27 +337,42 @@ class ValidationResult:
         # --- 4 requirement checks ---
         # Category mapping is HMIE-specific; lazy import keeps _types.py
         # neutral (no compile-time dependency on a particular format).
-        from databridge._formats.hmie.categories import _CATEGORY_LABELS, _categorize_findings
+        from databridge._formats.hmie.categories import (
+            _CATEGORY_LABELS,
+            SKIP_VIDEO_INTEGRITY,
+            _categorize_findings,
+            skipped_category_keys,
+        )
 
         cats = _categorize_findings(self.finding_severity_counts)
         s_errs, _ = cats["structure"]
         c_errs, _ = cats["coverage"]
         struct_failed = s_errs > 0
         no_annotations = self.annotation_count == 0 and c_errs > 0
+        skipped_cats = skipped_category_keys(self.skipped_checks)
         lines.append("")
         for cat_key in ("structure", "video", "coverage", "scale_spec"):
             errs, warns = cats[cat_key]
             label = _CATEGORY_LABELS[cat_key]
-            if struct_failed and cat_key != "structure":
-                indicator = _dim("N/A", use_color=use_color)
-                detail = _dim("requires passing structure check", use_color=use_color)
-            elif no_annotations and cat_key in ("video", "scale_spec"):
-                indicator = _dim("N/A", use_color=use_color)
-                detail = _dim("no annotations to validate", use_color=use_color)
-            else:
-                indicator = _status_indicator(errs, warns, use_color=use_color)
-                detail = _status_detail(errs, warns, use_color=use_color)
+            indicator, detail = _category_indicator_detail(
+                cat_key,
+                errs,
+                warns,
+                skipped=cat_key in skipped_cats,
+                struct_failed=struct_failed,
+                no_annotations=no_annotations,
+                use_color=use_color,
+            )
             lines.append(f"  {indicator:<18s} {label:<28s} {detail}")
+
+        if SKIP_VIDEO_INTEGRITY in self.skipped_checks:
+            lines.append("")
+            lines.append(
+                "  "
+                + _yellow("⚠", use_color=use_color)
+                + " Video checks not run: FMV integrity and video↔annotation"
+                + " consistency were skipped (no verified-clean status)."
+            )
 
         # --- Individual findings (verbose mode) ---
         if show_findings and self.findings:
@@ -347,6 +407,7 @@ class ValidationResult:
             "finding_severity_counts": {sev: dict(counter) for sev, counter in self.finding_severity_counts.items()},
             "label_histogram": dict(self.label_histogram),
             "findings": [f.to_dict() for f in self.findings],
+            "skipped_checks": sorted(self.skipped_checks),
         }
 
     def to_jsonl(self) -> str:
@@ -372,6 +433,7 @@ class ValidationResult:
                     sev: dict(counter) for sev, counter in self.finding_severity_counts.items()
                 },
                 "label_histogram": dict(self.label_histogram),
+                "skipped_checks": sorted(self.skipped_checks),
             }
         )
         finding_lines = [json.dumps({"type": "finding", **f.to_dict()}) for f in self.findings]

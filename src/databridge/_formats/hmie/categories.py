@@ -106,3 +106,28 @@ def _categorize_findings(
     for key in cats:
         cats[key] = (err_by_cat[key], warn_by_cat[key])
     return cats
+
+
+# ---------------------------------------------------------------------------
+# Skipped-check vocabulary
+# ---------------------------------------------------------------------------
+# Logical names recorded on ValidationResult.skipped_checks when a check is
+# intentionally not run. Kept here (not in _types.py) so the neutral model
+# stays format-agnostic while the HMIE layer owns the display mapping.
+
+SKIP_VIDEO_INTEGRITY = "video_integrity"
+SKIP_VIDEO_CONSISTENCY = "video_annotation_consistency"
+
+
+def skipped_category_keys(skipped: set[str]) -> set[str]:
+    """Map skipped logical-check names to the report categories they fully cover.
+
+    Only ``video`` can be marked entirely skipped: ``video_integrity`` covers
+    the whole FMV-integrity category. ``video_annotation_consistency`` is part
+    of ``scale_spec`` (which still runs annotation-schema checks), so it never
+    marks a category skipped -- it is surfaced via the banner instead.
+    """
+    keys: set[str] = set()
+    if SKIP_VIDEO_INTEGRITY in skipped:
+        keys.add("video")
+    return keys

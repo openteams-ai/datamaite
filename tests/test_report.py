@@ -384,6 +384,150 @@ class TestAggregateBatches:
         assert _aggregate_batches([b1])["passed"] is True
 
 
+def test_prepare_report_data_marks_video_skipped() -> None:
+    from databridge import DatasetFormat, ValidationResult
+    from databridge._report import prepare_report_data
+
+    result = ValidationResult(
+        dataset_path=Path("/data"),
+        dataset_format=DatasetFormat.HMIE,
+        skipped_checks={"video_integrity", "video_annotation_consistency"},
+    )
+    data = prepare_report_data(result)
+    video = next(c for c in data["categories"] if c["key"] == "video")
+    assert video["status"] == "skipped"
+    assert data["video_checks_skipped"] is True
+    assert data["skipped_checks"] == ["video_annotation_consistency", "video_integrity"]
+
+
+def test_render_html_report_contains_skipped_banner_and_css() -> None:
+    from databridge import DatasetFormat, ValidationResult, render_html_report
+
+    result = ValidationResult(
+        dataset_path=Path("/data"),
+        dataset_format=DatasetFormat.HMIE,
+        skipped_checks={"video_integrity", "video_annotation_consistency"},
+    )
+    html = render_html_report(result)
+    assert "pill-skipped" in html  # CSS class present
+    assert "skip-banner" in html  # banner element present
+    assert "Video checks not run" in html  # banner copy present
+
+
+def test_prepare_report_data_skip_does_not_mask_video_warning() -> None:
+    from collections import Counter
+
+    from databridge import DatasetFormat, ValidationResult
+    from databridge._report import prepare_report_data
+
+    # multiple_videos_in_seq_mp4 is a video-category WARNING that still fires
+    # with video checks off. The category must read WARN, not skipped.
+    result = ValidationResult(
+        dataset_path=Path("/data"),
+        dataset_format=DatasetFormat.HMIE,
+        annotation_count=1,
+        finding_severity_counts={"error": Counter(), "warning": Counter({"multiple_videos_in_seq_mp4": 1})},
+        skipped_checks={"video_integrity", "video_annotation_consistency"},
+    )
+    data = prepare_report_data(result)
+    video = next(c for c in data["categories"] if c["key"] == "video")
+    assert video["status"] == "warn"  # real finding wins over skip
+    assert data["video_checks_skipped"] is True  # banner still flagged
+
+
+def test_render_html_report_no_skip_has_no_banner_flag() -> None:
+    from databridge import DatasetFormat, ValidationResult
+    from databridge._report import prepare_report_data
+
+    result = ValidationResult(dataset_path=Path("/data"), dataset_format=DatasetFormat.HMIE)
+    data = prepare_report_data(result)
+    assert data["video_checks_skipped"] is False
+    video = next(c for c in data["categories"] if c["key"] == "video")
+    assert video["status"] == "pass"
+
+
+def _hmie_result(skip: bool) -> ValidationResult:
+    from databridge import DatasetFormat, ValidationResult
+
+    skips = {"video_integrity", "video_annotation_consistency"} if skip else set()
+    return ValidationResult(
+        dataset_path=Path("/data"),
+        dataset_format=DatasetFormat.HMIE,
+        skipped_checks=skips,
+    )
+
+
+def test_multi_report_all_skipped_aggregates_skipped() -> None:
+    from databridge._report import _aggregate_batches, prepare_report_data
+
+    batches = [prepare_report_data(_hmie_result(True)), prepare_report_data(_hmie_result(True))]
+    for b, name in zip(batches, ("a", "b"), strict=True):
+        b["batch_name"] = name
+    agg = _aggregate_batches(batches)
+    video = next(c for c in agg["categories"] if c["key"] == "video")
+    assert video["status"] == "skipped"  # every batch skipped -> aggregate skipped
+    assert agg["video_checks_skipped"] is True
+
+
+def test_multi_report_mixed_skip_is_partial_not_clean_pass() -> None:
+    from databridge._report import _aggregate_batches, prepare_report_data
+
+    batches = [prepare_report_data(_hmie_result(True)), prepare_report_data(_hmie_result(False))]
+    for b, name in zip(batches, ("a", "b"), strict=True):
+        b["batch_name"] = name
+    agg = _aggregate_batches(batches)
+    video = next(c for c in agg["categories"] if c["key"] == "video")
+    # Mixed: one batch skipped, one didn't. Must not read as a clean PASS --
+    # that hides that some batches were never checked.
+    assert video["status"] == "partial"
+    assert agg["video_checks_skipped"] is True  # banner still flags it
+
+
+def test_render_html_multi_mixed_skip_shows_partial() -> None:
+    from databridge._report import render_html_report_multi
+
+    html = render_html_report_multi(
+        [(Path("/data/a"), _hmie_result(True)), (Path("/data/b"), _hmie_result(False))],
+        Path("/data"),
+    )
+    assert "pill-partial" in html  # CSS class present
+    assert "partially checked; some batches skipped" in html  # detail copy present
+
+
+def test_multi_report_mixed_skip_with_warning_stays_warn() -> None:
+    from collections import Counter
+
+    from databridge import DatasetFormat, ValidationResult
+    from databridge._report import _aggregate_batches, prepare_report_data
+
+    # One batch skipped video; the other has a real video warning. The warning
+    # must win over "partial" -- partial only applies to otherwise-clean cats.
+    warned = ValidationResult(
+        dataset_path=Path("/data/b"),
+        dataset_format=DatasetFormat.HMIE,
+        annotation_count=1,
+        finding_severity_counts={"error": Counter(), "warning": Counter({"multiple_videos_in_seq_mp4": 1})},
+    )
+    batches = [prepare_report_data(_hmie_result(True)), prepare_report_data(warned)]
+    for b, name in zip(batches, ("a", "b"), strict=True):
+        b["batch_name"] = name
+    agg = _aggregate_batches(batches)
+    video = next(c for c in agg["categories"] if c["key"] == "video")
+    assert video["status"] == "warn"
+
+
+def test_multi_report_no_skip_clean() -> None:
+    from databridge._report import _aggregate_batches, prepare_report_data
+
+    batches = [prepare_report_data(_hmie_result(False)), prepare_report_data(_hmie_result(False))]
+    for b, name in zip(batches, ("a", "b"), strict=True):
+        b["batch_name"] = name
+    agg = _aggregate_batches(batches)
+    video = next(c for c in agg["categories"] if c["key"] == "video")
+    assert video["status"] == "pass"
+    assert agg["video_checks_skipped"] is False
+
+
 class TestReportE2E:
     def test_html_report_from_validation(self, tmp_path: Path) -> None:
         from databridge.validation import validate

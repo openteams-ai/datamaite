@@ -69,6 +69,15 @@ class TestValidate:
         assert len(errors) == 0
         assert result.passed is True
 
+    def test_skip_video_records_skipped_checks(self, single_snippet_hmie: Path) -> None:
+        result = validate(single_snippet_hmie, check_video_integrity=False)
+        assert result.skipped_checks == {"video_integrity", "video_annotation_consistency"}
+        assert result.passed is True
+
+    def test_video_check_on_records_no_skips(self, single_snippet_hmie: Path) -> None:
+        result = validate(single_snippet_hmie, check_video_integrity=True, workers=1)
+        assert result.skipped_checks == set()
+
 
 class TestValidateAnnotation:
     def test_valid_annotation(self, valid_annotation: Path) -> None:
@@ -99,6 +108,24 @@ class TestValidateAnnotation:
             validate_annotation(valid_annotation, dataset_format="motchallenge")
         with pytest.raises(NotImplementedError, match="visdrone_video"):
             validate_annotation(valid_annotation, dataset_format="visdrone_video")
+
+    def test_skip_video_records_skipped_checks(self, valid_annotation: Path) -> None:
+        result = validate_annotation(valid_annotation, video_path=None, check_video_integrity=False)
+        assert result.skipped_checks == {"video_integrity", "video_annotation_consistency"}
+        assert result.passed is True
+
+    def test_video_check_on_records_no_skips(self, valid_annotation: Path, tmp_path: Path) -> None:
+        # Missing video is an ERROR, not a skip: skipped_checks stays empty.
+        result = validate_annotation(valid_annotation, video_path=tmp_path / "missing.mp4")
+        assert result.skipped_checks == set()
+
+    def test_no_video_path_records_skips_even_with_check_on(self, valid_annotation: Path) -> None:
+        # video_path=None with check_video_integrity=True (the default) runs no
+        # FMV integrity or consistency checks, so they must be recorded as
+        # skipped -- not silently rendered as a clean PASS.
+        result = validate_annotation(valid_annotation, video_path=None)
+        assert result.skipped_checks == {"video_integrity", "video_annotation_consistency"}
+        assert result.passed is True
 
 
 class TestParallelWorkerCrash:
