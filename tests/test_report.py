@@ -275,6 +275,61 @@ class TestRenderMultiBatch:
         assert '"passed": true' in html_str
         assert '"passed_count": 1' in html_str
 
+    def test_multi_batch_names_are_relative_to_root(self, tmp_path: Path) -> None:
+        """Grouped datasets that share a leaf name stay distinct: each batch is
+        labeled by its path relative to the collection root."""
+        results: list[tuple[Path, ValidationResult]] = [
+            (
+                tmp_path / "valid" / "video_001",
+                ValidationResult(
+                    dataset_path=tmp_path / "valid" / "video_001",
+                    dataset_format=DatasetFormat.HMIE,
+                    passed=True,
+                ),
+            ),
+            (
+                tmp_path / "bad-json" / "video_001",
+                ValidationResult(
+                    dataset_path=tmp_path / "bad-json" / "video_001",
+                    dataset_format=DatasetFormat.HMIE,
+                    passed=False,
+                    findings=[
+                        Finding(
+                            Severity.ERROR,
+                            tmp_path / "bad-json" / "video_001" / "a.json",
+                            "annotation_json",
+                            "bad json",
+                        ),
+                    ],
+                    finding_counts=Counter({"annotation_json": 1}),
+                ),
+            ),
+        ]
+        html_str = render_html_report_multi(results, tmp_path)
+        assert '"batch_name": "valid/video_001"' in html_str
+        assert '"batch_name": "bad-json/video_001"' in html_str
+
+    def test_multi_batch_root_is_the_dataset_uses_leaf_name(self, tmp_path: Path) -> None:
+        """When BATCH_ROOT *is* the dataset, the batch is labeled by its leaf
+        name -- not '.' (which relative_to(root) would otherwise produce)."""
+        dataset = tmp_path / "video_001"
+        results: list[tuple[Path, ValidationResult]] = [
+            (dataset, ValidationResult(dataset_path=dataset, dataset_format=DatasetFormat.HMIE, passed=True)),
+        ]
+        html_str = render_html_report_multi(results, dataset)
+        assert '"batch_name": "video_001"' in html_str
+        assert '"batch_name": "."' not in html_str
+
+    def test_batch_label_helper(self, tmp_path: Path) -> None:
+        from databridge._report import _batch_label
+
+        # relative path under root
+        assert _batch_label(tmp_path / "valid" / "v1", tmp_path) == "valid/v1"
+        # root is the dataset -> leaf name, not "."
+        assert _batch_label(tmp_path / "v1", tmp_path / "v1") == "v1"
+        # batch outside root -> leaf name
+        assert _batch_label(Path("/elsewhere/v2"), tmp_path) == "v2"
+
 
 class TestAggregateBatches:
     def _batch(
