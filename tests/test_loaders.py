@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from databridge import load, load_hmie
+from databridge._formats.hmie.loader import HmieLoader
 from databridge._types import DatasetFormat
-from databridge.dataloader import HmieLoader
 from databridge.loaders import Loader, available_formats, get_loader, register_loader
 from databridge.model import BoxTrackDataset
 

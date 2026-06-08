@@ -10,9 +10,9 @@ from typing import Any
 import pytest
 
 from databridge import DatasetFormat, load, load_tao
+from databridge._formats.tao.loader import TaoLoader
 from databridge.loaders import available_formats, get_loader
 from databridge.model import BoxTrackDataset
-from databridge.tao import TaoLoader
 
 
 def _write_tao(root: Path, split: str = "train", payload: dict[str, Any] | None = None) -> Path:
@@ -191,7 +191,7 @@ class TestTaoHappyPath:
         payload["tracks"] = [{"id": 5, "video_id": 10, "category_id": 2}]
         _write_tao(tmp_path, payload=payload)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             ds = load_tao(tmp_path)
 
         assert ds.sequences[0].boxes[0].category_id == 1
@@ -248,7 +248,7 @@ class TestTaoHappyPath:
 
 class TestTaoMalformedInputs:
     def test_missing_annotations_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             ds = load_tao(tmp_path)
 
         assert ds.sequence_count == 0
@@ -259,7 +259,7 @@ class TestTaoMalformedInputs:
         annotations.mkdir()
         (annotations / "train.json").write_text("{not valid json", encoding="utf-8")
 
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             ds = load_tao(tmp_path)
 
         assert ds.sequence_count == 0
@@ -270,7 +270,7 @@ class TestTaoMalformedInputs:
         payload["images"][0]["file_name"] = "../escape.jpg"
         _write_tao(tmp_path, payload=payload)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             ds = load_tao(tmp_path)
 
         assert ds.num_boxes == 1
@@ -289,7 +289,7 @@ class TestTaoMalformedInputs:
         payload["images"][0]["file_name"] = "frames/link/escape.jpg"
         _write_tao(tmp_path, payload=payload)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             ds = load_tao(tmp_path)
 
         assert ds.num_boxes == 1
@@ -307,7 +307,7 @@ class TestTaoMalformedInputs:
         ]
         _write_tao(tmp_path, payload=payload)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             ds = load_tao(tmp_path)
 
         assert ds.num_boxes == 1
@@ -351,7 +351,7 @@ class TestTaoMalformedInputs:
         }
         _write_tao(tmp_path, payload=payload)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.tao"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.loader"):
             seq = load_tao(tmp_path).sequences[0]
 
         assert seq.num_frames == 1

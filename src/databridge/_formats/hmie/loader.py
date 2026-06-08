@@ -30,10 +30,15 @@ import math
 from pathlib import Path
 from typing import Any
 
-from databridge._formats.hmie import ScaleAnnotation, check_annotation_schema, discover_hmie_pairs
-from databridge._formats.hmie.annotation_checks import _is_unwrapped_annotations
-from databridge._formats.hmie.discovery import _VIDEO_EXTENSIONS, SnippetPair, match_annotation_to_video
+from databridge._formats.hmie.annotation_checks import _is_unwrapped_annotations, check_annotation_schema
+from databridge._formats.hmie.discovery import (
+    _VIDEO_EXTENSIONS,
+    SnippetPair,
+    discover_hmie_pairs,
+    match_annotation_to_video,
+)
 from databridge._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
+from databridge._formats.hmie.schema import ScaleAnnotation
 from databridge._types import DatasetFormat
 from databridge.loaders import Loader, register_loader
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence, category_name_from_uri
@@ -505,7 +510,7 @@ def _probe_for_load(video_path: Path | None) -> tuple[float, int, int, int] | No
     """
     if video_path is None or not video_path.exists():
         return None
-    from databridge._formats.hmie import probe_video
+    from databridge._formats.hmie.video_checks import probe_video
 
     props, _findings = probe_video(video_path)
     if not props.opened:

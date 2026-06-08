@@ -40,6 +40,7 @@ a writer itself only consumes an in-memory ``BoxTrackDataset``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from importlib import import_module
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -71,8 +72,21 @@ class Writer(ABC):
 
 
 # Format -> writer-class registry. Populated by register_writer at import time
-# (each format module decorates its Writer subclass).
+# (each format module decorates its Writer subclass). Built-in writers are
+# imported lazily so validation-only imports do not pull writer code into memory.
 _WRITERS: dict[DatasetFormat, type[Writer]] = {}
+_BUILTIN_WRITER_MODULES = ("databridge._formats.hmie.writer",)
+_BUILTIN_WRITERS_IMPORTED = False
+
+
+def _ensure_builtin_writers() -> None:
+    """Import built-in writer modules once so their decorators register."""
+    global _BUILTIN_WRITERS_IMPORTED
+    if _BUILTIN_WRITERS_IMPORTED:
+        return
+    for module_name in _BUILTIN_WRITER_MODULES:
+        import_module(module_name)
+    _BUILTIN_WRITERS_IMPORTED = True
 
 
 def register_writer(writer_cls: type[Writer]) -> type[Writer]:
@@ -83,6 +97,8 @@ def register_writer(writer_cls: type[Writer]) -> type[Writer]:
     ``TypeError`` if the class does not set ``format`` to a
     :class:`DatasetFormat`.
     """
+    if writer_cls.__module__ not in _BUILTIN_WRITER_MODULES:
+        _ensure_builtin_writers()
     fmt = getattr(writer_cls, "format", None)
     if not isinstance(fmt, DatasetFormat):
         raise TypeError(f"{writer_cls.__name__} must set `format` to a DatasetFormat to be registered")
@@ -92,6 +108,7 @@ def register_writer(writer_cls: type[Writer]) -> type[Writer]:
 
 def available_output_formats() -> list[DatasetFormat]:
     """Formats that currently have a registered writer, sorted by value."""
+    _ensure_builtin_writers()
     return sorted(_WRITERS, key=lambda f: f.value)
 
 
@@ -102,6 +119,7 @@ def get_writer(output_format: DatasetFormat | str) -> Writer:
     Raises ``ValueError`` for an unknown format string, or when no writer is
     registered for an otherwise-valid format.
     """
+    _ensure_builtin_writers()
     fmt = output_format if isinstance(output_format, DatasetFormat) else DatasetFormat(str(output_format).lower())
     try:
         writer_cls = _WRITERS[fmt]

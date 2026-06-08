@@ -1,11 +1,8 @@
-"""Per-format internal modules.
+"""Format-specific implementation packages.
 
-Each subpackage (e.g. ``hmie``) contains the schema, discovery, and
-check functions specific to one dataset format. The top-level
-``validation`` module dispatches to the appropriate format package
-based on ``DatasetFormat``.
-
-This layout keeps format-specific logic (currently HMIE validation helpers;
-future YOLO/COCO validators/loaders and VisDrone validators) behind clear
-ownership boundaries.
+Each subpackage owns the parser/loader, writer, schema, discovery, and
+validation helpers for one dataset format. Top-level modules such as
+:mod:`databridge.loaders`, :mod:`databridge.writers`, and
+:mod:`databridge.validation` remain format-agnostic dispatch/orchestration
+layers; concrete format code lives under ``_formats/<format>/``.
 """

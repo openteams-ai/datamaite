@@ -1,5 +1,7 @@
 """HMIE/Scale format handler.
 
+- ``loader``: reads HMIE/Scale on disk into ``BoxTrackDataset``
+- ``writer``: serialises ``BoxTrackDataset`` back to the HMIE layout
 - ``schema``: Pydantic models for Scale Video Playback annotation JSON
 - ``discovery``: walks the HMIE folder hierarchy and pairs annotations
   with their videos
@@ -10,6 +12,8 @@
   requirement categories from issue #634 (structure, video, coverage,
   scale_spec).
 """
+
+from typing import TYPE_CHECKING
 
 from databridge._formats.hmie.annotation_checks import check_annotation_schema
 from databridge._formats.hmie.consistency_checks import check_video_annotation_consistency
@@ -30,9 +34,15 @@ from databridge._formats.hmie.schema import (
 )
 from databridge._formats.hmie.video_checks import VideoProperties, probe_video
 
+if TYPE_CHECKING:
+    from databridge._formats.hmie.loader import HmieLoader, load_hmie
+    from databridge._formats.hmie.writer import HmieWriter
+
 __all__ = [
     "DiscoveryResult",
     "FrameAnnotation",
+    "HmieLoader",
+    "HmieWriter",
     "Params",
     "Response",
     "ScaleAnnotation",
@@ -45,5 +55,23 @@ __all__ = [
     "check_video_annotation_consistency",
     "discover_hmie_pairs",
     "find_batch_roots",
+    "load_hmie",
     "probe_video",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Lazily resolve loader/writer exports to keep validation imports minimal."""
+    if name in {"HmieLoader", "load_hmie"}:
+        from databridge._formats.hmie.loader import HmieLoader, load_hmie
+
+        exports = {"HmieLoader": HmieLoader, "load_hmie": load_hmie}
+    elif name == "HmieWriter":
+        from databridge._formats.hmie.writer import HmieWriter
+
+        exports = {"HmieWriter": HmieWriter}
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = exports[name]
+    globals()[name] = value
+    return value

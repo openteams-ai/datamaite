@@ -100,7 +100,7 @@ Today the HMIE loader (`load_hmie`), the flat MP4 loader (`load_flat_mp4`),
 the MOTChallenge loader (`load_motchallenge`), the TAO loader (`load_tao`),
 the VisDrone Video loader (`load_visdrone_video`), the HMIE validation
 pipeline, the HMIE reference writer, and the MAITE surface (`databridge.maite`)
-are implemented. See [Loading](#loading--dataloaderpy) for how loaders build the
+are implemented. See [Loading](#loading--hmie-loader) for how loaders build the
 model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the
 MAITE surface, and [Writer architecture](#writer-architecture--writerspy) for
 the writer contract.
@@ -121,11 +121,6 @@ src/databridge/
     loaders.py               Loader contract (ABC) + registry + load() dispatch
     writers.py               Writer contract (ABC) + registry + write() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
-    dataloader.py            HmieLoader: the reference loader (on-disk HMIE -> BoxTrackDataset)
-    flat_mp4.py              FlatMp4Loader: flat .mp4 video folder -> BoxTrackDataset
-    motchallenge.py          MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
-    tao.py                   TaoLoader: official TAO JSON -> BoxTrackDataset
-    visdrone.py              VisDroneVideoLoader: VisDrone VID/MOT video -> BoxTrackDataset
     conversion.py            convert(): end-to-end load + write (on-disk -> on-disk)
     maite/                   Optional MAITE surface (databridge[maite] extra)
         __init__.py              package doc; the model is MAITE directly (no adapter)
@@ -133,9 +128,13 @@ src/databridge/
         _decode.py               Decoder protocol + PyAV backend (lazy)
         _common.py               numpy-array + datum-metadata helpers
     _formats/
-        __init__.py          Format registry
+        __init__.py          Format package namespace
+        flat_mp4/
+            __init__.py              Flat MP4 format exports
+            loader.py                FlatMp4Loader: flat .mp4 video folder -> BoxTrackDataset
         hmie/
             __init__.py              HMIE format entrypoint
+            loader.py                HmieLoader: on-disk HMIE -> BoxTrackDataset
             discovery.py             Filesystem walk (snippet-centric, seq_mp4 / seq_ts)
             schema.py                Pydantic models for Scale Video Playback JSON
             categories.py            Severity / category taxonomy for findings
@@ -143,6 +142,15 @@ src/databridge/
             video_checks.py          FMV open / decode / corruption checks
             consistency_checks.py    Annotation <-> video cross-references
             writer.py                HmieWriter: reference writer (BoxTrackDataset -> on-disk HMIE)
+        motchallenge/
+            __init__.py              MOTChallenge format exports
+            loader.py                MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
+        tao/
+            __init__.py              TAO format exports
+            loader.py                TaoLoader: official TAO JSON -> BoxTrackDataset
+        visdrone/
+            __init__.py              VisDrone format exports
+            loader.py                VisDroneVideoLoader: VisDrone VID/MOT video -> BoxTrackDataset
 docs/
     architecture.md                              This file
     schemas/
@@ -408,24 +416,28 @@ flowchart TD
     LOAD["<b>load(root, dataset_format=…)</b><br/>public dispatch"]
     REG[("<b>registry</b><br/>DatasetFormat → Loader")]
     BASE["<b>Loader (ABC)</b><br/>load(root, **options) → BoxTrackDataset<br/>sniff(root) → bool"]
-    HMIE["<b>HmieLoader</b><br/>(dataloader.py)"]
-    MOT["<b>MotChallengeLoader</b><br/>(motchallenge.py)"]
-    TAO["<b>TaoLoader</b><br/>(tao.py)"]
-    VIS["<b>VisDroneVideoLoader</b><br/>(visdrone.py)"]
+    HMIE["<b>HmieLoader</b><br/>(_formats/hmie/loader.py)"]
+    FLAT["<b>FlatMp4Loader</b><br/>(_formats/flat_mp4/loader.py)"]
+    MOT["<b>MotChallengeLoader</b><br/>(_formats/motchallenge/loader.py)"]
+    TAO["<b>TaoLoader</b><br/>(_formats/tao/loader.py)"]
+    VIS["<b>VisDroneVideoLoader</b><br/>(_formats/visdrone/loader.py)"]
     NEW["CocoLoader, YoloLoader, …<br/>(future)"]
 
     LOAD -->|get_loader| REG
     REG --> HMIE
+    REG --> FLAT
     REG --> MOT
     REG --> TAO
     REG --> VIS
     REG -.-> NEW
     HMIE -->|subclasses| BASE
+    FLAT -->|subclasses| BASE
     MOT -->|subclasses| BASE
     TAO -->|subclasses| BASE
     VIS -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_loader| REG
+    FLAT -->|@register_loader| REG
     MOT -->|@register_loader| REG
     TAO -->|@register_loader| REG
     VIS -->|@register_loader| REG
@@ -437,7 +449,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class LOAD entry;
     class REG store;
-    class HMIE,MOT,TAO,VIS impl;
+    class HMIE,FLAT,MOT,TAO,VIS impl;
     class NEW planned;
 ```
 
@@ -458,8 +470,9 @@ flowchart TD
   `load_tao(...)`, and `load_visdrone_video(...)` are thin convenience wrappers.
 
 This mirrors the validator: `validate(path, dataset_format=…)` dispatches the
-same way. Loaders and validators are siblings — both are thin, format-specific
-consumers of the `_formats/<format>/` layer.
+same way. Loader, writer, schema, discovery, and validation helpers are owned by
+the relevant `_formats/<format>/` package; only the registry and orchestration
+layers stay top-level and format-agnostic.
 
 ### Loader conventions
 
@@ -501,21 +514,22 @@ landed and the dataset classes / per-format readers and writers follow.
 To support a new input format `foo`:
 
 1. Add `FOO = "foo"` to `DatasetFormat` (`_types.py`).
-2. Create `_formats/foo/` with that format's discovery + schema/parse helpers
-   (mirrors `_formats/hmie/`), keeping format specifics isolated.
+2. Create `_formats/foo/` with that format's `loader.py` plus any discovery,
+   schema, or parse helpers it needs (mirrors `_formats/hmie/`), keeping format
+   specifics isolated.
 3. Write a `FooLoader(Loader)` with `format = DatasetFormat.FOO` and a `load`
    that returns a `BoxTrackDataset`, following the conventions above. Decorate it with
-   `@register_loader`. (Use `HmieLoader` in `dataloader.py` as the template.)
-4. Ensure the module is imported so registration runs (export it from the
-   package `__init__`).
+   `@register_loader`. (Use `HmieLoader` in `_formats/hmie/loader.py` as the template.)
+4. Export the loader from `_formats/foo/__init__.py` and import it from the
+   public package `__init__` so registration runs.
 5. Optionally add format-specific validation under `_formats/foo/` and a
    `DatasetFormat.FOO` branch in `validation.py`.
 
-`FlatMp4Loader` in `flat_mp4.py` is the video-only example for IR-3.3-S-1:
+`FlatMp4Loader` in `_formats/flat_mp4/loader.py` is the video-only example for IR-3.3-S-1:
 it reads only immediate `.mp4` children (no nested discovery), probes codecs
 with OpenCV, accepts H.264 and MPEG-2, and creates video-backed sequences with
-empty `boxes`. `MotChallengeLoader` in `motchallenge.py`, `TaoLoader` in
-`tao.py`, and `VisDroneVideoLoader` in `visdrone.py` are the image-sequence
+empty `boxes`. `MotChallengeLoader` in `_formats/motchallenge/loader.py`, `TaoLoader` in
+`_formats/tao/loader.py`, and `VisDroneVideoLoader` in `_formats/visdrone/loader.py` are the image-sequence
 examples. MOTChallenge expects a standard benchmark root with `train/` and/or
 `test/` and reads `gt/gt.txt` or `det/det.txt` (with optional
 `class_names={id: name}` for MOT-style datasets with custom labels); TAO expects
@@ -529,7 +543,7 @@ instead of `video_path`.
 `databridge.load(root, dataset_format="foo")` then works with no changes to
 the dispatcher, and any existing converter accepts the result.
 
-## Loading — `dataloader.py`
+## Loading — HMIE loader
 
 `load_hmie(root)` (and the `HmieLoader` behind it) is the other consumer of
 the discovery + schema layers.
@@ -550,7 +564,7 @@ discover_hmie_pairs(root) ─► [SnippetPair]
 ```
 
 `BoxTrackDataset` / `VideoSequence` / `BoxAnnotation` live in `model.py`, not in
-`dataloader.py`, on purpose: the model is the **format-neutral hub** of the
+`_formats/hmie/loader.py`, on purpose: the model is the **format-neutral hub** of the
 bridge. `load_hmie` is one loader that produces it; future loaders (COCO,
 YOLO, ...) produce the same `BoxTrackDataset`, and converters consume `BoxTrackDataset`
 without depending on any loader. That is what makes databridge an N-to-M
