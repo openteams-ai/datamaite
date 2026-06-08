@@ -10,15 +10,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from databridge._cache import ValidationCache
-from databridge._formats.hmie import (
-    DiscoveryResult,
-    SnippetPair,
-    check_annotation_schema,
-    check_video_annotation_consistency,
-    discover_hmie_pairs,
-    probe_video,
-)
+from databridge._formats.hmie.annotation_checks import check_annotation_schema
 from databridge._formats.hmie.categories import SKIP_VIDEO_CONSISTENCY, SKIP_VIDEO_INTEGRITY
+from databridge._formats.hmie.consistency_checks import check_video_annotation_consistency
+from databridge._formats.hmie.discovery import DiscoveryResult, SnippetPair, discover_hmie_pairs
+from databridge._formats.hmie.video_checks import probe_video
 from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
 
 logger = logging.getLogger(__name__)

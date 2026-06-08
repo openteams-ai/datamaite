@@ -218,7 +218,7 @@ class TestPrototypeParity:
         }
         _write_annotation(ann_dir / "CDAO_SRC1_clip.mp4_h.json", data)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.dataloader"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.hmie.loader"):
             ds = load_hmie(tmp_path, annotation_dir=ann_dir)
 
         seq = ds.sequences[0]
@@ -443,7 +443,7 @@ class TestTolerance:
         }
         _write_annotation(ann_dir / "CDAO_SRC1_clip.mp4_h.json", data)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.dataloader"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.hmie.loader"):
             ds = load_hmie(tmp_path, annotation_dir=ann_dir)
 
         # Identity fallback: raw key preserved.

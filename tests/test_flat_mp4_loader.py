@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from databridge import DatasetFormat, FlatMp4Loader, load, load_flat_mp4
-from databridge.flat_mp4 import _canonical_codec, _fourcc_to_string, _probe_mp4_video, _VideoProbe
+from databridge._formats.flat_mp4.loader import _canonical_codec, _fourcc_to_string, _probe_mp4_video, _VideoProbe
 from databridge.loaders import available_formats, get_loader
 from databridge.model import BoxTrackDataset
 
@@ -50,7 +50,10 @@ class TestFlatMp4Registry:
 
     def test_dispatch_loads_flat_mp4(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         _write_mp4(tmp_path / "clip.mp4")
-        monkeypatch.setattr("databridge.flat_mp4._probe_mp4_video", lambda _p: _probe(codec="h264", fourcc="avc1"))
+        monkeypatch.setattr(
+            "databridge._formats.flat_mp4.loader._probe_mp4_video",
+            lambda _p: _probe(codec="h264", fourcc="avc1"),
+        )
 
         ds = load(tmp_path, dataset_format="flat_mp4")
 
@@ -72,7 +75,7 @@ class TestFlatMp4HappyPath:
             h264.name: _probe(codec="h264", fourcc="avc1", fps=30.0, frame_count=90, width=1920, height=1080),
             mpeg2.name: _probe(codec="mpeg2", fourcc="mpg2", fps=25.0, frame_count=50, width=720, height=480),
         }
-        monkeypatch.setattr("databridge.flat_mp4._probe_mp4_video", lambda p: probes[p.name])
+        monkeypatch.setattr("databridge._formats.flat_mp4.loader._probe_mp4_video", lambda p: probes[p.name])
 
         ds = load_flat_mp4(tmp_path)
 
@@ -129,7 +132,7 @@ class TestFlatMp4MalformedInputs:
         caplog,
         monkeypatch,  # type: ignore[no-untyped-def]
     ) -> None:
-        with caplog.at_level(logging.WARNING, logger="databridge.flat_mp4"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.flat_mp4.loader"):
             missing = load_flat_mp4(tmp_path / "missing")
             empty = load_flat_mp4(tmp_path)
 
@@ -140,7 +143,7 @@ class TestFlatMp4MalformedInputs:
 
         # Ensure an empty directory did not try to probe anything.
         monkeypatch.setattr(
-            "databridge.flat_mp4._probe_mp4_video",
+            "databridge._formats.flat_mp4.loader._probe_mp4_video",
             lambda _p: (_ for _ in ()).throw(AssertionError("probe should not run")),
         )
         assert load_flat_mp4(tmp_path).sequence_count == 0
@@ -162,9 +165,9 @@ class TestFlatMp4MalformedInputs:
             zero_res.name: _probe(codec="h264", fourcc="avc1", width=0, height=0),
             unsupported.name: _probe(codec=None, fourcc="mp4v"),
         }
-        monkeypatch.setattr("databridge.flat_mp4._probe_mp4_video", lambda p: probes[p.name])
+        monkeypatch.setattr("databridge._formats.flat_mp4.loader._probe_mp4_video", lambda p: probes[p.name])
 
-        with caplog.at_level(logging.WARNING, logger="databridge.flat_mp4"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.flat_mp4.loader"):
             ds = load_flat_mp4(tmp_path)
 
         assert ds.sequence_count == 0
@@ -176,7 +179,7 @@ class TestFlatMp4MalformedInputs:
     def test_probe_dependency_failure_skips_video(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         _write_mp4(tmp_path / "clip.mp4")
         monkeypatch.setattr(
-            "databridge.flat_mp4._probe_mp4_video",
+            "databridge._formats.flat_mp4.loader._probe_mp4_video",
             lambda _p: _probe(codec=None, fourcc=None, opened=False),
         )
 
@@ -273,7 +276,7 @@ class TestFlatMp4RealProbe:
         assert probe.codec_fourcc  # fourcc number decoded to a non-empty token
         assert probe.codec is None  # not an H.264 / MPEG-2 codec
 
-        with caplog.at_level(logging.WARNING, logger="databridge.flat_mp4"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.flat_mp4.loader"):
             ds = load_flat_mp4(tmp_path)
 
         assert ds.sequence_count == 0
@@ -285,7 +288,7 @@ class TestFlatMp4RealProbe:
         # (the open path runs) and skipped, not crash the load.
         (tmp_path / "broken.mp4").write_bytes(b"\x00\x01\x02 not an mp4 container")
 
-        with caplog.at_level(logging.WARNING, logger="databridge.flat_mp4"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.flat_mp4.loader"):
             ds = load_flat_mp4(tmp_path)
 
         assert ds.sequence_count == 0

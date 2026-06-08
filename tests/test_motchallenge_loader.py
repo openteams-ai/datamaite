@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from databridge import DatasetFormat, load, load_motchallenge
+from databridge._formats.motchallenge.loader import MotChallengeLoader
 from databridge.loaders import available_formats, get_loader
 from databridge.model import BoxTrackDataset
-from databridge.motchallenge import MotChallengeLoader
 
 
 def _write_mot_sequence(
@@ -195,7 +195,7 @@ class TestMotChallengeMalformedInputs:
         _write_mot_sequence(tmp_path, split="train", name="has-gt", gt_rows=["1,1,10,20,30,40,1,1,1"])
         _write_mot_sequence(tmp_path, split="test", name="no-gt", gt_rows=None)
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(tmp_path)
 
         assert ds.sequence_count == 1
@@ -204,7 +204,7 @@ class TestMotChallengeMalformedInputs:
     def test_requires_full_benchmark_root(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         seq = _write_mot_sequence(tmp_path, gt_rows=["1,1,10,20,30,40,1,1,1"])
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(seq)
 
         assert ds.sequence_count == 0
@@ -227,7 +227,7 @@ class TestMotChallengeMalformedInputs:
             ],
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(tmp_path)
 
         assert ds.num_boxes == 1
@@ -244,7 +244,7 @@ class TestMotChallengeMalformedInputs:
             frame_count=0,
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(tmp_path)
 
         seq = ds.sequences[0]
@@ -260,7 +260,7 @@ class TestMotChallengeMalformedInputs:
     ) -> None:
         _write_mot_sequence(tmp_path, gt_rows=["1,1,10,20,30,40,1"])
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(tmp_path, classes={1})
 
         assert ds.num_boxes == 0
@@ -287,7 +287,7 @@ class TestMotChallengeMalformedInputs:
             encoding="utf-8",
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(tmp_path)
 
         loaded = ds.sequences[0]
@@ -304,8 +304,8 @@ class TestMotChallengeMalformedInputs:
         def fail_scan(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("frame scan should not run")
 
-        monkeypatch.setattr("databridge.motchallenge._frame_paths", fail_scan)
-        monkeypatch.setattr("databridge.motchallenge._count_frame_files", fail_scan)
+        monkeypatch.setattr("databridge._formats.motchallenge.loader._frame_paths", fail_scan)
+        monkeypatch.setattr("databridge._formats.motchallenge.loader._count_frame_files", fail_scan)
 
         ds = load_motchallenge(tmp_path)
 
@@ -327,7 +327,7 @@ class TestMotChallengeMalformedInputs:
     def test_det_ignores_classes_filter(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         _write_mot_sequence(tmp_path, gt_rows=None, det_rows=["1,-1,10,20,30,40,0.42,-1,-1,-1"])
 
-        with caplog.at_level(logging.WARNING, logger="databridge.motchallenge"):
+        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.loader"):
             ds = load_motchallenge(tmp_path, annotation_source="det", classes={1})
 
         assert ds.num_boxes == 1

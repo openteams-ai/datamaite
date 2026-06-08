@@ -18,7 +18,7 @@ the loader normalises Scale frame keys into video-frame space at load time
 ``afr``, so the writer emits ``annotation_frame_rate == video fps`` (ratio 1),
 giving ``key == frame_index``. Box geometry and frame placement round-trip
 exactly; the label-space ``afr``/key encoding is normalised away by design
-(see ``dataloader.py`` -- storing the raw key would put boxes and
+(see ``_formats/hmie/loader.py`` -- storing the raw key would put boxes and
 ``num_frames`` on different clocks).
 
 Categories are written as their ontology ``label`` (URI), so they re-resolve

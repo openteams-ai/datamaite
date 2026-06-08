@@ -34,6 +34,7 @@ Conventions every loader follows
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from importlib import import_module
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -75,8 +76,27 @@ class Loader(ABC):
 
 
 # Format -> loader-class registry. Populated by register_loader at import
-# time (each format module decorates its Loader subclass).
+# time (each format module decorates its Loader subclass). Built-in loaders are
+# imported lazily so validation-only imports do not pull reader code into memory.
 _LOADERS: dict[DatasetFormat, type[Loader]] = {}
+_BUILTIN_LOADER_MODULES = (
+    "databridge._formats.flat_mp4.loader",
+    "databridge._formats.hmie.loader",
+    "databridge._formats.motchallenge.loader",
+    "databridge._formats.tao.loader",
+    "databridge._formats.visdrone.loader",
+)
+_BUILTIN_LOADERS_IMPORTED = False
+
+
+def _ensure_builtin_loaders() -> None:
+    """Import built-in loader modules once so their decorators register."""
+    global _BUILTIN_LOADERS_IMPORTED
+    if _BUILTIN_LOADERS_IMPORTED:
+        return
+    for module_name in _BUILTIN_LOADER_MODULES:
+        import_module(module_name)
+    _BUILTIN_LOADERS_IMPORTED = True
 
 
 def register_loader(loader_cls: type[Loader]) -> type[Loader]:
@@ -87,6 +107,8 @@ def register_loader(loader_cls: type[Loader]) -> type[Loader]:
     ``TypeError`` if the class does not set ``format`` to a
     :class:`DatasetFormat`.
     """
+    if loader_cls.__module__ not in _BUILTIN_LOADER_MODULES:
+        _ensure_builtin_loaders()
     fmt = getattr(loader_cls, "format", None)
     if not isinstance(fmt, DatasetFormat):
         raise TypeError(f"{loader_cls.__name__} must set `format` to a DatasetFormat to be registered")
@@ -96,6 +118,7 @@ def register_loader(loader_cls: type[Loader]) -> type[Loader]:
 
 def available_formats() -> list[DatasetFormat]:
     """Formats that currently have a registered loader, sorted by value."""
+    _ensure_builtin_loaders()
     return sorted(_LOADERS, key=lambda f: f.value)
 
 
@@ -106,6 +129,7 @@ def get_loader(dataset_format: DatasetFormat | str) -> Loader:
     Raises ``ValueError`` for an unknown format string, or when no loader is
     registered for an otherwise-valid format.
     """
+    _ensure_builtin_loaders()
     fmt = dataset_format if isinstance(dataset_format, DatasetFormat) else DatasetFormat(str(dataset_format).lower())
     try:
         loader_cls = _LOADERS[fmt]

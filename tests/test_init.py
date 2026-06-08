@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 
 def test_import() -> None:
     import databridge
@@ -54,6 +60,36 @@ def test_public_api() -> None:
     assert callable(load_visdrone_video)
     assert callable(validate)
     assert callable(validate_annotation)
+
+
+def test_validation_import_keeps_loader_and_writer_modules_lazy() -> None:
+    """The validation import path should not eagerly load format loaders/writers."""
+    code = """
+import json
+import sys
+import databridge.validation
+modules = (
+    "databridge._formats.hmie.loader",
+    "databridge._formats.hmie.writer",
+)
+print(json.dumps({module: module in sys.modules for module in modules}))
+"""
+    env = dict(os.environ)
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter/code for import isolation
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    loaded = json.loads(completed.stdout)
+    assert loaded == {
+        "databridge._formats.hmie.loader": False,
+        "databridge._formats.hmie.writer": False,
+    }
 
 
 def test_version_module_shape() -> None:
