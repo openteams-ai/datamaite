@@ -111,11 +111,13 @@ the writer contract.
 src/databridge/
     __init__.py              Public API surface
     _cli.py                  CLI entrypoint (`databridge validate ...`)
-    _types.py                Shared types: Finding, Severity, ValidationResult
+    _types.py                Shared types: Finding, Severity, ValidationResult, DatasetFormat, Task
     _cache.py                On-disk cache for expensive video probes
     _report.py               Text / JSON / JSONL / HTML report rendering
     _version.py              Package version
     model.py                 Neutral model + MAITE MOT surface: BoxTrackDataset, VideoSequence, BoxAnnotation
+    geometry.py              Canonical absolute-pixel xywh bbox + conversions (xyxy / cxcywh / normalized / YOLO)
+    taxonomy.py              Source-preserving category table: Taxonomy, CategoryEntry (will replace dict[str,int])
     loaders.py               Loader contract (ABC) + registry + load() dispatch
     writers.py               Writer contract (ABC) + registry + write() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
@@ -481,15 +483,18 @@ model is a temporal box-track IR: a `BoxTrackDataset` holds `VideoSequence`s of
 `BoxAnnotation`s. A `VideoSequence` may be backed by a single video file
 (`video_path`, HMIE) or by ordered frame images (`frame_dir` / pattern for
 MOTChallenge and VisDrone Video, explicit `frame_files` for TAO, plus
-`frame_filename()` / `frame_path()` helpers). **Still-image datasets** (COCO,
-image-mode YOLO) will be represented by an `ImageSample` sibling of
-`VideoSequence`
-carrying the same `BoxAnnotation`, added together with the first still-image
-loader — at which point `BoxTrackDataset` holds a mix of sequence and image
-samples. The `Loader.load() -> BoxTrackDataset` contract does not change when
-that lands, which is the whole point of fixing the contract now. (We deliberately
-do not define `ImageSample` ahead of a loader that produces it, to avoid a
-consumer-less abstraction we'd likely get wrong.)
+`frame_filename()` / `frame_path()` helpers).
+
+**Still-image object detection (OD) and image classification (IC) are separate
+tasks, not a sample variant inside `BoxTrackDataset`.** A still image is not a
+degenerate one-frame video — it has different task semantics, a different MAITE
+protocol, and different output formats. So rather than adding an `ImageSample`
+to the video model, databridge grows a **task axis**: `BoxTrackDataset` (MOT)
+gains sibling `ObjectDetectionDataset` and `ImageClassificationDataset` classes,
+each natively its own MAITE surface. See
+[Task-aware datasets — IC and OD](#task-aware-datasets--ic-and-od) for the full
+design; the foundation primitives (`Task`, `geometry.py`, `taxonomy.py`) have
+landed and the dataset classes / per-format readers and writers follow.
 
 ### Adding a new loader
 
@@ -634,9 +639,13 @@ Mechanics that keep this honest:
   `maite.protocols.multiobject_tracking.Dataset` by shape. (The `maite`
   package itself is only used in tests; the `[maite]` extra ships it for the
   consumer's convenience since anyone using the MAITE surface has it anyway.)
-- **MOT is the format.** For video box-tracks the MOT surface is the whole
-  surface (`ds[i]` is one video). Object-detection is a *different AI task*,
-  not a conversion target, so there is no OD projection here.
+- **MOT is the surface for video box-tracks** (`ds[i]` is one video). Still-image
+  object detection is a *separate task* with its own dataset class and MAITE
+  surface (see [Task-aware datasets](#task-aware-datasets--ic-and-od)), not a
+  sample type here. The one planned cross-task bridge is an explicit, opt-in
+  `BoxTrackDataset.as_object_detection()` per-frame projection (drops track ids,
+  lossy) for the "evaluate a still-image detector on video frames" workflow —
+  designed below, not yet implemented.
 - **Two length / iteration views.** `len(ds)` / `ds[i]` / `for x in ds` are
   the MAITE **item** view — one item per *video-bearing* sequence. The
   **record** view is `ds.sequence_count` / `ds.iter_sequences()` /
@@ -752,3 +761,122 @@ by `category_uri`, not by id.
 - **Tracks and dataset-wide category ids** (`track_id`, `category_id`) are
   already in the model, which the track-centric (MOT) and class-indexed (YOLO)
   formats need.
+
+## Task-aware datasets — IC and OD
+
+databridge is centered on FMV/video box tracks (the MOT task). The roadmap adds
+still-image **object detection (OD)** and **image classification (IC)**. These are
+*separate tasks*, not variants of the video model — a still image has different
+task semantics, a different MAITE protocol, and different output formats. The
+abstraction grows a **task axis** rather than stretching `BoxTrackDataset`.
+
+**Status:** the foundation primitives have landed — `Task` (`_types.py`),
+`geometry.py` (canonical bbox + conversions), and `taxonomy.py` (source-preserving
+category table). The dataset classes, the `(Task, Format, variant)` registry
+rewire, and the per-format readers/writers follow in subsequent slices.
+
+### Three sibling dataset classes (not one polymorphic dataset)
+
+A MAITE dataset is **single-task**: `ds[i]` returns one task's item. `BoxTrackDataset`
+is a native MAITE MOT dataset precisely because it commits to one task. So OD and IC
+get their own classes, each natively its own MAITE surface — a polymorphic
+`VisionDataset` could not be a native MAITE dataset and would force an adapter back.
+
+| databridge class | MAITE protocol (0.9.5) | `ds[i]` input | `ds[i]` target |
+|---|---|---|---|
+| `BoxTrackDataset` (today) | `multiobject_tracking` | `VideoStream` | `MultiobjectTrackingTarget` (per-frame `boxes/labels/scores/track_ids`) |
+| `ObjectDetectionDataset` | `object_detection` | `Image` (single) | `ObjectDetectionTarget{boxes,labels,scores}` |
+| `ImageClassificationDataset` | `image_classification` | `Image` (single) | one-hot / prob vector |
+
+All three were verified against `maite` 0.9.5 (all three protocol modules exist).
+OD/IC inputs are single images → they need an **image decoder** (PIL/opencv), distinct
+from MOT's PyAV video decoder. *Video classification* (HF) has no MAITE 0.9.5 protocol
+and is out of scope.
+
+### Conversion is task-closed
+
+Conversion stays within a task (any input format of a task → its IR → any output format
+of the *same* task). The only cross-task bridge is the lossy, one-way `MOT→OD` per-frame
+projection; everything else is refused rather than fabricated.
+
+```mermaid
+flowchart LR
+    fM["MOT formats:<br/>HMIE · MOTChallenge · TAO · VisDrone-VID · flat-MP4"] <--> IRM(["BoxTrackDataset<br/>· MOT ·"])
+    fO["OD formats:<br/>COCO · YOLO · Pascal-VOC · KITTI · VisDrone-DET · HF-OD"] <--> IRO(["ObjectDetectionDataset<br/>· OD ·"])
+    fI["IC formats:<br/>HF imagefolder / ImageNet"] <--> IRI(["ImageClassificationDataset<br/>· IC ·"])
+    IRM -. "as_object_detection()<br/>per-frame · drops track_ids · lossy · one-way" .-> IRO
+
+    classDef ir fill:#fff8e1,stroke:#f57c00,stroke-width:2px;
+    classDef fmt fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
+    class IRM,IRO,IRI ir;
+    class fM,fO,fI fmt;
+```
+
+Refused cross-task conversions (would fabricate data): `OD→MOT` / `IC→*` (no tracks or
+boxes to invent), `OD→IC` / `MOT→IC` (would fabricate image-level labels from box presence).
+
+### Format and task are independent axes — `(Task, Format, variant)`
+
+One wire format can serve multiple tasks (VisDrone → MOT or OD; HuggingFace → OD or IC),
+so `Task` is a separate enum from `DatasetFormat`, and the loader/validator/writer registries
+key on the triple `(Task, DatasetFormat, variant)`. The `variant` axis is required because
+VisDrone's VID/MOT/DET layouts are otherwise indistinguishable (the current
+`DatasetFormat.VISDRONE_VIDEO` value already smuggled this discriminator into the format).
+
+**Public API — task-first loaders, format as a parameter:**
+
+```python
+load_mot(root, *, format, variant="default") -> BoxTrackDataset
+load_od (root, *, format, variant="default") -> ObjectDetectionDataset
+load_ic (root, *, format, variant="default") -> ImageClassificationDataset
+# generic dispatch underneath: load(root, *, task, dataset_format, variant)
+```
+
+The task lives in the call (pins the return type, disambiguates multi-task formats);
+`variant` selects among same-task layouts. Existing `load_hmie()` etc. become thin aliases
+over `load_mot(format=...)`, and `load()` defaults `task=MOT`, so today's calls are unchanged.
+Writers stay object-driven (`write(dataset, format)` infers task from the dataset type).
+
+### Generalized reader/writer interfaces
+
+The `Loader`/`Writer` ABCs gain `task` and `variant` ClassVars alongside `format`, and writers
+gain a **`WriterCapabilities`** descriptor so `convert()` can pre-check feasibility *before*
+writing — a hard error on a missing required field, a warning on a lossy one:
+
+```python
+class Loader(ABC):
+    task: ClassVar[Task]; format: ClassVar[DatasetFormat]; variant: ClassVar[str] = "default"
+    def load(self, root, **opts) -> VisionDataset: ...   # returns the class matching self.task
+
+@dataclass(frozen=True)
+class WriterCapabilities:
+    required_fields: frozenset[str] = frozenset()   # e.g. {"width","height"} for YOLO  -> hard error if absent
+    lossy_without: dict[str, str] = {}              # field -> reason (COCO "segmentation": "boxes-only")
+    forbids_dense_remap: bool = False               # VisDrone cat 0/11 are literal, must not renumber
+    emits_empty_label_files: bool = False           # YOLO/KITTI/VisDrone: empty image still writes an empty label
+```
+
+The FMV `Loader`/`Writer` already in the tree become the `task=MOT` instances of this same
+contract (no behavior change). Each per-format issue (COCO/YOLO/VOC/KITTI/VisDrone-DET/HF) is
+then "implement a reader and/or writer against this interface and register it under
+`(task, format, variant)`".
+
+### Categories and boxes (landed primitives)
+
+- **`Taxonomy`** (`taxonomy.py`) is the source-preserving category table that **will replace**
+  `BoxTrackDataset.categories: dict[str, int]` as dataset-level metadata (the type has landed;
+  the `categories → taxonomy` migration is a later slice — nothing consumes it yet). It
+  preserves the *source* id (int **or** string/synset **or** none), `supercategory`/`synset`
+  provenance, and per-format flags, and derives the dense contiguous ids YOLO needs as a
+  *projection* (stored ids untouched). Identity is `(source_dataset, source_id)` so merging
+  two datasets' class `0` does not silently fuse them. This is what **unblocks fixing** an
+  existing regression — today's `dict[str,int]` drops TAO synset/supercategory — once the TAO
+  loader is migrated onto it.
+- **`geometry.py`** keeps every box in one canonical form — absolute-pixel `xywh` — and
+  converts to/from format-native shapes (VOC `xyxy` inclusive corners, YOLO normalized
+  `cxcywh`, ...) **only at the format boundary**. YOLO's normalized boxes need image
+  dimensions to materialize; loaders that cannot read the image keep the native normalized
+  values rather than fabricating an absolute box.
+
+A condensed view of the per-format field requirements lives with each format's reader/writer
+issue; `WriterCapabilities` is where those requirements become a checkable contract.

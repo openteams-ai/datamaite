@@ -11,12 +11,15 @@ def test_import() -> None:
 
 def test_public_api() -> None:
     from databridge import (
+        CategoryEntry,
         DatasetFormat,
         Finding,
         FlatMp4Loader,
         MotChallengeLoader,
         Severity,
         TaoLoader,
+        Task,
+        Taxonomy,
         ValidationResult,
         VisDroneVideoLoader,
         load_flat_mp4,
@@ -34,6 +37,11 @@ def test_public_api() -> None:
     assert DatasetFormat.VISDRONE_VIDEO.value == "visdrone_video"
     assert Severity.ERROR.value == "error"
     assert Severity.WARNING.value == "warning"
+    assert Task.MOT.value == "mot"
+    assert Task.OD.value == "od"
+    assert Task.IC.value == "ic"
+    assert Taxonomy is not None
+    assert CategoryEntry is not None
     assert Finding is not None
     assert ValidationResult is not None
     assert FlatMp4Loader is not None
