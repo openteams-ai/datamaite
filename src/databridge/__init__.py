@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from databridge._formats.hmie.writer import HmieWriter
     from databridge._formats.motchallenge.loader import MotChallengeLoader, load_motchallenge
     from databridge._formats.tao.loader import TaoLoader, load_tao
+    from databridge._formats.tao.writer import TaoWriter
     from databridge._formats.visdrone.loader import VisDroneVideoLoader, load_visdrone_video
 
 # Library convention: attach a NullHandler so downstream applications
@@ -36,6 +37,7 @@ _LAZY_EXPORTS = {
     "HmieWriter": ("databridge._formats.hmie.writer", "HmieWriter"),
     "MotChallengeLoader": ("databridge._formats.motchallenge.loader", "MotChallengeLoader"),
     "TaoLoader": ("databridge._formats.tao.loader", "TaoLoader"),
+    "TaoWriter": ("databridge._formats.tao.writer", "TaoWriter"),
     "VisDroneVideoLoader": ("databridge._formats.visdrone.loader", "VisDroneVideoLoader"),
     "load_flat_mp4": ("databridge._formats.flat_mp4.loader", "load_flat_mp4"),
     "load_hmie": ("databridge._formats.hmie.loader", "load_hmie"),
@@ -69,6 +71,7 @@ __all__ = [
     "MotChallengeLoader",
     "Severity",
     "TaoLoader",
+    "TaoWriter",
     "Task",
     "Taxonomy",
     "ValidationCache",

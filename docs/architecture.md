@@ -53,6 +53,7 @@ flowchart LR
     subgraph consumers [Consumers]
         MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(the model IS one)"]
         TM["to_mot"]
+        TT["<b>to_tao</b>"]
         TY["to_yolo"]
         TC["to_coco"]
     end
@@ -60,6 +61,7 @@ flowchart LR
     subgraph out [Output]
         MAITEOUT([model / metric<br/>in-memory])
         MOTOUT([MOTChallenge])
+        TAOOUT([TAO])
         YOLOUT([YOLO])
         COCOUT([COCO])
     end
@@ -80,10 +82,12 @@ flowchart LR
     LY -.-> HUB
     HUB --> MAITE
     HUB --> TM
+    HUB --> TT
     HUB --> TY
     HUB --> TC
     MAITE --> MAITEOUT
     TM -.-> MOTOUT
+    TT --> TAOOUT
     TY -.-> YOLOUT
     TC -.-> COCOUT
 
@@ -91,15 +95,15 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB hub;
-    class LH,LF,LM,LT,LV,MAITE impl;
-    class MAITEOUT,MP4IN,MOTIN,TAOIN,VISIN impl;
+    class LH,LF,LM,LT,LV,TT,MAITE impl;
+    class MAITEOUT,MP4IN,MOTIN,TAOIN,VISIN,TAOOUT impl;
     class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
 ```
 
 Today the HMIE loader (`load_hmie`), the flat MP4 loader (`load_flat_mp4`),
 the MOTChallenge loader (`load_motchallenge`), the TAO loader (`load_tao`),
 the VisDrone Video loader (`load_visdrone_video`), the HMIE validation
-pipeline, the HMIE reference writer, and the MAITE surface (`databridge.maite`)
+pipeline, the HMIE and TAO writers, and the MAITE surface (`databridge.maite`)
 are implemented. See [Loading](#loading--hmie-loader) for how loaders build the
 model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the
 MAITE surface, and [Writer architecture](#writer-architecture--writerspy) for
@@ -148,6 +152,7 @@ src/databridge/
         tao/
             __init__.py              TAO format exports
             loader.py                TaoLoader: official TAO JSON -> BoxTrackDataset
+            writer.py                TaoWriter: BoxTrackDataset -> official TAO root
         visdrone/
             __init__.py              VisDrone format exports
             loader.py                VisDroneVideoLoader: VisDrone VID/MOT video -> BoxTrackDataset
@@ -699,15 +704,19 @@ flowchart TD
     REG[("<b>registry</b><br/>DatasetFormat → Writer")]
     BASE["<b>Writer (ABC)</b><br/>write(dataset, dest, **options) → list[Path]"]
     HMIE["<b>HmieWriter</b><br/>(_formats/hmie/writer.py)"]
+    TAO["<b>TaoWriter</b><br/>(_formats/tao/writer.py)"]
     NEW["MotWriter, YoloWriter, …<br/>(future)"]
 
     CONVERT -->|load → write| WRITE
     WRITE -->|get_writer| REG
     REG --> HMIE
+    REG --> TAO
     REG -.-> NEW
     HMIE -->|subclasses| BASE
+    TAO -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_writer| REG
+    TAO -->|@register_writer| REG
     NEW -.->|@register_writer| REG
 
     classDef entry fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
@@ -716,7 +725,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class CONVERT,WRITE entry;
     class REG store;
-    class HMIE impl;
+    class HMIE,TAO impl;
     class NEW planned;
 ```
 
@@ -741,11 +750,10 @@ flowchart TD
 - **Keyword-only options.** Format variants (e.g. MOT16 vs MOT20 columns) are a
   writer option, not a separate `DatasetFormat`.
 
-### Reference writer: HMIE (round-trip proof)
+### Reference writers: HMIE and TAO (round-trip proof)
 
-`HmieWriter` (`_formats/hmie/writer.py`) is the reference writer that proves the
-architecture. Because databridge also has the HMIE *loader*, it closes a full
-round trip:
+`HmieWriter` (`_formats/hmie/writer.py`) is the first reference writer. Because
+databridge also has the HMIE *loader*, it closes a full round trip:
 
 ```
 load_hmie(src) → BoxTrackDataset → write(…, output_format="hmie") → load_hmie(dest)
@@ -757,6 +765,14 @@ that `BoxTrackDataset` is a lossless hub. The writer emits annotations with
 back) and labels as ontology URIs (so categories re-resolve to the same names);
 the integer `category_id` is reassigned on reload, so round-trip equivalence is
 by `category_uri`, not by id.
+
+`TaoWriter` (`_formats/tao/writer.py`) emits an official TAO root with
+`annotations/<split>.json` and `frames/...`. TAO is image-sequence based:
+existing image-sequence inputs copy frame files directly, while video-backed
+inputs are decoded into frame images and require the optional `video` extra. It
+preserves TAO IDs from source metadata/attributes when present and generates
+stable IDs otherwise; unknown sequence splits default to the writer's `split`
+option (`"train"` by default).
 
 ### Adding a new writer
 

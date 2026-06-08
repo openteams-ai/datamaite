@@ -30,8 +30,8 @@ in-memory model (`BoxTrackDataset`), a **validator** checks a format on disk,
 and a **writer** serialises the model out to an output format (`convert` pairs a
 loader and a writer for on-disk → on-disk conversion). HMIE/Scale, flat MP4
 video folders, MOTChallenge, TAO, and VisDrone Video are implemented input
-formats; HMIE/Scale is the reference output format (proving the writer
-architecture via a load → write → load round trip), and other writers are
+formats; HMIE/Scale and TAO are implemented output formats (proving the writer
+architecture via load → write → load round trips), and other writers are
 planned.
 
 | Format | Load | Validate | Write |
@@ -39,7 +39,7 @@ planned.
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
 | MOTChallenge | ✅ | — | planned |
-| TAO | ✅ | — | planned |
+| TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | planned |
 | YOLO | planned | planned | planned |
 | COCO | planned | planned | planned |
@@ -234,10 +234,21 @@ files = write(ds, "/path/to/out", output_format="hmie")   # -> list of files wri
 convert("/path/to/dataset", "/path/to/out", input_format="hmie", output_format="hmie")
 ```
 
-HMIE is the reference writer: `load_hmie → write(output_format="hmie") →
-load_hmie` recovers the same box/category content (the round trip that proves
-the writer architecture and that `BoxTrackDataset` is a lossless hub). Adding a
-new output format is a `Writer` subclass + `@register_writer` — see
+Write TAO with the same API. TAO is image-sequence based, so video-backed inputs
+are decoded to frame images and require the `video` extra; existing
+image-sequence inputs copy their frame files directly.
+
+```python
+from databridge import load_hmie, write
+
+ds = load_hmie("/path/to/hmie", require_video=True)  # video-backed source
+write(ds, "/path/to/tao-out", output_format="tao", split="train")
+```
+
+HMIE and TAO both have round-trip writers: `load_hmie → write(output_format="hmie") →
+load_hmie` and `load_tao → write(output_format="tao") → load_tao` recover the
+same box/category/frame content represented by `BoxTrackDataset`. Adding a new
+output format is a `Writer` subclass + `@register_writer` — see
 [docs/architecture.md](docs/architecture.md).
 
 ## CLI Usage
