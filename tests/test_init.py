@@ -24,6 +24,7 @@ def test_public_api() -> None:
         MotChallengeLoader,
         Severity,
         TaoLoader,
+        TaoWriter,
         Task,
         Taxonomy,
         ValidationResult,
@@ -53,6 +54,7 @@ def test_public_api() -> None:
     assert FlatMp4Loader is not None
     assert MotChallengeLoader is not None
     assert TaoLoader is not None
+    assert TaoWriter is not None
     assert VisDroneVideoLoader is not None
     assert callable(load_flat_mp4)
     assert callable(load_motchallenge)

@@ -75,7 +75,10 @@ class Writer(ABC):
 # (each format module decorates its Writer subclass). Built-in writers are
 # imported lazily so validation-only imports do not pull writer code into memory.
 _WRITERS: dict[DatasetFormat, type[Writer]] = {}
-_BUILTIN_WRITER_MODULES = ("databridge._formats.hmie.writer",)
+_BUILTIN_WRITER_MODULES = (
+    "databridge._formats.hmie.writer",
+    "databridge._formats.tao.writer",
+)
 _BUILTIN_WRITERS_IMPORTED = False
 
 
