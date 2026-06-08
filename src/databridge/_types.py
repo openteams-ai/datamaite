@@ -196,13 +196,28 @@ def _shorten_label(label: str) -> str:
 
 
 class DatasetFormat(enum.Enum):
-    """Supported dataset formats."""
+    """Supported dataset formats (the on-disk *wire* format, independent of task)."""
 
     FLAT_MP4 = "flat_mp4"
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"
     VISDRONE_VIDEO = "visdrone_video"
+
+
+class Task(enum.Enum):
+    """Vision task a dataset belongs to.
+
+    Orthogonal to :class:`DatasetFormat`: one wire format may serve more than
+    one task (e.g. VisDrone has video-tracking and still-image-detection
+    variants). Loaders/validators/writers are keyed by ``(Task, DatasetFormat,
+    variant)`` and each task maps 1:1 to a MAITE protocol module
+    (``multiobject_tracking`` / ``object_detection`` / ``image_classification``).
+    """
+
+    MOT = "mot"  # multi-object tracking (FMV / video box tracks)
+    OD = "od"  # still-image object detection
+    IC = "ic"  # image classification
 
 
 class Severity(enum.Enum):

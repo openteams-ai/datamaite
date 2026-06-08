@@ -7,7 +7,7 @@ from databridge._formats.hmie.discovery import find_batch_roots
 from databridge._formats.hmie.writer import HmieWriter
 from databridge._report import render_html_report, render_html_report_multi
 from databridge._stats import dataset_stats
-from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
+from databridge._types import DatasetFormat, Finding, Severity, Task, ValidationResult
 from databridge._version import __version__, __version_tuple__
 from databridge.conversion import convert
 from databridge.dataloader import HmieLoader, load_hmie
@@ -16,6 +16,7 @@ from databridge.loaders import Loader, available_formats, get_loader, load, regi
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.motchallenge import MotChallengeLoader, load_motchallenge
 from databridge.tao import TaoLoader, load_tao
+from databridge.taxonomy import CategoryEntry, Taxonomy
 from databridge.validation import validate, validate_annotation, validate_batches
 from databridge.visdrone import VisDroneVideoLoader, load_visdrone_video
 from databridge.writers import Writer, available_output_formats, get_writer, register_writer, write
@@ -28,6 +29,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __all__ = [
     "BoxAnnotation",
     "BoxTrackDataset",
+    "CategoryEntry",
     "DatasetFormat",
     "Finding",
     "FlatMp4Loader",
@@ -37,6 +39,8 @@ __all__ = [
     "MotChallengeLoader",
     "Severity",
     "TaoLoader",
+    "Task",
+    "Taxonomy",
     "ValidationCache",
     "ValidationResult",
     "VideoSequence",

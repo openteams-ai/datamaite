@@ -34,8 +34,10 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-# Bounding box as (left, top, width, height) in pixels.
-BBox = tuple[float, float, float, float]
+# Bounding box as (left, top, width, height) in pixels. Single definition lives
+# in geometry.py (with the conversion helpers); re-exported here for the model's
+# callers. geometry imports only stdlib, so this is import-cycle-free.
+from databridge.geometry import BBox
 
 
 def category_name_from_uri(category_uri: str) -> str:
