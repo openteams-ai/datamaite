@@ -462,6 +462,35 @@ class TestHelpers:
         assert "failed" in out
         assert "fully compliant" not in out
 
+    def test_multi_batch_table_video_column_skipped(self, multi_batch_hmie: Path, capsys) -> None:
+        """--skip-video-check: the batch table Video column shows SKIP, not a misleading PASS."""
+        rc = main(["validate", str(multi_batch_hmie), "--skip-video-check"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # One SKIP per batch row in the Video column (the fixture has 2 batches).
+        assert out.count("SKIP") >= 2
+
+    def test_batch_table_skip_does_not_mask_video_warning(self, tmp_path: Path, capsys) -> None:
+        """A video-category WARNING that still fires with video checks off must
+        read WARN in the table, not SKIP -- SKIP must not mask real findings."""
+        from collections import Counter
+
+        from databridge import DatasetFormat, ValidationResult
+        from databridge._cli import _print_batch_table
+
+        result = ValidationResult(
+            dataset_path=tmp_path / "batch-a",
+            dataset_format=DatasetFormat.HMIE,
+            snippet_count=1,
+            annotation_count=1,
+            finding_severity_counts={"error": Counter(), "warning": Counter({"multiple_videos_in_seq_mp4": 1})},
+            skipped_checks={"video_integrity", "video_annotation_consistency"},
+        )
+        _print_batch_table([(tmp_path / "batch-a", result)])
+        out = capsys.readouterr().out
+        assert "WARN" in out
+        assert "SKIP" not in out
+
     def test_make_batch_progress_increments(self, capsys) -> None:
         from databridge._cli import _make_batch_progress
 

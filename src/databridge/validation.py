@@ -18,6 +18,7 @@ from databridge._formats.hmie import (
     discover_hmie_pairs,
     probe_video,
 )
+from databridge._formats.hmie.categories import SKIP_VIDEO_CONSISTENCY, SKIP_VIDEO_INTEGRITY
 from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,13 @@ def validate_annotation(
         label_histogram=label_counter,
         finding_counts=finding_counts,
         finding_severity_counts=severity_counts,
+        # Video checks are skipped both when integrity is disabled AND when
+        # no video was paired: _validate_pair() returns early on
+        # ``video_path is None`` regardless of check_video_integrity, so
+        # without this the report would render FMV as a clean PASS when in
+        # fact nothing ran. The banner copy is reason-neutral so it reads
+        # correctly for either cause.
+        skipped_checks=_video_skips(check_video_integrity and video_path is not None),
     )
 
 
@@ -433,6 +441,7 @@ def _validate_hmie(
         annotation_count,
         cache_hits=cache.stats.hits if cache else 0,
         cache_misses=cache.stats.misses if cache else 0,
+        skipped_checks=_video_skips(check_video),
     )
 
 
@@ -463,6 +472,13 @@ class _FindingAccumulator:
             self.findings.append(finding)
 
 
+def _video_skips(check_video: bool) -> set[str]:
+    """Logical checks skipped when video integrity is disabled."""
+    if check_video:
+        return set()
+    return {SKIP_VIDEO_INTEGRITY, SKIP_VIDEO_CONSISTENCY}
+
+
 def _build_result(
     path: Path,
     accumulator: _FindingAccumulator,
@@ -471,6 +487,7 @@ def _build_result(
     annotation_count: int = 0,
     cache_hits: int = 0,
     cache_misses: int = 0,
+    skipped_checks: set[str] | None = None,
 ) -> ValidationResult:
     return ValidationResult(
         dataset_path=path,
@@ -484,6 +501,7 @@ def _build_result(
         annotation_count=annotation_count,
         cache_hits=cache_hits,
         cache_misses=cache_misses,
+        skipped_checks=skipped_checks or set(),
     )
 
 

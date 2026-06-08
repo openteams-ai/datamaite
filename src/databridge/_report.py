@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from databridge._formats.hmie.categories import _CATEGORY_LABELS, _categorize_findings
+from databridge._formats.hmie.categories import (
+    _CATEGORY_LABELS,
+    SKIP_VIDEO_INTEGRITY,
+    _categorize_findings,
+    skipped_category_keys,
+)
 from databridge._types import (
     ValidationResult,
     _shorten_label,
@@ -18,12 +23,18 @@ from databridge._types import (
 def prepare_report_data(result: ValidationResult) -> dict[str, Any]:
     """Convert a ValidationResult into a JSON-serializable dict for the HTML template."""
     cats = _categorize_findings(result.finding_severity_counts)
+    skipped_cats = skipped_category_keys(result.skipped_checks)
     root = result.dataset_path
 
     categories = []
     for key in ("structure", "video", "coverage", "scale_spec"):
         errs, warns = cats[key]
-        if errs > 0:
+        # SKIPPED only when nothing fired: some video-category findings still
+        # run with video checks off (e.g. multiple_videos_in_seq_mp4), and a
+        # real FAIL/WARN must take precedence over the skip banner.
+        if key in skipped_cats and errs == 0 and warns == 0:
+            status = "skipped"
+        elif errs > 0:
             status = "fail"
         elif warns > 0:
             status = "warn"
@@ -77,6 +88,8 @@ def prepare_report_data(result: ValidationResult) -> dict[str, Any]:
         "error_count": sum(result.finding_severity_counts.get("error", Counter()).values()),
         "warning_count": sum(result.finding_severity_counts.get("warning", Counter()).values()),
         "categories": categories,
+        "skipped_checks": sorted(result.skipped_checks),
+        "video_checks_skipped": SKIP_VIDEO_INTEGRITY in result.skipped_checks,
         "finding_groups": finding_groups,
         "finding_counts": finding_counts,
         "labels": labels,
@@ -97,20 +110,48 @@ def _aggregate_categories(batches: list[dict[str, Any]]) -> list[dict[str, Any]]
             cat_totals[cat["key"]][0] += cat["errors"]
             cat_totals[cat["key"]][1] += cat["warnings"]
 
+    # Count, per category, how many batches skipped it. Per-batch status is
+    # already "skipped" only with zero errors/warnings, so a batch with a real
+    # video-category finding reads warn/fail and is not counted here.
+    n_batches = len(batches)
+    skipped_counts: dict[str, int] = dict.fromkeys(cat_totals, 0)
+    for b in batches:
+        for c in b["categories"]:
+            if c["status"] == "skipped":
+                skipped_counts[c["key"]] += 1
+
     categories = []
     for key in ("structure", "video", "coverage", "scale_spec"):
         errs, warns = cat_totals[key]
-        status = "fail" if errs > 0 else "warn" if warns > 0 else "pass"
         categories.append(
             {
                 "key": key,
                 "label": _CATEGORY_LABELS[key],
-                "status": status,
+                "status": _aggregate_status(errs, warns, skipped_counts[key], n_batches),
                 "errors": errs,
                 "warnings": warns,
             }
         )
     return categories
+
+
+def _aggregate_status(errs: int, warns: int, skipped_n: int, n_batches: int) -> str:
+    """Resolve one aggregate category status across batches.
+
+    Precedence: real findings first, then all-skipped, then the mixed case. A
+    green "all clear" aggregate must not hide that SOME batches never ran the
+    check -- that reads as "all batches checked and clean". "partial" only
+    arises when the category is otherwise clean, so it never masks a fail/warn.
+    """
+    if errs > 0:
+        return "fail"
+    if warns > 0:
+        return "warn"
+    if n_batches and skipped_n == n_batches:
+        return "skipped"
+    if skipped_n > 0:
+        return "partial"
+    return "pass"
 
 
 def _aggregate_finding_groups(batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -161,6 +202,7 @@ def _aggregate_batches(batches: list[dict[str, Any]]) -> dict[str, Any]:
         "cache_hits": sum(b["cache_hits"] for b in batches),
         "cache_misses": sum(b["cache_misses"] for b in batches),
         "passed": all(b["passed"] for b in batches),
+        "video_checks_skipped": any(b["video_checks_skipped"] for b in batches),
     }
 
 
@@ -294,6 +336,8 @@ code, .mono { font-family: "SF Mono", "Cascadia Code", "Consolas", monospace; fo
 .check-card[data-status="pass"] { border-left-color: var(--pass); }
 .check-card[data-status="warn"] { border-left-color: var(--warn); }
 .check-card[data-status="fail"] { border-left-color: var(--fail); }
+.check-card[data-status="skipped"] { border-left-color: var(--text-muted); }
+.check-card[data-status="partial"] { border-left-color: var(--warn); }
 .check-card .label { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; }
 .check-card .detail { font-size: 0.8rem; color: var(--text-secondary); }
 /* ---- Status pill ---- */
@@ -310,6 +354,13 @@ code, .mono { font-family: "SF Mono", "Cascadia Code", "Consolas", monospace; fo
 .pill-pass { background: var(--pass-bg); color: var(--pass); }
 .pill-warn { background: var(--warn-bg); color: var(--warn); }
 .pill-fail { background: var(--fail-bg); color: var(--fail); }
+.pill-skipped { background: var(--bg-tertiary); color: var(--text-secondary); }
+.pill-partial { background: var(--warn-bg); color: var(--warn); }
+.skip-banner {
+  background: var(--warn-bg); color: var(--text-primary);
+  border: 1px solid var(--warn); border-radius: var(--radius);
+  padding: 10px 16px; margin-bottom: 16px; font-size: 0.85rem;
+}
 /* ---- Stats bar ---- */
 .stats-bar {
   display: flex;
@@ -513,6 +564,7 @@ code, .mono { font-family: "SF Mono", "Cascadia Code", "Consolas", monospace; fo
       <tbody id="batch-body"></tbody>
     </table>
   </div>
+  <div class="skip-banner" id="skip-banner" style="display:none;"></div>
   <div class="dashboard" id="dashboard"></div>
   <div class="stats-bar" id="stats-bar"></div>
   <div class="findings-section" id="findings-section">
@@ -599,7 +651,9 @@ var REPORT_DATA = {{DATA_JSON}};
       card.className = "check-card";
       card.setAttribute("data-status", cat.status);
       var pillCls = "status-pill pill-" + cat.status;
-      var detail = cat.errors === 0 && cat.warnings === 0 ? "all clear"
+      var detail = cat.status === "skipped" ? "checks not run"
+        : cat.status === "partial" ? "partially checked; some batches skipped"
+        : cat.errors === 0 && cat.warnings === 0 ? "all clear"
         : (cat.errors > 0 ? cat.errors + " error" + (cat.errors !== 1 ? "s" : "") : "")
         + (cat.errors > 0 && cat.warnings > 0 ? ", " : "")
         + (cat.warnings > 0 ? cat.warnings + " warning" + (cat.warnings !== 1 ? "s" : "") : "");
@@ -608,6 +662,17 @@ var REPORT_DATA = {{DATA_JSON}};
         + '<div class="detail">' + esc(detail) + '</div>';
       dash.appendChild(card);
     });
+  }
+
+  function renderSkipBanner(view) {
+    var banner = document.getElementById("skip-banner");
+    if (view.video_checks_skipped) {
+      banner.textContent = "\\u26A0 Video checks not run: FMV integrity and "
+        + "video\\u2194annotation consistency were skipped (no verified-clean status).";
+      banner.style.display = "block";
+    } else {
+      banner.style.display = "none";
+    }
   }
 
   function renderStats(view) {
@@ -857,6 +922,7 @@ var REPORT_DATA = {{DATA_JSON}};
     }
     renderVerdict(view, isAggregate);
     renderDashboard(view);
+    renderSkipBanner(view);
     renderStats(view);
     renderFindings(view);
     renderCounts(view);

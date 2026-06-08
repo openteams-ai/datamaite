@@ -166,7 +166,7 @@ def _rpad(text: str, width: int) -> str:
 
 def _print_batch_table(results: list[tuple[Path, Any]]) -> None:
     """Print a multi-batch summary table with aligned columns."""
-    from databridge._formats.hmie.categories import _categorize_findings
+    from databridge._formats.hmie.categories import SKIP_VIDEO_INTEGRITY, _categorize_findings
     from databridge._types import _dim, _status_indicator
 
     name_w = max(len(d.name) for d, _ in results)
@@ -214,6 +214,15 @@ def _print_batch_table(results: list[tuple[Path, Any]]) -> None:
             v_ind = _status_indicator(*cats["video"])
             c_ind = _status_indicator(*cats["coverage"])
             sc_ind = _status_indicator(*cats["scale_spec"])
+
+        # A by-request skip reads SKIP, taking precedence over the N/A states
+        # above -- but only when the video category is otherwise clean. Some
+        # findings (e.g. multiple_videos_in_seq_mp4) still run with video
+        # checks off, and SKIP must not mask a real FAIL/WARN. Consistent
+        # with summary() and the HTML report.
+        v_errs, v_warns = cats["video"]
+        if SKIP_VIDEO_INTEGRITY in result.skipped_checks and v_errs == 0 and v_warns == 0:
+            v_ind = _dim("SKIP")
 
         print(
             f"  {batch_dir.name:<{name_w}s}  {snip_str}  {ann_str}"

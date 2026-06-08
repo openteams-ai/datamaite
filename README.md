@@ -257,6 +257,12 @@ Options:
   --debug                Enable debug logging
 ```
 
+> **Note:** `--skip-video-check` (and `check_video_integrity=False`) reports
+> FMV integrity as **SKIPPED**, not PASS — a skipped check is *not* a
+> verified-clean check. Video↔annotation consistency is skipped too; the report
+> shows a "Video checks disabled" banner so a skipped run is never mistaken for
+> a clean one.
+
 Exit codes: `0` = pass, `1` = warnings only, `2` = errors present.
 
 ## Validation Checks

@@ -1,4 +1,4 @@
-"""Tests for HMIE finding categorization."""
+"""Tests for HMIE finding categorization + skipped-check mapping."""
 
 from __future__ import annotations
 
@@ -6,7 +6,13 @@ from collections import Counter
 
 import pytest
 
-from databridge._formats.hmie.categories import _CHECK_CATEGORIES, _categorize_findings
+from databridge._formats.hmie.categories import (
+    _CHECK_CATEGORIES,
+    SKIP_VIDEO_CONSISTENCY,
+    SKIP_VIDEO_INTEGRITY,
+    _categorize_findings,
+    skipped_category_keys,
+)
 
 
 class TestCategorizeFindings:
@@ -64,3 +70,27 @@ class TestCategorizeFindings:
         # Regression: was fired in consistency_checks but missing from
         # _CHECK_CATEGORIES, only working via the now-removed fallback.
         assert _CHECK_CATEGORIES["consistency_fps_invalid"] == "scale_spec"
+
+
+def test_skip_constants_are_stable_strings() -> None:
+    assert SKIP_VIDEO_INTEGRITY == "video_integrity"
+    assert SKIP_VIDEO_CONSISTENCY == "video_annotation_consistency"
+
+
+def test_skipped_category_keys_maps_integrity_to_video() -> None:
+    assert skipped_category_keys({SKIP_VIDEO_INTEGRITY}) == {"video"}
+
+
+def test_skipped_category_keys_consistency_alone_maps_nothing() -> None:
+    # Consistency lives under scale_spec, which also runs schema checks, so
+    # it never marks a whole category skipped on its own.
+    assert skipped_category_keys({SKIP_VIDEO_CONSISTENCY}) == set()
+
+
+def test_skipped_category_keys_empty() -> None:
+    assert skipped_category_keys(set()) == set()
+
+
+def test_skipped_category_keys_both_maps_integrity_only() -> None:
+    # Real validators populate both at once; only integrity drives a category.
+    assert skipped_category_keys({SKIP_VIDEO_INTEGRITY, SKIP_VIDEO_CONSISTENCY}) == {"video"}
