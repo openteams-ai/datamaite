@@ -45,7 +45,9 @@ def test_notebook_imports_resolve() -> None:
         ValidationResult,
         find_batch_roots,
         render_html_report,
+        render_html_report_multi,
         validate,
+        validate_batches,
     )
 
     assert databridge.__version__
@@ -137,6 +139,20 @@ def test_render_html_report_accepts_result(tmp_path: Path) -> None:
 
     r = ValidationResult(dataset_path=tmp_path, dataset_format=DatasetFormat.HMIE)
     html = render_html_report(r)
+    assert isinstance(html, str)
+    assert "<!DOCTYPE html>" in html
+
+
+def test_render_html_report_multi_accepts_results(tmp_path: Path) -> None:
+    """Notebook calls render_html_report_multi(results, BATCH_ROOT) where results
+    is a list of (batch_path, ValidationResult) pairs from validate_batches."""
+    from databridge import DatasetFormat, ValidationResult, render_html_report_multi
+
+    results = [
+        (tmp_path / "batch_a", ValidationResult(dataset_path=tmp_path / "batch_a", dataset_format=DatasetFormat.HMIE)),
+        (tmp_path / "batch_b", ValidationResult(dataset_path=tmp_path / "batch_b", dataset_format=DatasetFormat.HMIE)),
+    ]
+    html = render_html_report_multi(results, tmp_path)
     assert isinstance(html, str)
     assert "<!DOCTYPE html>" in html
 

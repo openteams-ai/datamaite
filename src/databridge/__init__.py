@@ -5,7 +5,7 @@ import logging
 from databridge._cache import ValidationCache
 from databridge._formats.hmie.discovery import find_batch_roots
 from databridge._formats.hmie.writer import HmieWriter
-from databridge._report import render_html_report
+from databridge._report import render_html_report, render_html_report_multi
 from databridge._stats import dataset_stats
 from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
 from databridge._version import __version__, __version_tuple__
@@ -60,6 +60,7 @@ __all__ = [
     "register_loader",
     "register_writer",
     "render_html_report",
+    "render_html_report_multi",
     "validate",
     "validate_annotation",
     "validate_batches",

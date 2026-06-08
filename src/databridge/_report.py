@@ -987,6 +987,22 @@ def render_html_report(result: ValidationResult) -> str:
     return _HTML_TEMPLATE.replace("{{DATA_JSON}}", safe_json)
 
 
+def _batch_label(batch_dir: Path, root: Path) -> str:
+    """Stable display label for a batch within a collection.
+
+    Uses the batch's path relative to ``root`` so grouped layouts
+    (``valid/<batch>``, ``bad-*/<batch>``) stay distinct when several batches
+    share a leaf name. Falls back to the leaf name when the batch *is* the root
+    (relative path ``"."``, e.g. ``BATCH_ROOT`` points at a single dataset) or
+    lives outside ``root``.
+    """
+    try:
+        rel = batch_dir.relative_to(root).as_posix()
+    except ValueError:
+        return batch_dir.name
+    return batch_dir.name if rel in ("", ".") else rel
+
+
 def render_html_report_multi(
     results: list[tuple[Path, ValidationResult]],
     root: Path,
@@ -1003,7 +1019,11 @@ def render_html_report_multi(
     batches = []
     for batch_dir, result in results:
         batch_data = prepare_report_data(result)
-        batch_data["batch_name"] = batch_dir.name
+        # Label each dataset by its path relative to the collection root, so
+        # grouped layouts (e.g. valid/<batch>, bad-*/<batch>) stay distinct
+        # when several batches share a leaf name. Falls back to the leaf name
+        # when the batch is the root itself or lives outside ``root``.
+        batch_data["batch_name"] = _batch_label(batch_dir, root)
         batches.append(batch_data)
 
     aggregate = _aggregate_batches(batches)
