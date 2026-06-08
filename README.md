@@ -25,19 +25,21 @@ databridge validate /path/to/dataset -o report.txt
 
 ## Supported formats
 
-databridge is a bridge: a **loader** reads an input format into one neutral
-in-memory model (`BoxTrackDataset`), a **validator** checks a format on disk,
-and a **writer** serialises the model out to an output format (`convert` pairs a
-loader and a writer for on-disk → on-disk conversion). HMIE/Scale, flat MP4
-video folders, MOTChallenge, TAO, and VisDrone Video are implemented input
-formats; HMIE/Scale and TAO are implemented output formats (proving the writer
-architecture via load → write → load round trips), and other writers are
-planned.
+databridge is a bridge: a **loader** reads an input format into a
+source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
+`VideoClassificationDataset` for video-level labels), a **validator** checks a
+format on disk, and a **writer** serialises supported datasets out to an output
+format (`convert` pairs a loader and a writer for on-disk → on-disk conversion).
+HMIE/Scale, flat MP4 video folders, Hugging Face Video Classification,
+MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale
+and TAO are implemented output formats (proving the writer architecture via
+load → write → load round trips), and other writers are planned.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
+| Hugging Face Video Classification | ✅ | — | planned |
 | MOTChallenge | ✅ | — | planned |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | planned |
@@ -104,6 +106,30 @@ for seq in ds.iter_sequences():
 
 The flat MP4 loader does not recurse into subdirectories and carries no
 annotations, so `seq.boxes` is empty and `ds.categories == {}`.
+
+Load a Hugging Face VideoFolder-style video classification repository (class
+folders, optional `train` / `validation` / `test` splits, or `metadata.csv` /
+`metadata.jsonl` with `file_name` and an optional `label` column). Optional
+`metadata.parquet` loading is experimental and requires `pyarrow` or `pandas`;
+if parquet cannot be read, the loader warns and falls back to folder discovery.
+
+```python
+from databridge import load_huggingface_video_classification
+
+# Example layout: train/dog/clip.mp4, train/cat/clip.mp4, test/dog/clip.mp4
+# Metadata-file layouts use file_name paths relative to the metadata file.
+ds = load_huggingface_video_classification("/path/to/hf-video-dataset")
+
+for sample in ds.iter_samples():
+    print(sample.video_path, sample.split, sample.label)
+```
+
+Video classification labels are video-level metadata, not per-frame boxes, and
+MAITE 0.9.5 has no video-classification protocol. The loader returns a
+`VideoClassificationDataset` (not a MAITE MOT `BoxTrackDataset`): `len(ds)` /
+`ds[i]` / iteration are plain sample-record accessors, `ds.label_names()` maps
+stable label IDs to raw labels, and `ds.categories` uses injective percent-encoded
+label URIs so labels such as `"a b"`, `"a/b"`, and `"a_b"` remain distinct.
 
 Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
 splits) the same way:
@@ -220,14 +246,15 @@ Conventions: boxes are converted from `xywh` to MAITE's `xyxy`; ground-truth
 `scores` are `1.0`; frames are decoded with PyAV (inject your own backend via
 `with_mot_options(decoder=...)`); by default only annotated frames are emitted
 (`empty_frame_policy="all"` emits every frame, and needs a probed frame count).
-The `BoxTrackDataset` model is a box-track IR — labels that are not bounding
-boxes, and tasks other than multi-object tracking, are out of scope.
+The `BoxTrackDataset` model is a box-track IR. Tasks other than multi-object
+tracking use separate dataset records (for example `VideoClassificationDataset`)
+and are not exposed through this MAITE MOT surface.
 
 ## Writing & converting datasets (Python)
 
 A **writer** serialises a loaded `BoxTrackDataset` to an output format on disk;
-`convert` pairs a loader and a writer for end-to-end on-disk → on-disk
-conversion. Any registered loader can feed any registered writer.
+`convert` pairs a box-track loader and a writer for end-to-end on-disk → on-disk
+conversion. Video-classification datasets have no writer surface yet.
 
 ```python
 from databridge import load_mot, write, convert

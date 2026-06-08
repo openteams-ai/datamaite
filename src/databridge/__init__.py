@@ -12,7 +12,14 @@ from databridge._types import DatasetFormat, Finding, Severity, Task, Validation
 from databridge._version import __version__, __version_tuple__
 from databridge.conversion import convert
 from databridge.loaders import Loader, available_formats, get_loader, load, load_mot, register_loader
-from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from databridge.model import (
+    BoxAnnotation,
+    BoxTrackDataset,
+    VideoClassificationDataset,
+    VideoClassificationSample,
+    VideoSequence,
+    VisionDataset,
+)
 from databridge.taxonomy import CategoryEntry, Taxonomy
 from databridge.validation import validate, validate_annotation, validate_batches
 from databridge.writers import Writer, available_output_formats, get_writer, register_writer, write
@@ -21,6 +28,10 @@ if TYPE_CHECKING:
     from databridge._formats.flat_mp4.loader import FlatMp4Loader
     from databridge._formats.hmie.loader import HmieLoader
     from databridge._formats.hmie.writer import HmieWriter
+    from databridge._formats.huggingface_video_classification.loader import (
+        HuggingFaceVideoClassificationLoader,
+        load_huggingface_video_classification,
+    )
     from databridge._formats.motchallenge.loader import MotChallengeLoader
     from databridge._formats.tao.loader import TaoLoader
     from databridge._formats.tao.writer import TaoWriter
@@ -35,10 +46,18 @@ _LAZY_EXPORTS = {
     "FlatMp4Loader": ("databridge._formats.flat_mp4.loader", "FlatMp4Loader"),
     "HmieLoader": ("databridge._formats.hmie.loader", "HmieLoader"),
     "HmieWriter": ("databridge._formats.hmie.writer", "HmieWriter"),
+    "HuggingFaceVideoClassificationLoader": (
+        "databridge._formats.huggingface_video_classification.loader",
+        "HuggingFaceVideoClassificationLoader",
+    ),
     "MotChallengeLoader": ("databridge._formats.motchallenge.loader", "MotChallengeLoader"),
     "TaoLoader": ("databridge._formats.tao.loader", "TaoLoader"),
     "TaoWriter": ("databridge._formats.tao.writer", "TaoWriter"),
     "VisDroneVideoLoader": ("databridge._formats.visdrone.loader", "VisDroneVideoLoader"),
+    "load_huggingface_video_classification": (
+        "databridge._formats.huggingface_video_classification.loader",
+        "load_huggingface_video_classification",
+    ),
 }
 
 
@@ -62,6 +81,7 @@ __all__ = [
     "FlatMp4Loader",
     "HmieLoader",
     "HmieWriter",
+    "HuggingFaceVideoClassificationLoader",
     "Loader",
     "MotChallengeLoader",
     "Severity",
@@ -71,8 +91,11 @@ __all__ = [
     "Taxonomy",
     "ValidationCache",
     "ValidationResult",
+    "VideoClassificationDataset",
+    "VideoClassificationSample",
     "VideoSequence",
     "VisDroneVideoLoader",
+    "VisionDataset",
     "Writer",
     "__version__",
     "__version_tuple__",
@@ -84,6 +107,7 @@ __all__ = [
     "get_loader",
     "get_writer",
     "load",
+    "load_huggingface_video_classification",
     "load_mot",
     "register_loader",
     "register_writer",

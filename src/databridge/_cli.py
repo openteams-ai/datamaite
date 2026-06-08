@@ -289,6 +289,7 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     """Run the stats subcommand: load the dataset and print distributions."""
     from databridge._stats import dataset_stats, format_stats
     from databridge.loaders import load
+    from databridge.model import BoxTrackDataset
 
     show = _show_progress(args)
     if show:
@@ -296,6 +297,9 @@ def _cmd_stats(args: argparse.Namespace) -> int:
         sys.stderr.flush()
 
     ds = load(args.path, dataset_format=args.format, require_video=args.require_video)
+    if not isinstance(ds, BoxTrackDataset):
+        print(f"stats currently supports box-track datasets only, got {type(ds).__name__}", file=sys.stderr)
+        return 2
     stats = dataset_stats(ds)
 
     if args.json:

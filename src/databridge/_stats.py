@@ -14,10 +14,9 @@ discovery, not the hours-long full-length source.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from databridge.model import BoxTrackDataset
+from databridge.model import BoxTrackDataset
 
 
 def _percentiles(values: list[float]) -> dict[str, float] | None:
@@ -50,14 +49,17 @@ def _percentiles(values: list[float]) -> dict[str, float] | None:
     }
 
 
-def dataset_stats(ds: BoxTrackDataset) -> dict[str, Any]:
-    """Compute summary statistics over a loaded dataset.
+def dataset_stats(ds: Any) -> dict[str, Any]:
+    """Compute summary statistics over a loaded box-track dataset.
 
     Returns a plain dict (JSON-serializable) with overall counts and
     percentile distributions for snippet duration (seconds), frame count,
     boxes per sequence, and fps. Distribution entries are ``None`` when no
-    sequence carries that value.
+    sequence carries that value. Task siblings such as video classification
+    have different records and are rejected explicitly.
     """
+    if not isinstance(ds, BoxTrackDataset):
+        raise TypeError(f"dataset_stats currently supports box-track datasets only, got {type(ds).__name__}")
     sequences = ds.sequences
     durations = [s.duration for s in sequences if s.duration is not None and s.duration > 0]
     frame_counts = [float(s.num_frames) for s in sequences if s.num_frames is not None and s.num_frames > 0]
