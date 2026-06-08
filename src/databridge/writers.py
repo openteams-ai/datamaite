@@ -77,6 +77,7 @@ class Writer(ABC):
 _WRITERS: dict[DatasetFormat, type[Writer]] = {}
 _BUILTIN_WRITER_MODULES = (
     "databridge._formats.hmie.writer",
+    "databridge._formats.motchallenge.writer",
     "databridge._formats.tao.writer",
 )
 _BUILTIN_WRITERS_IMPORTED = False

@@ -23,6 +23,7 @@ def test_public_api() -> None:
         FlatMp4Loader,
         HuggingFaceVideoClassificationLoader,
         MotChallengeLoader,
+        MotChallengeWriter,
         Severity,
         TaoLoader,
         TaoWriter,
@@ -61,6 +62,7 @@ def test_public_api() -> None:
     assert FlatMp4Loader is not None
     assert HuggingFaceVideoClassificationLoader is not None
     assert MotChallengeLoader is not None
+    assert MotChallengeWriter is not None
     assert TaoLoader is not None
     assert TaoWriter is not None
     assert VisDroneVideoLoader is not None
