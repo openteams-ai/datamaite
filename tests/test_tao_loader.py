@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from databridge import DatasetFormat, load, load_tao
-from databridge._formats.tao.loader import TaoLoader
+from databridge import DatasetFormat, load
+from databridge._formats.tao.loader import TaoLoader, load_tao
 from databridge.loaders import available_formats, get_loader
 from databridge.model import BoxTrackDataset
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from databridge import DatasetFormat, load, load_visdrone_video
-from databridge._formats.visdrone.loader import VisDroneVideoLoader
+from databridge import DatasetFormat, load
+from databridge._formats.visdrone.loader import VisDroneVideoLoader, load_visdrone_video
 from databridge.loaders import available_formats, get_loader
 from databridge.model import BoxTrackDataset
 

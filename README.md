@@ -52,9 +52,9 @@ and how to add a new loader or writer.
 Load an HMIE/Scale dataset into the neutral `BoxTrackDataset` model:
 
 ```python
-from databridge import load_hmie
+from databridge import load_mot
 
-ds = load_hmie("/path/to/dataset")
+ds = load_mot("/path/to/dataset")  # HMIE is the default MOT format
 print(ds.sequence_count, "sequences,", ds.num_boxes, "boxes")
 
 for seq in ds.iter_sequences():
@@ -66,7 +66,7 @@ for seq in ds.iter_sequences():
 > are the **MAITE item** view (one per video). Use `ds.sequence_count` /
 > `ds.iter_sequences()` / `ds.sequences` for the **record** view shown above.
 
-Or via the format-dispatching entry point (same result):
+The lower-level generic dispatching entry point works too (same result):
 
 ```python
 from databridge import load
@@ -78,8 +78,9 @@ For non-standard layouts (flat annotation/video directories) and true frame
 counts probed from the videos:
 
 ```python
-ds = load_hmie(
+ds = load_mot(
     "/path/to/dataset",
+    dataset_format="hmie",
     annotation_dir="annotations/",
     video_dir="videos/",
     require_video=True,  # needs the `video` extra
@@ -90,9 +91,12 @@ Load a flat folder of `.mp4` videos (immediate children only, H.264 or
 MPEG-2 codec) as video-backed sequences:
 
 ```python
-from databridge import load_flat_mp4
+from databridge import load_mot
 
-ds = load_flat_mp4("/path/to/mp4-folder")  # requires databridge[video]
+ds = load_mot(
+    "/path/to/mp4-folder",
+    dataset_format="flat_mp4",
+)  # requires databridge[video]
 
 for seq in ds.iter_sequences():
     print(seq.video_path, seq.video_meta["codec"], seq.num_frames)
@@ -105,10 +109,11 @@ Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
 splits) the same way:
 
 ```python
-from databridge import load_motchallenge
+from databridge import load_mot
 
-ds = load_motchallenge(
+ds = load_mot(
     "/path/to/MOT17",
+    dataset_format="motchallenge",
     annotation_source="gt",       # or "det"
     include_ignored=False,
     classes={1, 42},              # optional allowlist; omit/None to keep all classes
@@ -127,16 +132,16 @@ image filenames. Standard MOTChallenge class IDs get their canonical names;
 unknown/non-standard IDs default to `class_<id>`. For MOT-style datasets with
 custom labels, pass `class_names={42: "vehicle"}`. Missing IDs, or an empty
 `class_names={}`, still fall back to the built-in names and `class_<id>`.
-To optionally probe the first frame image with OpenCV for metadata, call
-`load_motchallenge(..., probe_images=True)` after installing `databridge[video]`.
+To optionally probe the first frame image with OpenCV for metadata, pass
+`probe_images=True` after installing `databridge[video]`.
 
 Load an official TAO dataset root (COCO-style `annotations/*.json` plus frame
 files) similarly:
 
 ```python
-from databridge import load_tao
+from databridge import load_mot
 
-ds = load_tao("/path/to/TAO", probe_images=False)
+ds = load_mot("/path/to/TAO", dataset_format="tao", probe_images=False)
 
 for seq in ds.iter_sequences():
     print(seq.video_meta["sequence_name"], seq.frame_path(0), len(seq.boxes))
@@ -151,10 +156,11 @@ Load an official VisDrone video split (VID object detection in videos or MOT
 multi-object tracking), or a parent containing multiple split roots:
 
 ```python
-from databridge import load_visdrone_video
+from databridge import load_mot
 
-ds = load_visdrone_video(
+ds = load_mot(
     "/path/to/VisDrone2019-VID-train",
+    dataset_format="visdrone_video",
     variant="auto",          # inferred from VID/MOT in the split name; or "vid" / "mot"
     include_ignored=False,   # skip score=0 and ignored-region category rows
     classes={1, 4, 9},       # optional category allowlist
@@ -188,9 +194,9 @@ Video/FMV maps to MAITE's **multi-object-tracking** task (one item per video).
 Index the loaded dataset directly:
 
 ```python
-from databridge import load_hmie
+from databridge import load_mot
 
-ds = load_hmie("/path/to/dataset")               # already a MAITE MOT Dataset
+ds = load_mot("/path/to/dataset")                # already a MAITE MOT Dataset
 
 video_stream, target, metadata = ds[0]
 frame = next(iter(video_stream))                 # VideoFrame: pixels (C,H,W), time_s, pts
@@ -224,10 +230,10 @@ A **writer** serialises a loaded `BoxTrackDataset` to an output format on disk;
 conversion. Any registered loader can feed any registered writer.
 
 ```python
-from databridge import load_hmie, write, convert
+from databridge import load_mot, write, convert
 
 # Write an in-memory dataset to disk
-ds = load_hmie("/path/to/dataset")
+ds = load_mot("/path/to/dataset")
 files = write(ds, "/path/to/out", output_format="hmie")   # -> list of files written
 
 # Or convert on disk → on disk in one call
@@ -239,15 +245,21 @@ are decoded to frame images and require the `video` extra; existing
 image-sequence inputs copy their frame files directly.
 
 ```python
-from databridge import load_hmie, write
+from databridge import load_mot, write
 
-ds = load_hmie("/path/to/hmie", require_video=True)  # video-backed source
+ds = load_mot(
+    "/path/to/hmie",
+    dataset_format="hmie",
+    require_video=True,
+)  # video-backed source
 write(ds, "/path/to/tao-out", output_format="tao", split="train")
 ```
 
-HMIE and TAO both have round-trip writers: `load_hmie → write(output_format="hmie") →
-load_hmie` and `load_tao → write(output_format="tao") → load_tao` recover the
-same box/category/frame content represented by `BoxTrackDataset`. Adding a new
+HMIE and TAO both have round-trip writers: `load_mot(..., dataset_format="hmie") →
+write(output_format="hmie") → load_mot(..., dataset_format="hmie")` and
+`load_mot(..., dataset_format="tao") → write(output_format="tao") →
+load_mot(..., dataset_format="tao")` recover the same box/category/frame content
+represented by `BoxTrackDataset`. Adding a new
 output format is a `Writer` subclass + `@register_writer` — see
 [docs/architecture.md](docs/architecture.md).
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from databridge import load, load_hmie
+from databridge import load, load_mot
 from databridge._formats.hmie.loader import HmieLoader
 from databridge._types import DatasetFormat
 from databridge.loaders import Loader, available_formats, get_loader, register_loader
@@ -107,11 +107,11 @@ class TestAutodetect:
             load(tmp_path, dataset_format=None)
 
 
-class TestEquivalenceWithLoadHmie:
-    def test_load_dispatch_matches_load_hmie(self, tmp_path: Path) -> None:
+class TestEquivalenceWithLoadMot:
+    def test_load_dispatch_matches_load_mot(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
         via_dispatch = load(tmp_path)
-        via_helper = load_hmie(tmp_path)
+        via_helper = load_mot(tmp_path)
         assert len(via_dispatch) == len(via_helper)
         assert via_dispatch.num_boxes == via_helper.num_boxes
         assert via_dispatch.categories == via_helper.categories

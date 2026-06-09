@@ -7,8 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from databridge import DatasetFormat, FlatMp4Loader, load, load_flat_mp4
-from databridge._formats.flat_mp4.loader import _canonical_codec, _fourcc_to_string, _probe_mp4_video, _VideoProbe
+from databridge import DatasetFormat, FlatMp4Loader, load
+from databridge._formats.flat_mp4.loader import (
+    _canonical_codec,
+    _fourcc_to_string,
+    _probe_mp4_video,
+    _VideoProbe,
+    load_flat_mp4,
+)
 from databridge.loaders import available_formats, get_loader
 from databridge.model import BoxTrackDataset
 
