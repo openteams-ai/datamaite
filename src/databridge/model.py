@@ -1,23 +1,23 @@
-"""Databridge's neutral in-memory **box-track** dataset model.
+"""Databridge's neutral in-memory dataset models.
 
-This is the format-agnostic intermediate representation at the center of
-the bridge: every *loader* produces it and every *converter* consumes it.
-A loader (e.g. :func:`databridge.load_mot`) turns an on-disk dataset into
-a :class:`BoxTrackDataset`; a converter turns a :class:`BoxTrackDataset`
-into an output format (MOTChallenge, YOLO, ...) or a MAITE-protocol view
-(:mod:`databridge.maite`). Because the model is tied to neither a specific
-input nor a specific output format, databridge is an N-to-M bridge -- add a
-loader to gain an input, add a converter to gain an output -- rather than a
-one-off HMIE-to-X path.
+The primary intermediate representation is the **box-track** model:
+:class:`BoxTrackDataset`, a set of videos/image sequences with per-frame
+bounding-box tracks. A loader (e.g. :func:`databridge.load_mot`) turns an
+on-disk MOT dataset into a :class:`BoxTrackDataset`; a converter turns a
+:class:`BoxTrackDataset` into an output format (MOTChallenge, YOLO, ...) or a
+MAITE-protocol view (:mod:`databridge.maite`). Because that model is tied to
+neither a specific input nor a specific output format, databridge is an N-to-M
+bridge for MOT -- add a loader to gain an input, add a converter to gain an
+output -- rather than a one-off HMIE-to-X path.
 
-Scope: this is deliberately a **box-track** IR -- a set of videos, each with
-per-frame *bounding-box* tracks. It is not a universal model for every future
-databridge format. Tasks whose labels are not boxes (semantic segmentation
-masks, image-level classification, keypoints, ...) need their own
-source-preserving records and adapters; do not stretch this model to cover
-them. The name is ``BoxTrackDataset`` (not ``Dataset``) to keep that scope
-honest and to avoid colliding with MAITE's own task-specific ``Dataset``
-protocols.
+Scope: ``BoxTrackDataset`` is deliberately a **box-track** IR. It is not a
+universal model for every future databridge format. Tasks whose labels are not
+boxes (semantic segmentation masks, image-level classification, keypoints,
+video-level classification, ...) need their own source-preserving records and
+adapters; do not stretch the box-track model to cover them. Hugging Face video
+classification therefore uses :class:`VideoClassificationDataset` /
+:class:`VideoClassificationSample`, with no MAITE surface until MAITE grows a
+video-classification protocol.
 
 The dataclasses are intentionally plain (no external protocol dependency).
 :class:`BoxTrackDataset` itself implements the MAITE multi-object-tracking
@@ -37,6 +37,7 @@ from typing import Any
 # Bounding box as (left, top, width, height) in pixels. Single definition lives
 # in geometry.py (with the conversion helpers); re-exported here for the model's
 # callers. geometry imports only stdlib, so this is import-cycle-free.
+from databridge._types import Task
 from databridge.geometry import BBox
 
 
@@ -203,6 +204,85 @@ class VideoSequence:
 
 
 @dataclass(frozen=True)
+class VideoClassificationSample:
+    """One video-level classification sample.
+
+    This is deliberately not a ``VideoSequence`` with empty boxes: a clip label
+    is not a per-frame MOT track category, and MAITE 0.9.5 has no video
+    classification protocol. The record keeps source file/metadata detail while
+    leaving decoding and any future VC protocol adapter to a separate layer.
+    """
+
+    video_id: int
+    video_path: str
+    file_name: str
+    label: str | None = None
+    label_id: int | None = None
+    label_uri: str | None = None
+    split: str | None = None
+    metadata_path: str | None = None
+    video_meta: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    size_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class VideoClassificationDataset:
+    """A video-classification dataset with no MAITE surface yet.
+
+    ``len(ds)`` / ``ds[i]`` / iteration are plain record accessors that return
+    :class:`VideoClassificationSample` objects. They do **not** masquerade as a
+    MAITE MOT dataset, and ``metadata`` intentionally omits MAITE's
+    ``index2label`` key until a real video-classification protocol exists.
+    """
+
+    samples: tuple[VideoClassificationSample, ...]
+    categories: dict[str, int]
+    labels: dict[int, str] = field(default_factory=dict)
+    dataset_id: str = "databridge"
+    task: Task = Task.VC
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.samples, tuple):
+            object.__setattr__(self, "samples", tuple(self.samples))
+
+    def __len__(self) -> int:
+        """Number of video-classification samples."""
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> VideoClassificationSample:
+        """Return a source record, not a MAITE item."""
+        return self.samples[index]
+
+    def __iter__(self) -> Iterator[VideoClassificationSample]:
+        """Iterate source records."""
+        return iter(self.samples)
+
+    @property
+    def sample_count(self) -> int:
+        """Number of loaded video-classification records."""
+        return len(self.samples)
+
+    def iter_samples(self) -> Iterator[VideoClassificationSample]:
+        """Iterate the typed source records."""
+        return iter(self.samples)
+
+    def label_names(self) -> dict[int, str]:
+        """Return raw video-classification labels keyed by stable label ID."""
+        return dict(self.labels)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Dataset metadata, explicitly not MAITE ``DatasetMetadata``."""
+        return {
+            "id": self.dataset_id,
+            "task": self.task.value,
+            "maite_protocol": None,
+            "labels": self.label_names(),
+        }
+
+
+@dataclass(frozen=True)
 class BoxTrackDataset:
     """A loaded box-track dataset that *is* a MAITE multi-object-tracking dataset.
 
@@ -233,6 +313,7 @@ class BoxTrackDataset:
     sequences: tuple[VideoSequence, ...]
     categories: dict[str, int]
     dataset_id: str = "databridge"
+    task: Task = Task.MOT
     empty_frame_policy: str = "annotated"
     # MOT decode backend override (a databridge.maite._decode.Decoder). None ->
     # the default PyAV decoder, resolved lazily inside build_mot_item so the
@@ -354,3 +435,6 @@ class BoxTrackDataset:
         (``category_id == -1``) are not in ``categories`` and so are absent here.
         """
         return {cid: category_name_from_uri(uri) for uri, cid in self.categories.items()}
+
+
+VisionDataset = BoxTrackDataset | VideoClassificationDataset

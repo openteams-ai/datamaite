@@ -8,29 +8,30 @@ One validation pipeline: **walk a dataset root on disk → pair each annotation
 JSON with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only validation format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout). On
-the loading side, flat-folder MP4 video, MOTChallenge, TAO, and VisDrone Video
-are also implemented loaders. Everything is structured so other formats can be
-added behind the same public entrypoint without touching the CLI or reporting
+the loading side, flat-folder MP4 video, Hugging Face Video Classification,
+MOTChallenge, TAO, and VisDrone Video are also implemented loaders. Everything
+is structured so other formats can be added behind the same public entrypoint
+without touching the CLI or reporting
 layers.
 
 ## The bridge — loaders × consumers
 
 The longer-term shape is an **N-to-M bridge**. A *loader* parses an
-on-disk dataset into one neutral in-memory model (`model.py`,
-`BoxTrackDataset`). That model is then consumed two ways: **directly as a
-MAITE dataset** by models and metrics (the model *is* a MAITE
-multi-object-tracking dataset — no conversion step), and by
-*converters / writers* that serialise it back out to another on-disk
-format. Because every loader produces the identical `BoxTrackDataset`,
-any input format can reach any consumer — adding a loader gains an input,
-adding a converter gains an output, and neither side knows about the
-other. Solid = implemented today; dashed = planned.
+on-disk dataset into a task-appropriate in-memory model. For today's MOT / video
+box-track formats, that model is `model.py`'s `BoxTrackDataset`: it is consumed
+**directly as a MAITE multi-object-tracking dataset** and by *converters /
+writers* that serialise it back out to another on-disk format. Hugging Face
+Video Classification is intentionally separate: it returns
+`VideoClassificationDataset` source records because MAITE 0.9.5 has no video
+classification protocol, so it does not masquerade as the MOT surface. Solid =
+implemented today; dashed = planned.
 
 ```mermaid
 flowchart LR
     subgraph in [Input on disk]
         HMIE([HMIE / Scale])
         MP4IN([Flat MP4<br/>H.264 / MPEG-2])
+        HFIN([Hugging Face<br/>Video Classification])
         MOTIN([MOTChallenge])
         TAOIN([TAO])
         VISIN([VisDrone Video])
@@ -41,6 +42,7 @@ flowchart LR
     subgraph loaders [Loaders]
         LH["<b>load_mot</b><br/>dataset_format='hmie'"]
         LF["<b>load_mot</b><br/>dataset_format='flat_mp4'"]
+        LHF["<b>load_huggingface_video_classification</b>"]
         LM["<b>load_mot</b><br/>dataset_format='motchallenge'"]
         LT["<b>load_mot</b><br/>dataset_format='tao'"]
         LV["<b>load_mot</b><br/>dataset_format='visdrone_video'"]
@@ -49,9 +51,11 @@ flowchart LR
     end
 
     HUB[/"<b>model.py</b><br/>BoxTrackDataset<br/>VideoSequence · BoxAnnotation"/]
+    VCHUB[/"<b>model.py</b><br/>VideoClassificationDataset<br/>VideoClassificationSample"/]
 
     subgraph consumers [Consumers]
-        MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(the model IS one)"]
+        VCREC["<b>VC records</b><br/>no MAITE protocol yet"]
+        MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(BoxTrackDataset IS one)"]
         TM["to_mot"]
         TT["<b>to_tao</b>"]
         TY["to_yolo"]
@@ -68,6 +72,7 @@ flowchart LR
 
     HMIE --> LH
     MP4IN --> LF
+    HFIN --> LHF
     MOTIN --> LM
     TAOIN --> LT
     VISIN --> LV
@@ -75,11 +80,13 @@ flowchart LR
     YOLOIN -.-> LY
     LH --> HUB
     LF --> HUB
+    LHF --> VCHUB
     LM --> HUB
     LT --> HUB
     LV --> HUB
     LC -.-> HUB
     LY -.-> HUB
+    VCHUB --> VCREC
     HUB --> MAITE
     HUB --> TM
     HUB --> TT
@@ -94,20 +101,22 @@ flowchart LR
     classDef hub fill:#fff8e1,stroke:#f57c00,stroke-width:2px;
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
-    class HUB hub;
-    class LH,LF,LM,LT,LV,TT,MAITE impl;
-    class MAITEOUT,MP4IN,MOTIN,TAOIN,VISIN,TAOOUT impl;
+    class HUB,VCHUB hub;
+    class LH,LF,LHF,LM,LT,LV,TT,MAITE,VCREC impl;
+    class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,TAOOUT impl;
     class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
 ```
 
 Today, the MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 all reached through the task-first `load_mot(dataset_format=…)` entry point; the
-HMIE validation pipeline, the HMIE and TAO writers, and the MAITE surface
-(`databridge.maite`) are implemented. See [Loading](#loading--hmie-loader) for
-how loaders build the model,
+Hugging Face Video Classification loader (`load_huggingface_video_classification`),
+the HMIE validation pipeline, the HMIE and TAO writers, and the MAITE surface
+(`databridge.maite`) are implemented. Hugging Face Video Classification returns
+its own `VideoClassificationDataset` records and has no MAITE surface yet. See
+[Loading](#loading--hmie-loader) for how MOT loaders build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
-surface, and [Writer architecture](#writer-architecture--writerspy) for
-the writer contract.
+surface, and [Writer architecture](#writer-architecture--writerspy) for the
+writer contract.
 
 ## Project layout
 
@@ -119,7 +128,7 @@ src/databridge/
     _cache.py                On-disk cache for expensive video probes
     _report.py               Text / JSON / JSONL / HTML report rendering
     _version.py              Package version
-    model.py                 Neutral model + MAITE MOT surface: BoxTrackDataset, VideoSequence, BoxAnnotation
+    model.py                 Neutral models: BoxTrackDataset/VideoSequence/BoxAnnotation + VC records
     geometry.py              Canonical absolute-pixel xywh bbox + conversions (xyxy / cxcywh / normalized / YOLO)
     taxonomy.py              Source-preserving category table: Taxonomy, CategoryEntry (will replace dict[str,int])
     loaders.py               Loader contract (ABC) + registry + load() dispatch
@@ -146,6 +155,9 @@ src/databridge/
             video_checks.py          FMV open / decode / corruption checks
             consistency_checks.py    Annotation <-> video cross-references
             writer.py                HmieWriter: reference writer (BoxTrackDataset -> on-disk HMIE)
+        huggingface_video_classification/
+            __init__.py              Hugging Face Video Classification exports
+            loader.py                HuggingFaceVideoClassificationLoader: VideoFolder -> VideoClassificationDataset
         motchallenge/
             __init__.py              MOTChallenge format exports
             loader.py                MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
@@ -420,9 +432,10 @@ format loader looks the same and a new format is additive. Three pieces:
 flowchart TD
     LOAD["<b>load(root, dataset_format=…)</b><br/>public dispatch"]
     REG[("<b>registry</b><br/>DatasetFormat → Loader")]
-    BASE["<b>Loader (ABC)</b><br/>load(root, **options) → BoxTrackDataset<br/>sniff(root) → bool"]
+    BASE["<b>Loader (ABC)</b><br/>load(root, **options) → VisionDataset<br/>sniff(root) → bool"]
     HMIE["<b>HmieLoader</b><br/>(_formats/hmie/loader.py)"]
     FLAT["<b>FlatMp4Loader</b><br/>(_formats/flat_mp4/loader.py)"]
+    HF["<b>HuggingFaceVideoClassificationLoader</b><br/>(_formats/huggingface_video_classification/loader.py)"]
     MOT["<b>MotChallengeLoader</b><br/>(_formats/motchallenge/loader.py)"]
     TAO["<b>TaoLoader</b><br/>(_formats/tao/loader.py)"]
     VIS["<b>VisDroneVideoLoader</b><br/>(_formats/visdrone/loader.py)"]
@@ -431,18 +444,21 @@ flowchart TD
     LOAD -->|get_loader| REG
     REG --> HMIE
     REG --> FLAT
+    REG --> HF
     REG --> MOT
     REG --> TAO
     REG --> VIS
     REG -.-> NEW
     HMIE -->|subclasses| BASE
     FLAT -->|subclasses| BASE
+    HF -->|subclasses| BASE
     MOT -->|subclasses| BASE
     TAO -->|subclasses| BASE
     VIS -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_loader| REG
     FLAT -->|@register_loader| REG
+    HF -->|@register_loader| REG
     MOT -->|@register_loader| REG
     TAO -->|@register_loader| REG
     VIS -->|@register_loader| REG
@@ -454,14 +470,16 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class LOAD entry;
     class REG store;
-    class HMIE,FLAT,MOT,TAO,VIS impl;
+    class HMIE,FLAT,HF,MOT,TAO,VIS impl;
     class NEW planned;
 ```
 
 - **`Loader` (ABC).** The contract: a concrete loader sets a `format`
   (`DatasetFormat`) class attribute and implements
-  `load(self, root, **options) -> BoxTrackDataset`. An optional `sniff(root) -> bool`
-  classmethod is the autodetection hook (default `False`).
+  `load(self, root, **options) -> VisionDataset` (a task-appropriate model;
+  today `BoxTrackDataset` for MOT or `VideoClassificationDataset` for VC). An
+  optional `sniff(root) -> bool` classmethod is the autodetection hook (default
+  `False`).
 - **`register_loader`.** A decorator that records `format → loader-class` in
   the registry. This is the extension point — adding a loader does not touch
   any dispatch code.
@@ -470,11 +488,13 @@ flowchart TD
   a `DatasetFormat` or its string value; pass `None` to autodetect via
   `sniff` (no format implements detection rules yet, so an explicit format is
   required in practice). `**options` pass through to the loader (e.g. HMIE's
-  `require_video`, MOTChallenge's `annotation_source`, TAO's `probe_images`, or
-  VisDrone Video's `variant`). The public, task-first MOT entry point is
-  `load_mot(root, dataset_format=…)` (a thin typed wrapper over `load`); each
-  format's `load_<format>` helper lives on internally in
-  `databridge._formats.<format>.loader` but is no longer part of the public API.
+  `require_video`, Hugging Face's `video_extensions`, MOTChallenge's
+  `annotation_source`, TAO's `probe_images`, or VisDrone Video's `variant`). The
+  public, task-first MOT entry point is `load_mot(root, dataset_format=…)` (a
+  thin typed wrapper over `load`); MOT format-specific `load_<format>` helpers
+  live on internally in `databridge._formats.<format>.loader` but are no longer
+  part of the public API. Hugging Face Video Classification also provides the
+  public `load_huggingface_video_classification(...)` helper.
 
 This mirrors the validator: `validate(path, dataset_format=…)` dispatches the
 same way. Loader, writer, schema, discovery, and validation helpers are owned by
@@ -487,13 +507,16 @@ Every loader honors the same contract so callers and converters can rely on it:
 
 - **Return, don't raise, on bad data.** Loading is best-effort: an item that
   cannot be parsed is skipped and logged at WARNING; the loader returns a
-  (possibly empty) `BoxTrackDataset`. The authoritative "*why* is it bad" answer is a
-  separate pass — `validate()`.
+  (possibly empty) task-appropriate dataset. The authoritative "*why* is it bad"
+  answer is a separate pass — `validate()`.
 - **Keyword-only options, consistent names.** Loader-specific options are
   keyword-only; shared semantics (e.g. `require_video` for any FMV format)
   keep the same name and meaning across loaders.
-- **One model out.** Every loader produces the same `BoxTrackDataset`, so any
-  converter consumes the result regardless of input format.
+- **Task-appropriate model out.** MOT loaders produce `BoxTrackDataset`, while
+  video-level classification uses `VideoClassificationDataset` so clip labels do
+  not masquerade as MOT track categories. `VisionDataset` is the union of these
+  task models; call sites narrow it with `isinstance` before using task-specific
+  behavior (for example, `convert` and `stats` require `BoxTrackDataset`).
 
 ### Common data model (temporal sequences vs. still images)
 
@@ -505,16 +528,16 @@ model is a temporal box-track IR: a `BoxTrackDataset` holds `VideoSequence`s of
 MOTChallenge and VisDrone Video, explicit `frame_files` for TAO, plus
 `frame_filename()` / `frame_path()` helpers).
 
-**Still-image object detection (OD) and image classification (IC) are separate
-tasks, not a sample variant inside `BoxTrackDataset`.** A still image is not a
-degenerate one-frame video — it has different task semantics, a different MAITE
-protocol, and different output formats. So rather than adding an `ImageSample`
-to the video model, databridge grows a **task axis**: `BoxTrackDataset` (MOT)
-gains sibling `ObjectDetectionDataset` and `ImageClassificationDataset` classes,
-each natively its own MAITE surface. See
-[Task-aware datasets — IC and OD](#task-aware-datasets--ic-and-od) for the full
-design; the foundation primitives (`Task`, `geometry.py`, `taxonomy.py`) have
-landed and the dataset classes / per-format readers and writers follow.
+**Non-MOT tasks are separate, not sample variants inside `BoxTrackDataset`.** A
+still image is not a degenerate one-frame video, and a video-level clip label is
+not a degenerate empty-box track dataset. Databridge therefore grows a **task
+axis**: `BoxTrackDataset` (MOT) gains sibling task datasets. The first such
+sibling implemented here is `VideoClassificationDataset`, explicitly with no
+MAITE surface because MAITE 0.9.5 has no video-classification protocol. Future
+OD/IC datasets follow the same shape. See
+[Task-aware datasets — IC, OD, and VC](#task-aware-datasets--ic-od-and-vc) for
+the full design; the foundation primitives (`Task`, `geometry.py`, `taxonomy.py`)
+have landed and the per-format readers and writers follow.
 
 ### Adding a new loader
 
@@ -525,19 +548,27 @@ To support a new input format `foo`:
    schema, or parse helpers it needs (mirrors `_formats/hmie/`), keeping format
    specifics isolated.
 3. Write a `FooLoader(Loader)` with `format = DatasetFormat.FOO` and a `load`
-   that returns a `BoxTrackDataset`, following the conventions above. Decorate it with
-   `@register_loader`. (Use `HmieLoader` in `_formats/hmie/loader.py` as the template.)
+   that returns the task-appropriate dataset (`BoxTrackDataset` for MOT,
+   `VideoClassificationDataset` for VC, future OD/IC siblings as they land),
+   following the conventions above. Decorate it with `@register_loader`. (Use
+   `HmieLoader` in `_formats/hmie/loader.py` as the MOT template.)
 4. Export the loader from `_formats/foo/__init__.py` and import it from the
    public package `__init__` so registration runs.
 5. Optionally add format-specific validation under `_formats/foo/` and a
    `DatasetFormat.FOO` branch in `validation.py`.
 
-`FlatMp4Loader` in `_formats/flat_mp4/loader.py` is the video-only example for IR-3.3-S-1:
-it reads only immediate `.mp4` children (no nested discovery), probes codecs
-with OpenCV, accepts H.264 and MPEG-2, and creates video-backed sequences with
-empty `boxes`. `MotChallengeLoader` in `_formats/motchallenge/loader.py`, `TaoLoader` in
-`_formats/tao/loader.py`, and `VisDroneVideoLoader` in `_formats/visdrone/loader.py` are the image-sequence
-examples. MOTChallenge expects a standard benchmark root with `train/` and/or
+`FlatMp4Loader` in `_formats/flat_mp4/loader.py` is the video-only example for
+IR-3.3-S-1: it reads only immediate `.mp4` children (no nested discovery),
+probes codecs with OpenCV, accepts H.264 and MPEG-2, and creates video-backed
+sequences with empty `boxes`. `HuggingFaceVideoClassificationLoader` in
+`_formats/huggingface_video_classification/loader.py` is the video-level-label
+example: it reads VideoFolder class/split directories or Hugging Face metadata
+files and returns `VideoClassificationDataset` records rather than empty-box MOT
+sequences.
+`MotChallengeLoader` in `_formats/motchallenge/loader.py`, `TaoLoader` in
+`_formats/tao/loader.py`, and `VisDroneVideoLoader` in
+`_formats/visdrone/loader.py` are the image-sequence examples. MOTChallenge
+expects a standard benchmark root with `train/` and/or
 `test/` and reads `gt/gt.txt` or `det/det.txt` (with optional
 `class_names={id: name}` for MOT-style datasets with custom labels); TAO expects
 `annotations/train.json`, `validation.json`, and/or `test.json` / the official
@@ -548,7 +579,8 @@ and helpers (`VideoSequence.frame_dir`, `frame_filename()`, `frame_path()`)
 instead of `video_path`.
 
 `databridge.load(root, dataset_format="foo")` then works with no changes to
-the dispatcher, and any existing converter accepts the result.
+the dispatcher. Converters currently accept `BoxTrackDataset` outputs; task
+siblings such as VC need their own writer surface before conversion is enabled.
 
 ## Loading — HMIE loader
 
@@ -799,36 +831,43 @@ option (`"train"` by default).
   already in the model, which the track-centric (MOT) and class-indexed (YOLO)
   formats need.
 
-## Task-aware datasets — IC and OD
+## Task-aware datasets — IC, OD, and VC
 
 databridge is centered on FMV/video box tracks (the MOT task). The roadmap adds
-still-image **object detection (OD)** and **image classification (IC)**. These are
-*separate tasks*, not variants of the video model — a still image has different
-task semantics, a different MAITE protocol, and different output formats. The
-abstraction grows a **task axis** rather than stretching `BoxTrackDataset`.
+still-image **object detection (OD)**, **image classification (IC)**, and
+**video classification (VC)**. These are *separate tasks*, not variants of the
+video box-track model — a still image has different task semantics, a clip label
+is not a per-frame box, and each task has different protocol/output-format
+constraints. The abstraction grows a **task axis** rather than stretching
+`BoxTrackDataset`.
 
 **Status:** the foundation primitives have landed — `Task` (`_types.py`),
 `geometry.py` (canonical bbox + conversions), and `taxonomy.py` (source-preserving
-category table). The dataset classes, the `(Task, Format, variant)` registry
-rewire, and the per-format readers/writers follow in subsequent slices.
+category table). `VideoClassificationDataset` has landed as a no-MAITE source
+record dataset for Hugging Face VideoFolder. OD/IC dataset classes, the full
+`(Task, Format, variant)` registry rewire, and additional per-format
+readers/writers follow in subsequent slices.
 
-### Three sibling dataset classes (not one polymorphic dataset)
+### Sibling dataset classes (not one polymorphic dataset)
 
 A MAITE dataset is **single-task**: `ds[i]` returns one task's item. `BoxTrackDataset`
-is a native MAITE MOT dataset precisely because it commits to one task. So OD and IC
-get their own classes, each natively its own MAITE surface — a polymorphic
-`VisionDataset` could not be a native MAITE dataset and would force an adapter back.
+is a native MAITE MOT dataset precisely because it commits to one task. So OD,
+IC, and VC get their own classes. OD/IC can be native MAITE surfaces; VC is
+source-record-only until MAITE grows a video-classification protocol. A
+polymorphic `VisionDataset` could not itself be a native MAITE dataset and would
+force an adapter back.
 
 | databridge class | MAITE protocol (0.9.5) | `ds[i]` input | `ds[i]` target |
 |---|---|---|---|
 | `BoxTrackDataset` (today) | `multiobject_tracking` | `VideoStream` | `MultiobjectTrackingTarget` (per-frame `boxes/labels/scores/track_ids`) |
 | `ObjectDetectionDataset` | `object_detection` | `Image` (single) | `ObjectDetectionTarget{boxes,labels,scores}` |
 | `ImageClassificationDataset` | `image_classification` | `Image` (single) | one-hot / prob vector |
+| `VideoClassificationDataset` (today) | none in MAITE 0.9.5 | source record | clip label metadata |
 
-All three were verified against `maite` 0.9.5 (all three protocol modules exist).
-OD/IC inputs are single images → they need an **image decoder** (PIL/opencv), distinct
-from MOT's PyAV video decoder. *Video classification* (HF) has no MAITE 0.9.5 protocol
-and is out of scope.
+The three MAITE-backed tasks above were verified against `maite` 0.9.5 (their
+protocol modules exist). OD/IC inputs are single images → they need an **image
+decoder** (PIL/opencv), distinct from MOT's PyAV video decoder. VC is explicitly
+not exposed as MAITE until a real protocol exists.
 
 ### Conversion is task-closed
 
@@ -841,20 +880,22 @@ flowchart LR
     fM["MOT formats:<br/>HMIE · MOTChallenge · TAO · VisDrone-VID · flat-MP4"] <--> IRM(["BoxTrackDataset<br/>· MOT ·"])
     fO["OD formats:<br/>COCO · YOLO · Pascal-VOC · KITTI · VisDrone-DET · HF-OD"] <--> IRO(["ObjectDetectionDataset<br/>· OD ·"])
     fI["IC formats:<br/>HF imagefolder / ImageNet"] <--> IRI(["ImageClassificationDataset<br/>· IC ·"])
+    fV["VC formats:<br/>HF VideoFolder"] --> IRV(["VideoClassificationDataset<br/>· VC ·<br/>no MAITE protocol"])
     IRM -. "as_object_detection()<br/>per-frame · drops track_ids · lossy · one-way" .-> IRO
 
     classDef ir fill:#fff8e1,stroke:#f57c00,stroke-width:2px;
     classDef fmt fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
-    class IRM,IRO,IRI ir;
-    class fM,fO,fI fmt;
+    class IRM,IRO,IRI,IRV ir;
+    class fM,fO,fI,fV fmt;
 ```
 
-Refused cross-task conversions (would fabricate data): `OD→MOT` / `IC→*` (no tracks or
-boxes to invent), `OD→IC` / `MOT→IC` (would fabricate image-level labels from box presence).
+Refused cross-task conversions (would fabricate data): `OD→MOT` / `IC→*` / `VC→MOT`
+(no tracks or boxes to invent), `OD→IC` / `MOT→IC` / `VC→IC` (would fabricate image-level
+labels from box or clip-label presence).
 
 ### Format and task are independent axes — `(Task, Format, variant)`
 
-One wire format can serve multiple tasks (VisDrone → MOT or OD; HuggingFace → OD or IC),
+One wire format can serve multiple tasks (VisDrone → MOT or OD; HuggingFace → OD, IC, or VC),
 so `Task` is a separate enum from `DatasetFormat`, and the loader/validator/writer registries
 key on the triple `(Task, DatasetFormat, variant)`. The `variant` axis is required because
 VisDrone's VID/MOT/DET layouts are otherwise indistinguishable (the current
@@ -866,6 +907,7 @@ VisDrone's VID/MOT/DET layouts are otherwise indistinguishable (the current
 load_mot(root, *, dataset_format, variant="default") -> BoxTrackDataset
 load_od (root, *, dataset_format, variant="default") -> ObjectDetectionDataset
 load_ic (root, *, dataset_format, variant="default") -> ImageClassificationDataset
+load_vc (root, *, dataset_format, variant="default") -> VideoClassificationDataset
 # generic dispatch underneath: load(root, *, task, dataset_format, variant)
 ```
 

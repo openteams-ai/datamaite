@@ -1,10 +1,11 @@
 """Loader architecture: the contract every dataset loader implements.
 
 databridge is an N-to-M bridge. A *loader* reads a dataset of one input
-format from disk and produces the neutral
-:class:`databridge.model.BoxTrackDataset` model; a *converter* writes that
-model out to an output format. This module defines the input-side
-architecture:
+format from disk and produces a task-appropriate in-memory dataset (currently
+:class:`databridge.model.BoxTrackDataset` for MOT or
+:class:`databridge.model.VideoClassificationDataset` for video classification).
+A *converter* writes supported in-memory datasets out to an output format. This
+module defines the input-side architecture:
 
 * :class:`Loader` -- the base class every loader subclasses;
 * :func:`register_loader` -- the extension point that adds a format;
@@ -18,17 +19,17 @@ Conventions every loader follows
 --------------------------------
 * **Return, don't raise, on bad data.** Loading is best-effort: an item that
   cannot be parsed is skipped and logged at WARNING, never fatal. A loader
-  returns a (possibly empty) :class:`BoxTrackDataset` rather than aborting the
+  returns a (possibly empty) task-appropriate dataset rather than aborting the
   load. The authoritative "*why* is this dataset bad" answer comes from
   :func:`databridge.validate`, which is deliberately a separate pass.
 * **Options are keyword-only.** ``load(root, **options)`` -- each loader
   documents its own options (e.g. HMIE's ``require_video``). Where an option
   is shared across loaders (``require_video`` for any FMV format), keep the
   name and meaning consistent.
-* **One model out.** Every loader produces the same :class:`BoxTrackDataset`,
-  so any converter can consume the result regardless of which format it came
-  from. :class:`BoxTrackDataset` is MAITE-MOT-capable by default; see
-  :mod:`databridge.maite` for details.
+* **Task-appropriate models.** MOT loaders produce :class:`BoxTrackDataset`,
+  which is MAITE-MOT-capable by default; video classification produces its own
+  records because MAITE 0.9.5 has no video-classification protocol. See
+  :mod:`databridge.maite` for MOT details.
 """
 
 from __future__ import annotations
@@ -36,10 +37,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from importlib import import_module
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from databridge._types import DatasetFormat
-from databridge.model import BoxTrackDataset
+from databridge.model import BoxTrackDataset, VisionDataset
 
 
 class Loader(ABC):
@@ -54,12 +55,12 @@ class Loader(ABC):
     format: ClassVar[DatasetFormat]
 
     @abstractmethod
-    def load(self, root: str | Path, **options: Any) -> BoxTrackDataset:
-        """Read the dataset under ``root`` into a :class:`BoxTrackDataset`.
+    def load(self, root: str | Path, **options: Any) -> VisionDataset:
+        """Read the dataset under ``root`` into an in-memory dataset.
 
         Best-effort by contract: unparseable items are skipped and logged,
-        not raised; an empty :class:`BoxTrackDataset` is returned when nothing
-        loadable is found. ``options`` are loader-specific keyword arguments.
+        not raised; an empty dataset is returned when nothing loadable is
+        found. ``options`` are loader-specific keyword arguments.
         """
         raise NotImplementedError
 
@@ -78,10 +79,12 @@ class Loader(ABC):
 # Format -> loader-class registry. Populated by register_loader at import
 # time (each format module decorates its Loader subclass). Built-in loaders are
 # imported lazily so validation-only imports do not pull reader code into memory.
+_LoaderT = TypeVar("_LoaderT", bound=Loader)
 _LOADERS: dict[DatasetFormat, type[Loader]] = {}
 _BUILTIN_LOADER_MODULES = (
     "databridge._formats.flat_mp4.loader",
     "databridge._formats.hmie.loader",
+    "databridge._formats.huggingface_video_classification.loader",
     "databridge._formats.motchallenge.loader",
     "databridge._formats.tao.loader",
     "databridge._formats.visdrone.loader",
@@ -99,7 +102,7 @@ def _ensure_builtin_loaders() -> None:
     _BUILTIN_LOADERS_IMPORTED = True
 
 
-def register_loader(loader_cls: type[Loader]) -> type[Loader]:
+def register_loader(loader_cls: type[_LoaderT]) -> type[_LoaderT]:
     """Register ``loader_cls`` under its :attr:`Loader.format`.
 
     Intended as a decorator on a :class:`Loader` subclass. Re-registering a
@@ -144,8 +147,8 @@ def load(
     *,
     dataset_format: DatasetFormat | str | None = DatasetFormat.HMIE,
     **options: Any,
-) -> BoxTrackDataset:
-    """Load a dataset of any registered format into the neutral model.
+) -> VisionDataset:
+    """Load a dataset of any registered format into an in-memory model.
 
     Parameters
     ----------
@@ -179,7 +182,10 @@ def load_mot(
     (e.g. HMIE's ``require_video``). This is the public MOT loader; per-format
     helpers are internal to ``databridge._formats.<format>.loader``.
     """
-    return load(root, dataset_format=dataset_format, **options)
+    dataset = load(root, dataset_format=dataset_format, **options)
+    if not isinstance(dataset, BoxTrackDataset):
+        raise TypeError(f"load_mot expected a BoxTrackDataset, got {type(dataset).__name__}")
+    return dataset
 
 
 def _detect_format(root: str | Path) -> DatasetFormat:

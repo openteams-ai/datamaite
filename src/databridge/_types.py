@@ -199,6 +199,7 @@ class DatasetFormat(enum.Enum):
     """Supported dataset formats (the on-disk *wire* format, independent of task)."""
 
     FLAT_MP4 = "flat_mp4"
+    HUGGINGFACE_VIDEO_CLASSIFICATION = "huggingface_video_classification"
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"
@@ -211,13 +212,15 @@ class Task(enum.Enum):
     Orthogonal to :class:`DatasetFormat`: one wire format may serve more than
     one task (e.g. VisDrone has video-tracking and still-image-detection
     variants). Loaders/validators/writers are keyed by ``(Task, DatasetFormat,
-    variant)`` and each task maps 1:1 to a MAITE protocol module
-    (``multiobject_tracking`` / ``object_detection`` / ``image_classification``).
+    variant)``. MOT, OD, and IC map to MAITE protocol modules
+    (``multiobject_tracking`` / ``object_detection`` / ``image_classification``);
+    VC is source-record-only until MAITE adds a video-classification protocol.
     """
 
     MOT = "mot"  # multi-object tracking (FMV / video box tracks)
     OD = "od"  # still-image object detection
     IC = "ic"  # image classification
+    VC = "vc"  # video classification (no MAITE 0.9.5 protocol yet)
 
 
 class Severity(enum.Enum):

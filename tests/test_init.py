@@ -21,6 +21,7 @@ def test_public_api() -> None:
         DatasetFormat,
         Finding,
         FlatMp4Loader,
+        HuggingFaceVideoClassificationLoader,
         MotChallengeLoader,
         Severity,
         TaoLoader,
@@ -28,13 +29,18 @@ def test_public_api() -> None:
         Task,
         Taxonomy,
         ValidationResult,
+        VideoClassificationDataset,
+        VideoClassificationSample,
         VisDroneVideoLoader,
+        VisionDataset,
+        load_huggingface_video_classification,
         load_mot,
         validate,
         validate_annotation,
     )
 
     assert DatasetFormat.FLAT_MP4.value == "flat_mp4"
+    assert DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION.value == "huggingface_video_classification"
     assert DatasetFormat.HMIE.value == "hmie"
     assert DatasetFormat.MOTCHALLENGE.value == "motchallenge"
     assert DatasetFormat.TAO.value == "tao"
@@ -44,15 +50,21 @@ def test_public_api() -> None:
     assert Task.MOT.value == "mot"
     assert Task.OD.value == "od"
     assert Task.IC.value == "ic"
+    assert Task.VC.value == "vc"
     assert Taxonomy is not None
     assert CategoryEntry is not None
     assert Finding is not None
     assert ValidationResult is not None
+    assert VideoClassificationDataset is not None
+    assert VideoClassificationSample is not None
+    assert VisionDataset is not None
     assert FlatMp4Loader is not None
+    assert HuggingFaceVideoClassificationLoader is not None
     assert MotChallengeLoader is not None
     assert TaoLoader is not None
     assert TaoWriter is not None
     assert VisDroneVideoLoader is not None
+    assert callable(load_huggingface_video_classification)
     assert callable(load_mot)
     assert callable(validate)
     assert callable(validate_annotation)
