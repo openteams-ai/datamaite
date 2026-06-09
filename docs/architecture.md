@@ -56,7 +56,7 @@ flowchart LR
     subgraph consumers [Consumers]
         VCREC["<b>VC records</b><br/>no MAITE protocol yet"]
         MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(BoxTrackDataset IS one)"]
-        TM["to_mot"]
+        TM["<b>to_mot</b>"]
         TT["<b>to_tao</b>"]
         TY["to_yolo"]
         TC["to_coco"]
@@ -93,7 +93,7 @@ flowchart LR
     HUB --> TY
     HUB --> TC
     MAITE --> MAITEOUT
-    TM -.-> MOTOUT
+    TM --> MOTOUT
     TT --> TAOOUT
     TY -.-> YOLOUT
     TC -.-> COCOUT
@@ -102,18 +102,19 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB,VCHUB hub;
-    class LH,LF,LHF,LM,LT,LV,TT,MAITE,VCREC impl;
-    class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,TAOOUT impl;
-    class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
+    class LH,LF,LHF,LM,LT,LV,TM,TT,MAITE,VCREC impl;
+    class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,MOTOUT,TAOOUT impl;
+    class LC,LY,TY,TC,COCOIN,YOLOIN,YOLOUT,COCOUT planned;
 ```
 
 Today, the MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 all reached through the task-first `load_mot(dataset_format=…)` entry point; the
 Hugging Face Video Classification loader (`load_huggingface_video_classification`),
-the HMIE validation pipeline, the HMIE and TAO writers, and the MAITE surface
-(`databridge.maite`) are implemented. Hugging Face Video Classification returns
-its own `VideoClassificationDataset` records and has no MAITE surface yet. See
-[Loading](#loading--hmie-loader) for how MOT loaders build the box-track model,
+the HMIE validation pipeline, the HMIE, MOTChallenge, and TAO writers, and the
+MAITE surface (`databridge.maite`) are implemented. Hugging Face Video
+Classification returns its own `VideoClassificationDataset` records and has no
+MAITE surface yet. See [Loading](#loading--hmie-loader) for how MOT loaders build
+the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
 surface, and [Writer architecture](#writer-architecture--writerspy) for the
 writer contract.
@@ -161,6 +162,7 @@ src/databridge/
         motchallenge/
             __init__.py              MOTChallenge format exports
             loader.py                MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
+            writer.py                MotChallengeWriter: BoxTrackDataset -> standard MOTChallenge root
         tao/
             __init__.py              TAO format exports
             loader.py                TaoLoader: official TAO JSON -> BoxTrackDataset
@@ -740,18 +742,22 @@ flowchart TD
     REG[("<b>registry</b><br/>DatasetFormat → Writer")]
     BASE["<b>Writer (ABC)</b><br/>write(dataset, dest, **options) → list[Path]"]
     HMIE["<b>HmieWriter</b><br/>(_formats/hmie/writer.py)"]
+    MOT["<b>MotChallengeWriter</b><br/>(_formats/motchallenge/writer.py)"]
     TAO["<b>TaoWriter</b><br/>(_formats/tao/writer.py)"]
-    NEW["MotWriter, YoloWriter, …<br/>(future)"]
+    NEW["VisDroneWriter, YoloWriter, …<br/>(future)"]
 
     CONVERT -->|load → write| WRITE
     WRITE -->|get_writer| REG
     REG --> HMIE
+    REG --> MOT
     REG --> TAO
     REG -.-> NEW
     HMIE -->|subclasses| BASE
+    MOT -->|subclasses| BASE
     TAO -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_writer| REG
+    MOT -->|@register_writer| REG
     TAO -->|@register_writer| REG
     NEW -.->|@register_writer| REG
 
@@ -761,7 +767,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class CONVERT,WRITE entry;
     class REG store;
-    class HMIE,TAO impl;
+    class HMIE,MOT,TAO impl;
     class NEW planned;
 ```
 
@@ -786,7 +792,7 @@ flowchart TD
 - **Keyword-only options.** Format variants (e.g. MOT16 vs MOT20 columns) are a
   writer option, not a separate `DatasetFormat`.
 
-### Reference writers: HMIE and TAO (round-trip proof)
+### Reference writers: HMIE, MOTChallenge, and TAO (round-trip proof)
 
 `HmieWriter` (`_formats/hmie/writer.py`) is the first reference writer. Because
 databridge also has the HMIE *loader*, it closes a full round trip:
@@ -804,6 +810,14 @@ that `BoxTrackDataset` is a lossless hub. The writer emits annotations with
 back) and labels as ontology URIs (so categories re-resolve to the same names);
 the integer `category_id` is reassigned on reload, so round-trip equivalence is
 by `category_uri`, not by id.
+
+`MotChallengeWriter` (`_formats/motchallenge/writer.py`) emits a standard
+MOTChallenge benchmark root with `train/` / `test` split directories,
+per-sequence `img1/` frames, `seqinfo.ini`, and either `gt/gt.txt` or
+`det/det.txt` selected by the `annotation_source` option. It preserves standard
+MOT frame numbering by writing model frame index `0` as frame/file `000001` and
+drops boxes that cannot be represented (for example classless GT rows) with a
+warning.
 
 `TaoWriter` (`_formats/tao/writer.py`) emits an official TAO root with
 `annotations/<split>.json` and `frames/...`. TAO is image-sequence based:

@@ -31,16 +31,17 @@ source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
 format on disk, and a **writer** serialises supported datasets out to an output
 format (`convert` pairs a loader and a writer for on-disk → on-disk conversion).
 HMIE/Scale, flat MP4 video folders, Hugging Face Video Classification,
-MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale
-and TAO are implemented output formats (proving the writer architecture via
-load → write → load round trips), and other writers are planned.
+MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale,
+MOTChallenge, and TAO are implemented output formats (proving the writer
+architecture via load → write → load round trips), and other writers are
+planned.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
 | Hugging Face Video Classification | ✅ | — | planned |
-| MOTChallenge | ✅ | — | planned |
+| MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | planned |
 | YOLO | planned | planned | planned |
@@ -267,9 +268,9 @@ files = write(ds, "/path/to/out", output_format="hmie")   # -> list of files wri
 convert("/path/to/dataset", "/path/to/out", input_format="hmie", output_format="hmie")
 ```
 
-Write TAO with the same API. TAO is image-sequence based, so video-backed inputs
-are decoded to frame images and require the `video` extra; existing
-image-sequence inputs copy their frame files directly.
+Write MOTChallenge or TAO with the same API. Both formats are image-sequence
+based: video-backed inputs are decoded to frame images and require the `video`
+extra, while existing image-sequence inputs copy their frame files directly.
 
 ```python
 from databridge import load_mot, write
@@ -279,16 +280,23 @@ ds = load_mot(
     dataset_format="hmie",
     require_video=True,
 )  # video-backed source
+write(ds, "/path/to/mot-out", output_format="motchallenge", split="train")
 write(ds, "/path/to/tao-out", output_format="tao", split="train")
 ```
 
-HMIE and TAO both have round-trip writers: `load_mot(..., dataset_format="hmie") →
-write(output_format="hmie") → load_mot(..., dataset_format="hmie")` and
+For MOTChallenge, `annotation_source="gt"` (default) writes `gt/gt.txt` with
+class and visibility columns; `annotation_source="det"` writes `det/det.txt`
+with detection scores and optional world coordinates.
+
+HMIE, MOTChallenge, and TAO have round-trip writers:
+`load_mot(..., dataset_format="hmie") → write(output_format="hmie") →
+load_mot(..., dataset_format="hmie")`,
+`load_mot(..., dataset_format="motchallenge") → write(output_format="motchallenge") →
+load_mot(..., dataset_format="motchallenge")`, and
 `load_mot(..., dataset_format="tao") → write(output_format="tao") →
 load_mot(..., dataset_format="tao")` recover the same box/category/frame content
-represented by `BoxTrackDataset`. Adding a new
-output format is a `Writer` subclass + `@register_writer` — see
-[docs/architecture.md](docs/architecture.md).
+represented by `BoxTrackDataset`. Adding a new output format is a `Writer`
+subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
 
 ## CLI Usage
 
