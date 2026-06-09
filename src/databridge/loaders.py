@@ -164,6 +164,24 @@ def load(
     return get_loader(resolved).load(root, **options)
 
 
+def load_mot(
+    root: str | Path,
+    *,
+    dataset_format: DatasetFormat | str = DatasetFormat.HMIE,
+    **options: Any,
+) -> BoxTrackDataset:
+    """Load a video multi-object-tracking dataset (task-first entry point).
+
+    The MOT analogue of :func:`databridge.object_detection.load_od`: pins the
+    return type to :class:`BoxTrackDataset` (a native MAITE multi-object-tracking
+    dataset) and dispatches by wire ``dataset_format`` (HMIE, MOTChallenge, TAO,
+    VisDrone video, flat MP4). ``**options`` are forwarded to the format loader
+    (e.g. HMIE's ``require_video``). This is the public MOT loader; per-format
+    helpers are internal to ``databridge._formats.<format>.loader``.
+    """
+    return load(root, dataset_format=dataset_format, **options)
+
+
 def _detect_format(root: str | Path) -> DatasetFormat:
     """Pick a format by asking each registered loader to sniff ``root``."""
     for fmt in available_formats():

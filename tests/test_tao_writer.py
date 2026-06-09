@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from databridge import DatasetFormat, TaoWriter, convert, load_tao, write
+from databridge import DatasetFormat, TaoWriter, convert, write
+from databridge._formats.tao.loader import load_tao
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.writers import available_output_formats, get_writer
 

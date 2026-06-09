@@ -61,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registered formats (with a `sniff`-based autodetection hook). `HmieLoader`
   is the reference implementation; adding a format is additive (subclass +
   register). See the "Loader architecture" section in `docs/architecture.md`.
-- HMIE dataloader (`databridge.load_hmie`): loads an HMIE/Scale dataset
-  into the neutral `Dataset` model (`VideoSequence` / `BoxAnnotation`
+- HMIE dataloader (`databridge.load_mot(..., dataset_format="hmie")`):
+  loads an HMIE/Scale dataset into the neutral `BoxTrackDataset` model
+  (`VideoSequence` / `BoxAnnotation`
   records with a dataset-wide ontology-URI → category-id map). Reuses the
   existing discovery + Scale-schema layers instead of the hard-coded
   notebook walk; supports `annotation_dir` / `video_dir` overrides for
@@ -79,8 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closes a `load → write → load` round trip that recovers the same
   box/category content, proving the writer architecture and that
   `BoxTrackDataset` is a lossless hub.
-- Flat-folder MP4 loader (`databridge.load_flat_mp4`, IR-3.3-S-1): loads
-  immediate `.mp4` children encoded as H.264 or MPEG-2 into video-backed
+- Flat-folder MP4 loader
+  (`databridge.load_mot(..., dataset_format="flat_mp4")`, IR-3.3-S-1):
+  loads immediate `.mp4` children encoded as H.264 or MPEG-2 into video-backed
   `VideoSequence` records with media metadata and no annotations.
 
 ### Fixed

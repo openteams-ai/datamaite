@@ -179,7 +179,7 @@ class TestDefaultMaiteSurface:
 
 class TestEndToEndFromLoader:
     def test_load_hmie_is_directly_maite_indexable(self, tmp_path: Path) -> None:
-        from databridge import load_hmie
+        from databridge._formats.hmie.loader import load_hmie
 
         from ._hmie_factory import SnippetSpec, single_video_dataset
 

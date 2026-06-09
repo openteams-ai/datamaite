@@ -2,7 +2,7 @@
 
 This is the format-agnostic intermediate representation at the center of
 the bridge: every *loader* produces it and every *converter* consumes it.
-A loader (e.g. :func:`databridge.load_hmie`) turns an on-disk dataset into
+A loader (e.g. :func:`databridge.load_mot`) turns an on-disk dataset into
 a :class:`BoxTrackDataset`; a converter turns a :class:`BoxTrackDataset`
 into an output format (MOTChallenge, YOLO, ...) or a MAITE-protocol view
 (:mod:`databridge.maite`). Because the model is tied to neither a specific

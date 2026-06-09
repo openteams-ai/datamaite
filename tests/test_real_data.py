@@ -90,7 +90,7 @@ class TestRealHmieLoader:
         the actual SUNet layout: at least one sequence with boxes, and a
         non-empty category map.
         """
-        from databridge import load_hmie
+        from databridge._formats.hmie.loader import load_hmie
 
         ds = load_hmie(hmie_root)
 

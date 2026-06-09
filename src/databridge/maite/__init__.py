@@ -8,11 +8,11 @@ to use it::
 
 :class:`~databridge.model.BoxTrackDataset` already implements the MAITE
 multi-object-tracking protocol directly -- there is no adapter/conversion
-call. ``load_hmie`` returns one; index it::
+call. ``load_mot`` returns one; index it::
 
-    from databridge import load_hmie
+    from databridge import load_mot
 
-    ds = load_hmie(root)
+    ds = load_mot(root)
     video_stream, target, metadata = ds[0]   # one MAITE MOT item per video
 
 To configure the MOT view (decoder, ``empty_frame_policy``, ``dataset_id``)

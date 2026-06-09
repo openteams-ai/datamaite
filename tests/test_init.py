@@ -29,10 +29,7 @@ def test_public_api() -> None:
         Taxonomy,
         ValidationResult,
         VisDroneVideoLoader,
-        load_flat_mp4,
-        load_motchallenge,
-        load_tao,
-        load_visdrone_video,
+        load_mot,
         validate,
         validate_annotation,
     )
@@ -56,12 +53,21 @@ def test_public_api() -> None:
     assert TaoLoader is not None
     assert TaoWriter is not None
     assert VisDroneVideoLoader is not None
-    assert callable(load_flat_mp4)
-    assert callable(load_motchallenge)
-    assert callable(load_tao)
-    assert callable(load_visdrone_video)
+    assert callable(load_mot)
     assert callable(validate)
     assert callable(validate_annotation)
+
+
+def test_per_format_load_functions_not_in_public_api() -> None:
+    """The old per-format ``load_*`` functions are replaced by task-first ``load_mot``.
+
+    They live on internally (``databridge._formats.<format>.loader``) but are no
+    longer exposed on the top-level ``databridge`` namespace.
+    """
+    import databridge
+
+    for name in ("load_hmie", "load_tao", "load_motchallenge", "load_visdrone_video", "load_flat_mp4"):
+        assert not hasattr(databridge, name), f"{name} should be removed from the public API (use load_mot)"
 
 
 def test_validation_import_keeps_loader_and_writer_modules_lazy() -> None:

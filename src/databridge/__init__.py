@@ -11,20 +11,20 @@ from databridge._stats import dataset_stats
 from databridge._types import DatasetFormat, Finding, Severity, Task, ValidationResult
 from databridge._version import __version__, __version_tuple__
 from databridge.conversion import convert
-from databridge.loaders import Loader, available_formats, get_loader, load, register_loader
+from databridge.loaders import Loader, available_formats, get_loader, load, load_mot, register_loader
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.taxonomy import CategoryEntry, Taxonomy
 from databridge.validation import validate, validate_annotation, validate_batches
 from databridge.writers import Writer, available_output_formats, get_writer, register_writer, write
 
 if TYPE_CHECKING:
-    from databridge._formats.flat_mp4.loader import FlatMp4Loader, load_flat_mp4
-    from databridge._formats.hmie.loader import HmieLoader, load_hmie
+    from databridge._formats.flat_mp4.loader import FlatMp4Loader
+    from databridge._formats.hmie.loader import HmieLoader
     from databridge._formats.hmie.writer import HmieWriter
-    from databridge._formats.motchallenge.loader import MotChallengeLoader, load_motchallenge
-    from databridge._formats.tao.loader import TaoLoader, load_tao
+    from databridge._formats.motchallenge.loader import MotChallengeLoader
+    from databridge._formats.tao.loader import TaoLoader
     from databridge._formats.tao.writer import TaoWriter
-    from databridge._formats.visdrone.loader import VisDroneVideoLoader, load_visdrone_video
+    from databridge._formats.visdrone.loader import VisDroneVideoLoader
 
 # Library convention: attach a NullHandler so downstream applications
 # that don't configure logging don't see "No handler found" warnings.
@@ -39,11 +39,6 @@ _LAZY_EXPORTS = {
     "TaoLoader": ("databridge._formats.tao.loader", "TaoLoader"),
     "TaoWriter": ("databridge._formats.tao.writer", "TaoWriter"),
     "VisDroneVideoLoader": ("databridge._formats.visdrone.loader", "VisDroneVideoLoader"),
-    "load_flat_mp4": ("databridge._formats.flat_mp4.loader", "load_flat_mp4"),
-    "load_hmie": ("databridge._formats.hmie.loader", "load_hmie"),
-    "load_motchallenge": ("databridge._formats.motchallenge.loader", "load_motchallenge"),
-    "load_tao": ("databridge._formats.tao.loader", "load_tao"),
-    "load_visdrone_video": ("databridge._formats.visdrone.loader", "load_visdrone_video"),
 }
 
 
@@ -89,11 +84,7 @@ __all__ = [
     "get_loader",
     "get_writer",
     "load",
-    "load_flat_mp4",
-    "load_hmie",
-    "load_motchallenge",
-    "load_tao",
-    "load_visdrone_video",
+    "load_mot",
     "register_loader",
     "register_writer",
     "render_html_report",

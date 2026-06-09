@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from databridge import BoxAnnotation, BoxTrackDataset, VideoSequence, load_hmie
+from databridge import BoxAnnotation, BoxTrackDataset, VideoSequence
+from databridge._formats.hmie.loader import load_hmie
 
 from ._hmie_factory import (
     AnnotationSpec,

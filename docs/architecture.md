@@ -39,13 +39,13 @@ flowchart LR
     end
 
     subgraph loaders [Loaders]
-        LH["<b>load_hmie</b>"]
-        LF["<b>load_flat_mp4</b>"]
-        LM["<b>load_motchallenge</b>"]
-        LT["<b>load_tao</b>"]
-        LV["<b>load_visdrone_video</b>"]
-        LC["load_coco"]
-        LY["load_yolo"]
+        LH["<b>load_mot</b><br/>dataset_format='hmie'"]
+        LF["<b>load_mot</b><br/>dataset_format='flat_mp4'"]
+        LM["<b>load_mot</b><br/>dataset_format='motchallenge'"]
+        LT["<b>load_mot</b><br/>dataset_format='tao'"]
+        LV["<b>load_mot</b><br/>dataset_format='visdrone_video'"]
+        LC["load_od<br/>dataset_format='coco'"]
+        LY["load_od<br/>dataset_format='yolo'"]
     end
 
     HUB[/"<b>model.py</b><br/>BoxTrackDataset<br/>VideoSequence · BoxAnnotation"/]
@@ -100,13 +100,13 @@ flowchart LR
     class LC,LY,TM,TY,TC,COCOIN,YOLOIN,MOTOUT,YOLOUT,COCOUT planned;
 ```
 
-Today the HMIE loader (`load_hmie`), the flat MP4 loader (`load_flat_mp4`),
-the MOTChallenge loader (`load_motchallenge`), the TAO loader (`load_tao`),
-the VisDrone Video loader (`load_visdrone_video`), the HMIE validation
-pipeline, the HMIE and TAO writers, and the MAITE surface (`databridge.maite`)
-are implemented. See [Loading](#loading--hmie-loader) for how loaders build the
-model, [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the
-MAITE surface, and [Writer architecture](#writer-architecture--writerspy) for
+Today, the MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
+all reached through the task-first `load_mot(dataset_format=…)` entry point; the
+HMIE validation pipeline, the HMIE and TAO writers, and the MAITE surface
+(`databridge.maite`) are implemented. See [Loading](#loading--hmie-loader) for
+how loaders build the model,
+[The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
+surface, and [Writer architecture](#writer-architecture--writerspy) for
 the writer contract.
 
 ## Project layout
@@ -471,8 +471,10 @@ flowchart TD
   `sniff` (no format implements detection rules yet, so an explicit format is
   required in practice). `**options` pass through to the loader (e.g. HMIE's
   `require_video`, MOTChallenge's `annotation_source`, TAO's `probe_images`, or
-  VisDrone Video's `variant`). `load_hmie(...)`, `load_motchallenge(...)`,
-  `load_tao(...)`, and `load_visdrone_video(...)` are thin convenience wrappers.
+  VisDrone Video's `variant`). The public, task-first MOT entry point is
+  `load_mot(root, dataset_format=…)` (a thin typed wrapper over `load`); each
+  format's `load_<format>` helper lives on internally in
+  `databridge._formats.<format>.loader` but is no longer part of the public API.
 
 This mirrors the validator: `validate(path, dataset_format=…)` dispatches the
 same way. Loader, writer, schema, discovery, and validation helpers are owned by
@@ -550,8 +552,8 @@ the dispatcher, and any existing converter accepts the result.
 
 ## Loading — HMIE loader
 
-`load_hmie(root)` (and the `HmieLoader` behind it) is the other consumer of
-the discovery + schema layers.
+`load_mot(root, dataset_format="hmie")` (and the `HmieLoader` behind it) is
+the other consumer of the discovery + schema layers.
 Where `validate()` runs *checks* on each pair, the loader *parses* each
 pair into the neutral in-memory model defined in `model.py`:
 
@@ -570,8 +572,8 @@ discover_hmie_pairs(root) ─► [SnippetPair]
 
 `BoxTrackDataset` / `VideoSequence` / `BoxAnnotation` live in `model.py`, not in
 `_formats/hmie/loader.py`, on purpose: the model is the **format-neutral hub** of the
-bridge. `load_hmie` is one loader that produces it; future loaders (COCO,
-YOLO, ...) produce the same `BoxTrackDataset`, and converters consume `BoxTrackDataset`
+bridge. `HmieLoader` (via `load_mot(dataset_format="hmie")`) is one loader that produces
+it; the other MOT loaders produce the same `BoxTrackDataset`, and converters consume it
 without depending on any loader. That is what makes databridge an N-to-M
 bridge (loaders × converters) rather than an HMIE-to-X path.
 
@@ -601,11 +603,13 @@ Design points:
 
 `BoxTrackDataset` does double duty. It is the neutral hub every converter
 consumes, **and it natively implements the MAITE multi-object-tracking
-protocol** — so `load_hmie(root)` returns an object a MAITE model or metric
-can consume directly, with no adapter call:
+protocol** — so `load_mot(root)` returns an object a MAITE model or metric can
+consume directly, with no adapter call:
 
 ```python
-ds = load_hmie(root)
+from databridge import load_mot
+
+ds = load_mot(root)
 stream, target, metadata = ds[0]      # MAITE MOT item — one per video
 ds = ds.with_mot_options(empty_frame_policy="all")   # configure the MOT view
 ```
@@ -630,7 +634,7 @@ flowchart TB
         S5[bbox<br/>category_id]
     end
 
-    src ==> L["<b>load_hmie</b>"]
+    src ==> L["<b>load_mot</b><br/>dataset_format='hmie'"]
     L ==> M[/"<b>BoxTrackDataset</b><br/>typed VideoSequence · BoxAnnotation<br/>— all source detail retained —"/]
 
     M -. computed view .-> V["MAITE MOT view<br/>ds[i] → (VideoStream,<br/>target, metadata)"]
@@ -756,7 +760,10 @@ flowchart TD
 databridge also has the HMIE *loader*, it closes a full round trip:
 
 ```
-load_hmie(src) → BoxTrackDataset → write(…, output_format="hmie") → load_hmie(dest)
+load_mot(src, dataset_format="hmie")
+  → BoxTrackDataset
+  → write(…, output_format="hmie")
+  → load_mot(dest, dataset_format="hmie")
 ```
 
 recovers the same box/category content — verifying both the writer contract and
@@ -856,15 +863,16 @@ VisDrone's VID/MOT/DET layouts are otherwise indistinguishable (the current
 **Public API — task-first loaders, format as a parameter:**
 
 ```python
-load_mot(root, *, format, variant="default") -> BoxTrackDataset
-load_od (root, *, format, variant="default") -> ObjectDetectionDataset
-load_ic (root, *, format, variant="default") -> ImageClassificationDataset
+load_mot(root, *, dataset_format, variant="default") -> BoxTrackDataset
+load_od (root, *, dataset_format, variant="default") -> ObjectDetectionDataset
+load_ic (root, *, dataset_format, variant="default") -> ImageClassificationDataset
 # generic dispatch underneath: load(root, *, task, dataset_format, variant)
 ```
 
 The task lives in the call (pins the return type, disambiguates multi-task formats);
-`variant` selects among same-task layouts. Existing `load_hmie()` etc. become thin aliases
-over `load_mot(format=...)`, and `load()` defaults `task=MOT`, so today's calls are unchanged.
+`variant` selects among same-task layouts. Per-format `load_*` helpers remain internal;
+the top-level public API uses `load_mot(..., dataset_format=...)` (and the planned
+`load_od` / `load_ic` siblings) instead of exporting one function per wire format.
 Writers stay object-driven (`write(dataset, format)` infers task from the dataset type).
 
 ### Generalized reader/writer interfaces
