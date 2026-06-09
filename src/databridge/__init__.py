@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from databridge._formats.tao.loader import TaoLoader
     from databridge._formats.tao.writer import TaoWriter
     from databridge._formats.visdrone.loader import VisDroneVideoLoader
+    from databridge._formats.visdrone.writer import VisDroneVideoWriter
 
 # Library convention: attach a NullHandler so downstream applications
 # that don't configure logging don't see "No handler found" warnings.
@@ -56,6 +57,7 @@ _LAZY_EXPORTS = {
     "TaoLoader": ("databridge._formats.tao.loader", "TaoLoader"),
     "TaoWriter": ("databridge._formats.tao.writer", "TaoWriter"),
     "VisDroneVideoLoader": ("databridge._formats.visdrone.loader", "VisDroneVideoLoader"),
+    "VisDroneVideoWriter": ("databridge._formats.visdrone.writer", "VisDroneVideoWriter"),
     "load_huggingface_video_classification": (
         "databridge._formats.huggingface_video_classification.loader",
         "load_huggingface_video_classification",
@@ -98,6 +100,7 @@ __all__ = [
     "VideoClassificationSample",
     "VideoSequence",
     "VisDroneVideoLoader",
+    "VisDroneVideoWriter",
     "VisionDataset",
     "Writer",
     "__version__",

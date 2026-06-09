@@ -79,6 +79,7 @@ _BUILTIN_WRITER_MODULES = (
     "databridge._formats.hmie.writer",
     "databridge._formats.motchallenge.writer",
     "databridge._formats.tao.writer",
+    "databridge._formats.visdrone.writer",
 )
 _BUILTIN_WRITERS_IMPORTED = False
 
