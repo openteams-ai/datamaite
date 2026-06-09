@@ -58,6 +58,7 @@ flowchart LR
         MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(BoxTrackDataset IS one)"]
         TM["<b>to_mot</b>"]
         TT["<b>to_tao</b>"]
+        TV["<b>to_visdrone</b>"]
         TY["to_yolo"]
         TC["to_coco"]
     end
@@ -66,6 +67,7 @@ flowchart LR
         MAITEOUT([model / metric<br/>in-memory])
         MOTOUT([MOTChallenge])
         TAOOUT([TAO])
+        VISOUT([VisDrone Video])
         YOLOUT([YOLO])
         COCOUT([COCO])
     end
@@ -90,11 +92,13 @@ flowchart LR
     HUB --> MAITE
     HUB --> TM
     HUB --> TT
+    HUB --> TV
     HUB --> TY
     HUB --> TC
     MAITE --> MAITEOUT
     TM --> MOTOUT
     TT --> TAOOUT
+    TV --> VISOUT
     TY -.-> YOLOUT
     TC -.-> COCOUT
 
@@ -102,19 +106,19 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB,VCHUB hub;
-    class LH,LF,LHF,LM,LT,LV,TM,TT,MAITE,VCREC impl;
-    class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,MOTOUT,TAOOUT impl;
+    class LH,LF,LHF,LM,LT,LV,TM,TT,TV,MAITE,VCREC impl;
+    class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,MOTOUT,TAOOUT,VISOUT impl;
     class LC,LY,TY,TC,COCOIN,YOLOIN,YOLOUT,COCOUT planned;
 ```
 
 Today, the MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 all reached through the task-first `load_mot(dataset_format=…)` entry point; the
 Hugging Face Video Classification loader (`load_huggingface_video_classification`),
-the HMIE validation pipeline, the HMIE, MOTChallenge, and TAO writers, and the
-MAITE surface (`databridge.maite`) are implemented. Hugging Face Video
-Classification returns its own `VideoClassificationDataset` records and has no
-MAITE surface yet. See [Loading](#loading--hmie-loader) for how MOT loaders build
-the box-track model,
+the HMIE validation pipeline, the HMIE, MOTChallenge, TAO, and VisDrone Video
+writers, and the MAITE surface (`databridge.maite`) are implemented. Hugging Face
+Video Classification returns its own `VideoClassificationDataset` records and has
+no MAITE surface yet. See [Loading](#loading--hmie-loader) for how MOT loaders
+build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
 surface, and [Writer architecture](#writer-architecture--writerspy) for the
 writer contract.
@@ -170,6 +174,7 @@ src/databridge/
         visdrone/
             __init__.py              VisDrone format exports
             loader.py                VisDroneVideoLoader: VisDrone VID/MOT video -> BoxTrackDataset
+            writer.py                VisDroneVideoWriter: BoxTrackDataset -> official VisDrone VID/MOT roots
 docs/
     architecture.md                              This file
     schemas/
@@ -744,21 +749,25 @@ flowchart TD
     HMIE["<b>HmieWriter</b><br/>(_formats/hmie/writer.py)"]
     MOT["<b>MotChallengeWriter</b><br/>(_formats/motchallenge/writer.py)"]
     TAO["<b>TaoWriter</b><br/>(_formats/tao/writer.py)"]
-    NEW["VisDroneWriter, YoloWriter, …<br/>(future)"]
+    VIS["<b>VisDroneVideoWriter</b><br/>(_formats/visdrone/writer.py)"]
+    NEW["YoloWriter, …<br/>(future)"]
 
     CONVERT -->|load → write| WRITE
     WRITE -->|get_writer| REG
     REG --> HMIE
     REG --> MOT
     REG --> TAO
+    REG --> VIS
     REG -.-> NEW
     HMIE -->|subclasses| BASE
     MOT -->|subclasses| BASE
     TAO -->|subclasses| BASE
+    VIS -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_writer| REG
     MOT -->|@register_writer| REG
     TAO -->|@register_writer| REG
+    VIS -->|@register_writer| REG
     NEW -.->|@register_writer| REG
 
     classDef entry fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
@@ -767,7 +776,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class CONVERT,WRITE entry;
     class REG store;
-    class HMIE,MOT,TAO impl;
+    class HMIE,MOT,TAO,VIS impl;
     class NEW planned;
 ```
 
@@ -792,7 +801,7 @@ flowchart TD
 - **Keyword-only options.** Format variants (e.g. MOT16 vs MOT20 columns) are a
   writer option, not a separate `DatasetFormat`.
 
-### Reference writers: HMIE, MOTChallenge, and TAO (round-trip proof)
+### Reference writers: HMIE, MOTChallenge, TAO, and VisDrone Video (round-trip proof)
 
 `HmieWriter` (`_formats/hmie/writer.py`) is the first reference writer. Because
 databridge also has the HMIE *loader*, it closes a full round trip:
@@ -826,6 +835,14 @@ inputs are decoded into frame images and require the optional `video` extra. It
 preserves TAO IDs from source metadata/attributes when present and generates
 stable IDs otherwise; unknown sequence splits default to the writer's `split`
 option (`"train"` by default).
+
+`VisDroneVideoWriter` (`_formats/visdrone/writer.py`) emits official
+VisDrone video split roots with `sequences/<sequence>/0000001.jpg` and
+`annotations/<sequence>.txt`. The user-configurable `variant` option selects
+Object Detection in Videos (`"vid"`) or Multi-Object Tracking (`"mot"`) output;
+`"auto"` preserves loaded VisDrone variant metadata when present. It preserves
+raw category IDs, target IDs, scores/confidence, truncation, and occlusion when
+represented in the model.
 
 ### Adding a new writer
 

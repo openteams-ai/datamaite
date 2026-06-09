@@ -33,6 +33,7 @@ def test_public_api() -> None:
         VideoClassificationDataset,
         VideoClassificationSample,
         VisDroneVideoLoader,
+        VisDroneVideoWriter,
         VisionDataset,
         load_huggingface_video_classification,
         load_mot,
@@ -66,6 +67,7 @@ def test_public_api() -> None:
     assert TaoLoader is not None
     assert TaoWriter is not None
     assert VisDroneVideoLoader is not None
+    assert VisDroneVideoWriter is not None
     assert callable(load_huggingface_video_classification)
     assert callable(load_mot)
     assert callable(validate)
