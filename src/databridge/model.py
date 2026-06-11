@@ -68,6 +68,14 @@ class BoxAnnotation:
     from the source frame: ``is_inferred=True`` marks a tool-interpolated
     box rather than a human-placed keyframe, which a downstream consumer
     may want to weight or filter.
+
+    ``track_id`` follows a bridge-wide convention: a *positive* id is a
+    usable track (unique within its sequence); a *non-positive* id is a
+    sentinel for "no usable track" (e.g. MOTChallenge det-source rows and
+    VisDrone ignored regions get negative per-line pseudo-ids). Loaders
+    must emit positive ids for real tracks -- ground-truth writers drop
+    non-positive ids, so a 0-based loader silently loses the first track
+    of every sequence.
     """
 
     track_uuid: str

@@ -12,6 +12,8 @@ from databridge._formats.motchallenge.loader import load_motchallenge
 from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.writers import available_output_formats, get_writer
 
+from ._hmie_factory import AnnotationSpec, SnippetSpec, TrackSpec, single_video_dataset
+
 
 def _write_mot_sequence(
     root: Path,
@@ -130,6 +132,29 @@ class TestMotChallengeWriterHappyPath:
         assert _mot_fingerprint(load_motchallenge(tmp_path / "out")) == _mot_fingerprint(
             load_motchallenge(tmp_path / "src")
         )
+
+    def test_convert_hmie_to_motchallenge_keeps_every_track(self, tmp_path: Path) -> None:
+        # Regression: HMIE track ids are 1-based on purpose. With 0-based ids
+        # the GT writer -- which reserves non-positive ids for "no usable
+        # track" -- silently dropped the first track of every sequence.
+        single_video_dataset(
+            tmp_path / "src",
+            [
+                SnippetSpec(
+                    name="video_001_000001",
+                    annotation=AnnotationSpec(
+                        tracks=[TrackSpec(label="vehicle"), TrackSpec(label="boat")],
+                    ),
+                )
+            ],
+        )
+
+        files = convert(tmp_path / "src", tmp_path / "out", input_format="hmie", output_format="motchallenge")
+
+        gt_path = next(path for path in files if path.name == "gt.txt")
+        rows = gt_path.read_text(encoding="utf-8").splitlines()
+        assert {int(row.split(",")[1]) for row in rows} == {1, 2}
+        assert len(rows) == 10  # 5 labeled frames per track, none dropped
 
     def test_writes_detection_source(self, tmp_path: Path) -> None:
         _write_mot_sequence(

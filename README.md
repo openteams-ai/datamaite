@@ -204,7 +204,7 @@ VisDrone Video uses image sequences with seven-digit, 1-based `.jpg` filenames
 model's 0-based frame index. The loader preserves raw VisDrone category IDs
 (`0` ignored region, `1` pedestrian, ..., `11` others) in `category_id`.
 
-For a full load → verify → export-ready walkthrough on synthetic data, see
+For a full load → verify → convert → consume walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
 
 ## MAITE interoperability

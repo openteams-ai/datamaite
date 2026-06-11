@@ -107,11 +107,13 @@ class TestMultiTrack:
         for box in seq.boxes:
             by_uuid.setdefault(box.track_uuid, []).append(box)
 
-        # Three tracks -> three distinct uuids, positional ids 0/1/2.
+        # Three tracks -> three distinct uuids, positional ids 1/2/3. The ids
+        # are 1-based on purpose: writers that reserve non-positive ids for
+        # "no usable track" (MOTChallenge GT) must keep every HMIE track.
         assert set(by_uuid) == {"track-uuid-000", "track-uuid-001", "track-uuid-002"}
-        assert {b.track_id for b in by_uuid["track-uuid-000"]} == {0}
-        assert {b.track_id for b in by_uuid["track-uuid-001"]} == {1}
-        assert {b.track_id for b in by_uuid["track-uuid-002"]} == {2}
+        assert {b.track_id for b in by_uuid["track-uuid-000"]} == {1}
+        assert {b.track_id for b in by_uuid["track-uuid-001"]} == {2}
+        assert {b.track_id for b in by_uuid["track-uuid-002"]} == {3}
 
         # Per-track category assignment; "boat" reuses one id across tracks.
         assert {b.category_name for b in by_uuid["track-uuid-000"]} == {"boat"}
