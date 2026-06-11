@@ -13,7 +13,7 @@ name = "databridge"
 dynamic = ["version"]
 description = "A unified framework for dataset loading, conversion, and quality validation."
 readme = "README.md"
-license = "LicenseRef-TBD"
+license = "Apache-2.0"
 authors = [
     { name = "OpenTeams" },
 ]
