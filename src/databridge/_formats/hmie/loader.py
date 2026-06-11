@@ -319,9 +319,13 @@ def _build_boxes(
     (polygon/line/point/cuboid/ellipse) carry no bounding box and are
     skipped (logged once per annotation, since the loader emits boxes
     only). Boxes with any missing coordinate (left/top/width/height
-    ``None``) are also skipped. ``track_id`` is the track's positional index
-    within this annotation; ``category_id`` is assigned from (and stored
-    into) the dataset-wide ``categories`` map.
+    ``None``) are also skipped. ``track_id`` is the track's 1-based
+    positional index within this annotation. Every HMIE box is a real
+    track, so ids are always positive, per the bridge-wide convention
+    (:class:`~databridge.model.BoxAnnotation`) that positive ids mean a
+    usable track -- writers that drop non-positive ids (e.g. MOTChallenge
+    ground truth) therefore keep every HMIE track. ``category_id`` is
+    assigned from (and stored into) the dataset-wide ``categories`` map.
 
     ``frame_index`` is the *video* frame index, mapped from the Scale frame
     key via :func:`frame_key_to_index` (``floor(key * fps / afr)``). The
@@ -331,7 +335,7 @@ def _build_boxes(
     """
     boxes: list[BoxAnnotation] = []
     skipped_non_box = 0
-    for track_id, (track_uuid, track) in enumerate(annotation.response.annotations.items()):
+    for track_id, (track_uuid, track) in enumerate(annotation.response.annotations.items(), start=1):
         if track.geometry != "box":
             skipped_non_box += 1
             continue
