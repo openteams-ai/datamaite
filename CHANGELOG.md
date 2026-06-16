@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-16
+
+### Added
+
+- Neutral in-memory dataset model (`databridge.model`): `Dataset` /
+  `VideoSequence` / `BoxAnnotation` form the format-agnostic hub that
+  every loader produces and every converter will consume, so any loader
+  can feed any output format (N-to-M bridge).
+- Loader architecture (`databridge.loaders`): a `Loader` base class
+  defines the input-side contract, `register_loader` is the extension
+  point, and `databridge.load(root, dataset_format=…)` dispatches across
+  registered formats (with a `sniff`-based autodetection hook). `HmieLoader`
+  is the reference implementation; adding a format is additive (subclass +
+  register). See the "Loader architecture" section in `docs/architecture.md`.
+- HMIE dataloader (`databridge.load_mot(..., dataset_format="hmie")`):
+  loads an HMIE/Scale dataset into the neutral `BoxTrackDataset` model
+  (`VideoSequence` / `BoxAnnotation`
+  records with a dataset-wide ontology-URI → category-id map). Reuses the
+  existing discovery + Scale-schema layers instead of the hard-coded
+  notebook walk; supports `annotation_dir` / `video_dir` overrides for
+  flat layouts and an opt-in `require_video` mode that reads true frame
+  counts via the `video` extra.
+- Writer architecture (`databridge.writers`): a `Writer` base class defines
+  the output-side contract (`BoxTrackDataset` → `list[Path]`), `register_writer`
+  is the extension point, and `databridge.write(ds, dest, output_format=…)`
+  dispatches across registered formats. `databridge.conversion.convert` pairs a
+  loader and a writer for end-to-end on-disk → on-disk conversion. See the
+  "Writer architecture" section in `docs/architecture.md`.
+- HMIE writer (`HmieWriter`): the reference writer that serialises a
+  `BoxTrackDataset` back to the HMIE on-disk layout. With the HMIE loader it
+  closes a `load → write → load` round trip that recovers the same
+  box/category content, proving the writer architecture and that
+  `BoxTrackDataset` is a lossless hub.
+- Flat-folder MP4 loader
+  (`databridge.load_mot(..., dataset_format="flat_mp4")`, IR-3.3-S-1):
+  loads immediate `.mp4` children encoded as H.264 or MPEG-2 into video-backed
+  `VideoSequence` records with media metadata and no annotations.
+- MOTChallenge loader and writer (`dataset_format="motchallenge"` /
+  `MotChallengeWriter`).
+- TAO (Tracking Any Object) loader and writer (`dataset_format="tao"` /
+  `TaoWriter`); video-backed TAO writes need the `databridge[video]` extra.
+- VisDrone video loader and writer (`dataset_format="visdrone"` /
+  `VisDroneVideoWriter`).
+- Hugging Face VideoFolder-style video-classification loader
+  (`HuggingFaceVideoClassificationLoader` /
+  `load_huggingface_video_classification`) into the
+  `VideoClassificationDataset` model.
+- Task / IC / OD foundation: `Task` taxonomy, source-preserving `Taxonomy` /
+  `CategoryEntry` (`databridge.taxonomy`), and canonical `xywh` bbox +
+  conversions (`databridge.geometry`).
+- MAITE interoperability (`databridge.maite`, optional `databridge[maite]`
+  extra): `BoxTrackDataset` conforms to the MAITE MOT protocol structurally;
+  `load_mot` returns a MAITE-indexable dataset and `with_mot_options`
+  configures the view.
+
+### Changed
+
+- Task-first loader API: `load_mot(root, dataset_format=…)` replaces the
+  per-format `load_*` public functions.
+- Format loaders/writers reorganised into per-format `databridge._formats`
+  packages.
+- Skipped video checks are reported as `SKIPPED` instead of `PASS`.
+- Validator notebook exposes the multi-dataset (collection) HTML report.
+- `license` set to `Apache-2.0`, replacing the `LicenseRef-TBD` placeholder.
+
+### Fixed
+
+- Batch-level `scale/` discovery now **merges per batch** with the
+  snippet-centric pass instead of being an all-or-nothing `root/scale`
+  fallback, so per-batch `scale/` under a multi-batch parent and trees mixing
+  both layouts are fully discovered. `SnippetPair` carries a `snippet_dir` so
+  `snippet_count` no longer collapses centralized-`scale/` annotations onto
+  the batch root; non-annotation JSON in a `scale/` dir is skipped; and
+  `match_annotation_to_video` returns an orphan instead of guessing when two
+  videos share a basename.
+- Frame-key mapping snaps to a near integer before flooring (fixes a
+  floating-point off-by-one on rates like 29.97/14.985); relative
+  `annotation_dir`/`video_dir` overrides resolve against `root` not the CWD;
+  non-finite bbox coordinates and NaN/Inf/non-positive fps & duration are
+  rejected.
+
+## [0.1.0] - 2026-05-20
+
 ### Added
 
 - Initial `databridge` package scaffold (pyproject, Poetry primary, uv/pixi
@@ -51,59 +134,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swaps to per-batch detail; deep-linkable via `#batch=<name>` URL hash.
 - Finding cap (`--max-findings-per-check`) to bound memory on
   pathological datasets; `finding_counts` stays accurate under caps.
-- Neutral in-memory dataset model (`databridge.model`): `Dataset` /
-  `VideoSequence` / `BoxAnnotation` form the format-agnostic hub that
-  every loader produces and every converter will consume, so any loader
-  can feed any output format (N-to-M bridge).
-- Loader architecture (`databridge.loaders`): a `Loader` base class
-  defines the input-side contract, `register_loader` is the extension
-  point, and `databridge.load(root, dataset_format=…)` dispatches across
-  registered formats (with a `sniff`-based autodetection hook). `HmieLoader`
-  is the reference implementation; adding a format is additive (subclass +
-  register). See the "Loader architecture" section in `docs/architecture.md`.
-- HMIE dataloader (`databridge.load_mot(..., dataset_format="hmie")`):
-  loads an HMIE/Scale dataset into the neutral `BoxTrackDataset` model
-  (`VideoSequence` / `BoxAnnotation`
-  records with a dataset-wide ontology-URI → category-id map). Reuses the
-  existing discovery + Scale-schema layers instead of the hard-coded
-  notebook walk; supports `annotation_dir` / `video_dir` overrides for
-  flat layouts and an opt-in `require_video` mode that reads true frame
-  counts via the `video` extra.
-- Writer architecture (`databridge.writers`): a `Writer` base class defines
-  the output-side contract (`BoxTrackDataset` → `list[Path]`), `register_writer`
-  is the extension point, and `databridge.write(ds, dest, output_format=…)`
-  dispatches across registered formats. `databridge.conversion.convert` pairs a
-  loader and a writer for end-to-end on-disk → on-disk conversion. See the
-  "Writer architecture" section in `docs/architecture.md`.
-- HMIE writer (`HmieWriter`): the reference writer that serialises a
-  `BoxTrackDataset` back to the HMIE on-disk layout. With the HMIE loader it
-  closes a `load → write → load` round trip that recovers the same
-  box/category content, proving the writer architecture and that
-  `BoxTrackDataset` is a lossless hub.
-- Flat-folder MP4 loader
-  (`databridge.load_mot(..., dataset_format="flat_mp4")`, IR-3.3-S-1):
-  loads immediate `.mp4` children encoded as H.264 or MPEG-2 into video-backed
-  `VideoSequence` records with media metadata and no annotations.
-
-### Fixed
-
-- Batch-level `scale/` discovery now **merges per batch** with the
-  snippet-centric pass instead of being an all-or-nothing `root/scale`
-  fallback, so per-batch `scale/` under a multi-batch parent and trees mixing
-  both layouts are fully discovered. `SnippetPair` carries a `snippet_dir` so
-  `snippet_count` no longer collapses centralized-`scale/` annotations onto
-  the batch root; non-annotation JSON in a `scale/` dir is skipped; and
-  `match_annotation_to_video` returns an orphan instead of guessing when two
-  videos share a basename.
-- Frame-key mapping snaps to a near integer before flooring (fixes a
-  floating-point off-by-one on rates like 29.97/14.985); relative
-  `annotation_dir`/`video_dir` overrides resolve against `root` not the CWD;
-  non-finite bbox coordinates and NaN/Inf/non-positive fps & duration are
-  rejected.
 
 ### Documentation
 
 - `README.md`: install / quick-start with Poetry.
 - `README_DEV.md`: uv and pixi alternatives for contributors.
 
-[Unreleased]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/compare/main...feature/hmie-validator
+[Unreleased]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/compare/0.2.0...main
+[0.2.0]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/compare/0.1.0...0.2.0
+[0.1.0]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/tags/0.1.0
