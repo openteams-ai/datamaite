@@ -20,6 +20,7 @@ stages:
   - test
   - dr-compliance
   - publish
+  - pages
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
@@ -125,6 +126,23 @@ publish:
       twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
   rules:
     - if: $CI_COMMIT_TAG
+      when: on_success
+    - when: never
+
+# Builds Sphinx HTML and publishes to GitLab Pages on every push to the default branch.
+pages:
+  extends: .shared-setup
+  stage: pages
+  variables:
+    VERSION: "3.12"
+  script:
+    - poetry install --with docs
+    - poetry run sphinx-build -b html docs public
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: on_success
     - when: never
 
