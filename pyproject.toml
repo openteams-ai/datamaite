@@ -93,7 +93,7 @@ exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
 [tool.poetry]
 # Version is managed by hatch-vcs from git tags; Poetry reads this
 # as a fallback. The actual wheel version comes from _version.py.
-version = "0.1.0"
+version = "0.2.0"
 packages = [{ include = "databridge", from = "src" }]
 
 [tool.poetry.group.dev.dependencies]
