@@ -84,7 +84,7 @@ class TestHmieWriter:
         ds = load_hmie(src)
 
         out = tmp_path / "out"
-        files = write(ds, out, output_format="hmie")
+        files = write(ds, out, output_format="hmie", verbose=True)
 
         assert files  # wrote something
         assert all(p.exists() for p in files)
@@ -154,7 +154,7 @@ class TestHmieWriter:
         default_happy_dataset(src)
 
         out = tmp_path / "out"
-        files = convert(src, out, input_format="hmie", output_format="hmie")
+        files = convert(src, out, input_format="hmie", output_format="hmie", verbose=True)
 
         assert files
         assert _fingerprint(load_hmie(src)) == _fingerprint(load_hmie(out))

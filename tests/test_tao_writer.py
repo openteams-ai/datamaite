@@ -15,7 +15,7 @@ from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.writers import available_output_formats, get_writer
 
 
-def _write_tao(root: Path, payload: dict[str, Any], split: str = "train") -> Path:
+def write_tao(root: Path, payload: dict[str, Any], split: str = "train") -> Path:
     annotations = root / "annotations"
     annotations.mkdir(parents=True, exist_ok=True)
     path = annotations / f"{split}.json"
@@ -23,14 +23,14 @@ def _write_tao(root: Path, payload: dict[str, Any], split: str = "train") -> Pat
     return path
 
 
-def _write_frames(root: Path, *names: str) -> None:
+def write_tao_frames(root: Path, *names: str) -> None:
     for name in names:
         path = root / "frames" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"frame:{name}".encode())
 
 
-def _payload() -> dict[str, Any]:
+def tao_payload() -> dict[str, Any]:
     return {
         "videos": [{"id": 10, "name": "video-a", "width": 640, "height": 480, "fps": 30}],
         "images": [
@@ -111,12 +111,12 @@ class TestTaoWriterRegistry:
 class TestTaoWriterHappyPath:
     def test_write_produces_reloadable_full_tao_dataset(self, tmp_path: Path) -> None:
         src = tmp_path / "src"
-        _write_tao(src, _payload())
-        _write_frames(src, "train/video-a/000001.jpg", "train/video-a/000002.jpg")
+        write_tao(src, tao_payload())
+        write_tao_frames(src, "train/video-a/000001.jpg", "train/video-a/000002.jpg")
         ds = load_tao(src)
 
         out = tmp_path / "out"
-        files = write(ds, out, output_format="tao")
+        files = write(ds, out, output_format="tao", verbose=True)
 
         assert out / "annotations" / "train.json" in files
         assert out / "frames" / "train" / "video-a" / "000001.jpg" in files
@@ -132,11 +132,11 @@ class TestTaoWriterHappyPath:
 
     def test_convert_tao_to_tao_end_to_end(self, tmp_path: Path) -> None:
         src = tmp_path / "src"
-        _write_tao(src, _payload())
-        _write_frames(src, "train/video-a/000001.jpg", "train/video-a/000002.jpg")
+        write_tao(src, tao_payload())
+        write_tao_frames(src, "train/video-a/000001.jpg", "train/video-a/000002.jpg")
 
         out = tmp_path / "out"
-        files = convert(src, out, input_format="tao", output_format="tao")
+        files = convert(src, out, input_format="tao", output_format="tao", verbose=True)
 
         assert files
         assert _tao_fingerprint(load_tao(out)) == _tao_fingerprint(load_tao(src))
@@ -292,8 +292,8 @@ class TestTaoWriterHappyPath:
 class TestTaoWriterMalformedInputs:
     def test_missing_frame_drops_frame_and_annotation(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         src = tmp_path / "src"
-        _write_tao(src, _payload())
-        _write_frames(src, "train/video-a/000001.jpg")
+        write_tao(src, tao_payload())
+        write_tao_frames(src, "train/video-a/000001.jpg")
         ds = load_tao(src)
 
         with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.writer"):

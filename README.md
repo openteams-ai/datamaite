@@ -262,7 +262,7 @@ from databridge import load_mot, write, convert
 
 # Write an in-memory dataset to disk
 ds = load_mot("/path/to/dataset")
-files = write(ds, "/path/to/out", output_format="hmie")   # -> list of files written
+files = write(ds, "/path/to/out", output_format="hmie", verbose=True)  # -> list of files written
 
 # Or convert on disk → on disk in one call
 convert("/path/to/dataset", "/path/to/out", input_format="hmie", output_format="hmie")

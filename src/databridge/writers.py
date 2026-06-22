@@ -139,9 +139,10 @@ def write(
     dest: str | Path,
     *,
     output_format: DatasetFormat | str,
+    verbose: bool = False,
     **options: Any,
-) -> list[Path]:
-    """Write ``dataset`` to ``dest`` in ``output_format`` and return the files written.
+) -> list[Path] | None:
+    """Write ``dataset`` to ``dest`` in ``output_format``.
 
     Parameters
     ----------
@@ -152,7 +153,18 @@ def write(
     output_format
         Which output format to emit, as a :class:`DatasetFormat` or its string
         value.
+    verbose
+        When ``True``, return the list of files written; when ``False``
+        (default) write for side effects and return ``None``. The full file
+        list can be large (one path per frame image), so it is opt-in to keep
+        interactive/REPL output quiet.
     **options
         Forwarded to the selected writer's :meth:`Writer.write`.
+
+    Returns
+    -------
+    list[Path] | None
+        The files written when ``verbose`` is ``True``; otherwise ``None``.
     """
-    return get_writer(output_format).write(dataset, dest, **options)
+    files = get_writer(output_format).write(dataset, dest, **options)
+    return files if verbose else None
