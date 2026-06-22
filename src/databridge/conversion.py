@@ -33,12 +33,12 @@ def convert(
     output_format: DatasetFormat | str,
     read_options: dict[str, Any] | None = None,
     **write_options: Any,
-) -> list[Path]:
+) -> list[Path] | None:
     """Convert the dataset at ``src`` (``input_format``) to ``dest`` (``output_format``).
 
     Reads ``src`` with the registered loader for ``input_format``. The loaded
     dataset must be a :class:`~databridge.model.BoxTrackDataset`; task siblings
-    without writer support raise ``TypeError``. Returns the files written.
+    without writer support raise ``TypeError``.
 
     Parameters
     ----------
@@ -52,7 +52,14 @@ def convert(
         Keyword options forwarded to the loader (e.g. HMIE's ``require_video``,
         ``annotation_dir``).
     **write_options
-        Keyword options forwarded to the writer.
+        Keyword options forwarded to the writer, including ``verbose``: when
+        ``True`` the files written are returned, when ``False`` (default) the
+        conversion runs for side effects and returns ``None``.
+
+    Returns
+    -------
+    list[Path] | None
+        The files written when ``verbose=True`` is passed; otherwise ``None``.
     """
     dataset = load(src, dataset_format=input_format, **(read_options or {}))
     if not isinstance(dataset, BoxTrackDataset):

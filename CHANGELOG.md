@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that exists but yields no loadable items still returns an empty dataset, now
   with a `WARNING` so an empty result (e.g. wrong format or wrong subdirectory)
   is never silent.
+- `databridge.write` (and `convert`, which forwards to it) now return ``None``
+  by default and only return the ``list[Path]`` of files written when called
+  with ``verbose=True``. The full list is one path per frame image, which
+  floods interactive/REPL output; the file list is now opt-in. Side effects
+  (the files written) are unchanged.
 
 ## [0.2.0] - 2026-06-16
 

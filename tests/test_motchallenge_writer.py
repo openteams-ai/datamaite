@@ -15,7 +15,7 @@ from databridge.writers import available_output_formats, get_writer
 from ._hmie_factory import AnnotationSpec, SnippetSpec, TrackSpec, single_video_dataset
 
 
-def _write_mot_sequence(
+def write_mot_sequence(
     root: Path,
     *,
     split: str = "train",
@@ -99,7 +99,7 @@ class TestMotChallengeWriterRegistry:
 
 class TestMotChallengeWriterHappyPath:
     def test_write_produces_reloadable_gt_benchmark_root(self, tmp_path: Path) -> None:
-        _write_mot_sequence(
+        write_mot_sequence(
             tmp_path / "src",
             gt_rows=[
                 "1,1,10,20,30,40,1,1,0.9",
@@ -110,7 +110,7 @@ class TestMotChallengeWriterHappyPath:
         ds = load_motchallenge(tmp_path / "src")
 
         out = tmp_path / "out"
-        files = write(ds, out, output_format="motchallenge")
+        files = write(ds, out, output_format="motchallenge", verbose=True)
 
         assert out / "train" / "MOT17-02" / "seqinfo.ini" in files
         assert out / "train" / "MOT17-02" / "gt" / "gt.txt" in files
@@ -124,9 +124,11 @@ class TestMotChallengeWriterHappyPath:
         assert _mot_fingerprint(load_motchallenge(out)) == _mot_fingerprint(ds)
 
     def test_convert_motchallenge_to_motchallenge_end_to_end(self, tmp_path: Path) -> None:
-        _write_mot_sequence(tmp_path / "src", gt_rows=["1,1,10,20,30,40,1,1,1"])
+        write_mot_sequence(tmp_path / "src", gt_rows=["1,1,10,20,30,40,1,1,1"])
 
-        files = convert(tmp_path / "src", tmp_path / "out", input_format="motchallenge", output_format="motchallenge")
+        files = convert(
+            tmp_path / "src", tmp_path / "out", input_format="motchallenge", output_format="motchallenge", verbose=True
+        )
 
         assert files
         assert _mot_fingerprint(load_motchallenge(tmp_path / "out")) == _mot_fingerprint(
@@ -149,7 +151,9 @@ class TestMotChallengeWriterHappyPath:
             ],
         )
 
-        files = convert(tmp_path / "src", tmp_path / "out", input_format="hmie", output_format="motchallenge")
+        files = convert(
+            tmp_path / "src", tmp_path / "out", input_format="hmie", output_format="motchallenge", verbose=True
+        )
 
         gt_path = next(path for path in files if path.name == "gt.txt")
         rows = gt_path.read_text(encoding="utf-8").splitlines()
@@ -157,7 +161,7 @@ class TestMotChallengeWriterHappyPath:
         assert len(rows) == 10  # 5 labeled frames per track, none dropped
 
     def test_writes_detection_source(self, tmp_path: Path) -> None:
-        _write_mot_sequence(
+        write_mot_sequence(
             tmp_path / "src",
             gt_rows=None,
             det_rows=["1,-1,10,20,30,40,0.42,-1,-1,-1", "2,7,50,60,10,15,0.75,1,2,3"],

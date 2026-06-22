@@ -13,7 +13,7 @@ from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from databridge.writers import available_output_formats, get_writer
 
 
-def _write_visdrone_split(
+def write_visdrone_split(
     root: Path,
     *,
     split_name: str = "VisDrone2019-VID-train",
@@ -74,7 +74,7 @@ class TestVisDroneVideoWriterRegistry:
 
 class TestVisDroneVideoWriterHappyPath:
     def test_write_produces_reloadable_vid_split_root(self, tmp_path: Path) -> None:
-        _write_visdrone_split(
+        write_visdrone_split(
             tmp_path / "src",
             rows=[
                 "1,1,10,20,30,40,1,4,0,0",
@@ -85,7 +85,7 @@ class TestVisDroneVideoWriterHappyPath:
         ds = load_visdrone_video(tmp_path / "src")
 
         out = tmp_path / "out"
-        files = write(ds, out, output_format="visdrone_video")
+        files = write(ds, out, output_format="visdrone_video", verbose=True)
 
         root = out / "VisDrone2019-VID-train"
         assert root / "annotations" / "uav0000013_00000_v.txt" in files
@@ -99,13 +99,14 @@ class TestVisDroneVideoWriterHappyPath:
         assert _visdrone_fingerprint(load_visdrone_video(out)) == _visdrone_fingerprint(ds)
 
     def test_convert_visdrone_to_visdrone_end_to_end(self, tmp_path: Path) -> None:
-        _write_visdrone_split(tmp_path / "src", rows=["1,1,10,20,30,40,1,4,0,0"])
+        write_visdrone_split(tmp_path / "src", rows=["1,1,10,20,30,40,1,4,0,0"])
 
         files = convert(
             tmp_path / "src",
             tmp_path / "out",
             input_format="visdrone_video",
             output_format="visdrone_video",
+            verbose=True,
         )
 
         assert files
@@ -114,7 +115,7 @@ class TestVisDroneVideoWriterHappyPath:
         )
 
     def test_variant_option_writes_mot_split_root(self, tmp_path: Path) -> None:
-        _write_visdrone_split(tmp_path / "src", rows=["1,1,10,20,30,40,1,4,0,0"])
+        write_visdrone_split(tmp_path / "src", rows=["1,1,10,20,30,40,1,4,0,0"])
         ds = load_visdrone_video(tmp_path / "src")
 
         write(ds, tmp_path / "out", output_format="visdrone_video", variant="mot", split="validation")
@@ -126,7 +127,7 @@ class TestVisDroneVideoWriterHappyPath:
         assert reloaded.sequences[0].video_meta["split"] == "train"
 
     def test_preserve_splits_can_be_disabled(self, tmp_path: Path) -> None:
-        _write_visdrone_split(
+        write_visdrone_split(
             tmp_path / "src",
             split_name="VisDrone2019-VID-val",
             rows=["1,1,10,20,30,40,1,4,0,0"],
@@ -144,7 +145,7 @@ class TestVisDroneVideoWriterHappyPath:
         assert (tmp_path / "out" / "VisDrone2019-VID-test-dev" / "annotations" / "uav0000013_00000_v.txt").is_file()
 
     def test_writes_detection_source(self, tmp_path: Path) -> None:
-        _write_visdrone_split(
+        write_visdrone_split(
             tmp_path / "src",
             rows=["1,-1,10,20,30,40,0.42,4,-1,-1", "2,7,50,60,10,15,0.75,5,-1,-1"],
         )
