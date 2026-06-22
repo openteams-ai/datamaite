@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `databridge.load` (and `load_mot`) now fail fast on a bad dataset root: a
+  nonexistent path raises `FileNotFoundError` and a non-directory path raises
+  `NotADirectoryError`, instead of silently returning an empty dataset. A root
+  that exists but yields no loadable items still returns an empty dataset, now
+  with a `WARNING` so an empty result (e.g. wrong format or wrong subdirectory)
+  is never silent.
+
 ## [0.2.0] - 2026-06-16
 
 ### Added

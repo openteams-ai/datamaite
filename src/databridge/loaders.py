@@ -34,6 +34,7 @@ Conventions every loader follows
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from importlib import import_module
 from pathlib import Path
@@ -41,6 +42,8 @@ from typing import Any, ClassVar, TypeVar
 
 from databridge._types import DatasetFormat
 from databridge.model import BoxTrackDataset, VisionDataset
+
+logger = logging.getLogger(__name__)
 
 
 class Loader(ABC):
@@ -162,9 +165,53 @@ def load(
     **options
         Forwarded to the selected loader's :meth:`Loader.load` (e.g. HMIE's
         ``annotation_dir`` / ``video_dir`` / ``require_video``).
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``root`` does not exist.
+    NotADirectoryError
+        If ``root`` exists but is not a directory.
+
+    A missing or non-directory ``root`` is a caller error (e.g. a typo'd reload
+    path), distinct from a valid-but-empty dataset: loaders are best-effort
+    about *data* (skip unparseable items, warn, return empty), but a bad root
+    fails loudly here rather than silently yielding an empty dataset.
     """
+    _require_dataset_root(root)
     resolved = _detect_format(root) if dataset_format is None else dataset_format
-    return get_loader(resolved).load(root, **options)
+    dataset = get_loader(resolved).load(root, **options)
+    if _is_empty(dataset):
+        fmt_value = resolved.value if isinstance(resolved, DatasetFormat) else resolved
+        logger.warning(
+            "Loaded an empty dataset from %s (format=%s): the root exists but no loadable items were found "
+            "(wrong format, wrong subdirectory, or no matching data)",
+            root,
+            fmt_value,
+        )
+    return dataset
+
+
+def _require_dataset_root(root: str | Path) -> None:
+    """Raise if ``root`` is not an existing directory (a caller error)."""
+    path = Path(root)
+    if not path.exists():
+        raise FileNotFoundError(f"dataset root does not exist: {path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"dataset root is not a directory: {path}")
+
+
+def _is_empty(dataset: VisionDataset) -> bool:
+    """Whether ``dataset`` carries no loadable content.
+
+    Outcome-based, not ``len(dataset)``: ``BoxTrackDataset.__len__`` counts only
+    *video-bearing* sequences, so an annotation-only dataset has ``len == 0``
+    yet is not empty. A box-track dataset is empty only when it has no sequences
+    at all; other task datasets fall back to ``len``.
+    """
+    if isinstance(dataset, BoxTrackDataset):
+        return dataset.sequence_count == 0
+    return len(dataset) == 0
 
 
 def load_mot(
