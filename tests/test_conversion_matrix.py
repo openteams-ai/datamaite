@@ -26,7 +26,7 @@ from databridge import convert
 from databridge._types import DatasetFormat
 from databridge.loaders import available_formats, load
 from databridge.model import BoxTrackDataset
-from databridge.writers import available_output_formats
+from databridge.writers import available_output_formats, get_writer
 
 from ._hmie_factory import (
     AnnotationSpec,
@@ -65,11 +65,19 @@ def _reload_root(dest: Path, output_format: DatasetFormat) -> Path:
     return dest
 
 
-# Formats with BOTH a loader and a writer -- the convertible matrix. Derived so
-# adding a 5th read+write format auto-expands the matrix (and trips the
-# guardrail below if it lacks a source builder).
+# Formats with BOTH a loader and a writer *for the box-track task* -- the
+# convertible matrix. The cross-format matrix only makes sense within one task:
+# a writer for a different task (e.g. the video-classification writer, whose
+# ``dataset_type`` is ``VideoClassificationDataset``) consumes a different model
+# and cannot round-trip through ``BoxTrackDataset``, so it is excluded here.
+# Derived so adding a 5th read+write *box-track* format auto-expands the matrix
+# (and trips the guardrail below if it lacks a source builder).
 WRITABLE_FORMATS = sorted(
-    set(available_formats()) & set(available_output_formats()),
+    (
+        fmt
+        for fmt in set(available_formats()) & set(available_output_formats())
+        if get_writer(fmt).dataset_type is BoxTrackDataset
+    ),
     key=lambda fmt: fmt.value,
 )
 

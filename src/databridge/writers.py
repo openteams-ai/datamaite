@@ -1,8 +1,8 @@
 """Writer architecture: the contract every dataset writer implements.
 
-The output-side mirror of :mod:`databridge.loaders`. A *writer* takes the
-neutral :class:`databridge.model.BoxTrackDataset` and serialises it to one
-on-disk output format; a *loader* does the inverse. This module defines:
+The output-side mirror of :mod:`databridge.loaders`. A *writer* takes a
+supported in-memory dataset and serialises it to one on-disk output format; a
+*loader* does the inverse. This module defines:
 
 * :class:`Writer` -- the base class every writer subclasses;
 * :func:`register_writer` -- the extension point that adds an output format;
@@ -14,16 +14,17 @@ it; nothing else in the package changes. See ``docs/architecture.md`` ->
 
 The common output contract
 --------------------------
-Every writer's *input* is the neutral ``BoxTrackDataset`` (so any loader's
-output can feed any writer) and its *output* is the list of files it created
-(so callers and the conversion layer can act on what was written). The on-disk
-shape is format-specific; the ``BoxTrackDataset``-in / ``list[Path]``-out
-contract is common to every writer.
+Every writer's *input* is the task-appropriate dataset type it declares via
+``dataset_type`` and its *output* is the list of files it created (so callers
+and the conversion layer can act on what was written). The on-disk shape is
+format-specific; the dataset-in / ``list[Path]``-out contract is common to every
+writer.
 
 Conventions every writer follows
 ---------------------------------
-* **Consume the neutral model, never a loader or a raw format.** A writer's
-  only inputs are a :class:`BoxTrackDataset` and a destination directory.
+* **Consume a typed dataset, never a loader or a raw format.** A writer's only
+  inputs are a task dataset (``BoxTrackDataset`` for MOT,
+  ``VideoClassificationDataset`` for VC, etc.) and a destination directory.
 * **Map best-effort; drop with a warning, don't crash.** Data the target
   format cannot represent (e.g. tracks for a track-less format, unlabeled
   boxes for a class-required format) is dropped and logged at WARNING.
@@ -34,7 +35,7 @@ Conventions every writer follows
 
 The end-to-end orchestration that pairs a loader and a writer (read format A
 from disk, write format B to disk) is :func:`databridge.conversion.convert`;
-a writer itself only consumes an in-memory ``BoxTrackDataset``.
+a writer itself only consumes its declared in-memory task dataset.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from databridge._types import DatasetFormat
-from databridge.model import BoxTrackDataset
+from databridge.model import BoxTrackDataset, VisionDataset
 
 
 class Writer(ABC):
@@ -58,9 +59,11 @@ class Writer(ABC):
 
     #: Output format this writer emits. Every concrete subclass sets this.
     format: ClassVar[DatasetFormat]
+    #: In-memory dataset type this writer consumes. MOT writers inherit the default.
+    dataset_type: ClassVar[type[Any]] = BoxTrackDataset
 
     @abstractmethod
-    def write(self, dataset: BoxTrackDataset, dest: str | Path, **options: Any) -> list[Path]:
+    def write(self, dataset: VisionDataset, dest: str | Path, **options: Any) -> list[Path]:
         """Serialise ``dataset`` under ``dest`` and return the files written.
 
         Best-effort by contract: data the target format cannot represent is
@@ -77,6 +80,7 @@ class Writer(ABC):
 _WRITERS: dict[DatasetFormat, type[Writer]] = {}
 _BUILTIN_WRITER_MODULES = (
     "databridge._formats.hmie.writer",
+    "databridge._formats.huggingface_video_classification.writer",
     "databridge._formats.motchallenge.writer",
     "databridge._formats.tao.writer",
     "databridge._formats.visdrone.writer",
@@ -135,7 +139,7 @@ def get_writer(output_format: DatasetFormat | str) -> Writer:
 
 
 def write(
-    dataset: BoxTrackDataset,
+    dataset: VisionDataset,
     dest: str | Path,
     *,
     output_format: DatasetFormat | str,
@@ -147,7 +151,7 @@ def write(
     Parameters
     ----------
     dataset
-        The neutral :class:`~databridge.model.BoxTrackDataset` to serialise.
+        The task-appropriate in-memory dataset to serialise.
     dest
         Destination directory (created if missing).
     output_format
@@ -166,5 +170,11 @@ def write(
     list[Path] | None
         The files written when ``verbose`` is ``True``; otherwise ``None``.
     """
-    files = get_writer(output_format).write(dataset, dest, **options)
+    writer = get_writer(output_format)
+    if not isinstance(dataset, writer.dataset_type):
+        raise TypeError(
+            f"Writer for format {writer.format.value!r} requires {writer.dataset_type.__name__}, "
+            f"got {type(dataset).__name__}"
+        )
+    files = writer.write(dataset, dest, **options)
     return files if verbose else None

@@ -55,6 +55,7 @@ flowchart LR
 
     subgraph consumers [Consumers]
         VCREC["<b>VC records</b><br/>no MAITE protocol yet"]
+        THF["<b>to_hf_video_classification</b>"]
         MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(BoxTrackDataset IS one)"]
         TM["<b>to_mot</b>"]
         TT["<b>to_tao</b>"]
@@ -65,6 +66,7 @@ flowchart LR
 
     subgraph out [Output]
         MAITEOUT([model / metric<br/>in-memory])
+        HFOUT([HF Video<br/>Classification])
         MOTOUT([MOTChallenge])
         TAOOUT([TAO])
         VISOUT([VisDrone Video])
@@ -89,6 +91,7 @@ flowchart LR
     LC -.-> HUB
     LY -.-> HUB
     VCHUB --> VCREC
+    VCHUB --> THF
     HUB --> MAITE
     HUB --> TM
     HUB --> TT
@@ -96,6 +99,7 @@ flowchart LR
     HUB --> TY
     HUB --> TC
     MAITE --> MAITEOUT
+    THF --> HFOUT
     TM --> MOTOUT
     TT --> TAOOUT
     TV --> VISOUT
@@ -106,19 +110,19 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB,VCHUB hub;
-    class LH,LF,LHF,LM,LT,LV,TM,TT,TV,MAITE,VCREC impl;
-    class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,MOTOUT,TAOOUT,VISOUT impl;
+    class LH,LF,LHF,LM,LT,LV,THF,TM,TT,TV,MAITE,VCREC impl;
+    class MAITEOUT,MP4IN,HFIN,HFOUT,MOTIN,TAOIN,VISIN,MOTOUT,TAOOUT,VISOUT impl;
     class LC,LY,TY,TC,COCOIN,YOLOIN,YOLOUT,COCOUT planned;
 ```
 
 Today, the MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 all reached through the task-first `load_mot(dataset_format=…)` entry point; the
 Hugging Face Video Classification loader (`load_huggingface_video_classification`),
-the HMIE validation pipeline, the HMIE, MOTChallenge, TAO, and VisDrone Video
-writers, and the MAITE surface (`databridge.maite`) are implemented. Hugging Face
-Video Classification returns its own `VideoClassificationDataset` records and has
-no MAITE surface yet. See [Loading](#loading--hmie-loader) for how MOT loaders
-build the box-track model,
+the HMIE validation pipeline, the HMIE, Hugging Face Video Classification,
+MOTChallenge, TAO, and VisDrone Video writers, and the MAITE surface
+(`databridge.maite`) are implemented. Hugging Face Video Classification returns
+its own `VideoClassificationDataset` records and has no MAITE surface yet. See
+[Loading](#loading--hmie-loader) for how MOT loaders build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
 surface, and [Writer architecture](#writer-architecture--writerspy) for the
 writer contract.
@@ -163,6 +167,7 @@ src/databridge/
         huggingface_video_classification/
             __init__.py              Hugging Face Video Classification exports
             loader.py                HuggingFaceVideoClassificationLoader: VideoFolder -> VideoClassificationDataset
+            writer.py                HuggingFaceVideoClassificationWriter: VideoClassificationDataset -> VideoFolder
         motchallenge/
             __init__.py              MOTChallenge format exports
             loader.py                MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
@@ -736,9 +741,10 @@ not merely shaped right.
 
 The output side mirrors the loader architecture: a small, explicit contract so
 every format writer looks the same and a new output format is additive. A
-*writer* takes the neutral `BoxTrackDataset` and serialises it to one on-disk
-format; `conversion.convert` pairs a loader and a writer for end-to-end
-on-disk → on-disk conversion.
+*writer* takes a task-appropriate in-memory dataset (`BoxTrackDataset` for MOT,
+`VideoClassificationDataset` for VC, etc.) and serialises it to one on-disk
+format; `conversion.convert` pairs a loader and a compatible writer for
+end-to-end on-disk → on-disk conversion.
 
 ```mermaid
 flowchart TD
@@ -747,6 +753,7 @@ flowchart TD
     REG[("<b>registry</b><br/>DatasetFormat → Writer")]
     BASE["<b>Writer (ABC)</b><br/>write(dataset, dest, **options) → list[Path]"]
     HMIE["<b>HmieWriter</b><br/>(_formats/hmie/writer.py)"]
+    HF["<b>HuggingFaceVideoClassificationWriter</b><br/>(_formats/huggingface_video_classification/writer.py)"]
     MOT["<b>MotChallengeWriter</b><br/>(_formats/motchallenge/writer.py)"]
     TAO["<b>TaoWriter</b><br/>(_formats/tao/writer.py)"]
     VIS["<b>VisDroneVideoWriter</b><br/>(_formats/visdrone/writer.py)"]
@@ -755,16 +762,19 @@ flowchart TD
     CONVERT -->|load → write| WRITE
     WRITE -->|get_writer| REG
     REG --> HMIE
+    REG --> HF
     REG --> MOT
     REG --> TAO
     REG --> VIS
     REG -.-> NEW
     HMIE -->|subclasses| BASE
+    HF -->|subclasses| BASE
     MOT -->|subclasses| BASE
     TAO -->|subclasses| BASE
     VIS -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_writer| REG
+    HF -->|@register_writer| REG
     MOT -->|@register_writer| REG
     TAO -->|@register_writer| REG
     VIS -->|@register_writer| REG
@@ -776,12 +786,13 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class CONVERT,WRITE entry;
     class REG store;
-    class HMIE,MOT,TAO,VIS impl;
+    class HMIE,HF,MOT,TAO,VIS impl;
     class NEW planned;
 ```
 
 - **`Writer` (ABC).** A concrete writer sets a `format` (`DatasetFormat`) class
-  attribute and implements `write(self, dataset, dest, **options) -> list[Path]`
+  attribute, declares the in-memory `dataset_type` it consumes (default:
+  `BoxTrackDataset`), and implements `write(self, dataset, dest, **options) -> list[Path]`
   (the files it created).
 - **`register_writer`.** A decorator that records `format → writer-class` in the
   registry. This is the extension point — adding a writer touches no dispatch code.
@@ -789,19 +800,19 @@ flowchart TD
   point; resolves the writer from the registry and calls it.
 - **`convert(src, dest, *, input_format, output_format, read_options=…, **write_options)`**
   (`conversion.py`). End-to-end: `write(load(src, input_format), dest, output_format)`.
-  It binds to the neutral model on both sides, so any registered input format
-  can be converted to any registered output format.
+  It binds to typed task datasets on both sides; incompatible task pairs fail
+  at writer dispatch rather than fabricating data.
 
 ### Writer conventions
 
-- **Consume the neutral model, never a loader or raw format.** A writer's only
-  inputs are a `BoxTrackDataset` and a destination.
+- **Consume a typed dataset, never a loader or raw format.** A writer's only
+  inputs are its declared task dataset type and a destination.
 - **Map best-effort; drop with a warning, don't crash.** Data the target format
   cannot represent is dropped and logged at WARNING; destination/IO failures raise.
 - **Keyword-only options.** Format variants (e.g. MOT16 vs MOT20 columns) are a
   writer option, not a separate `DatasetFormat`.
 
-### Reference writers: HMIE, MOTChallenge, TAO, and VisDrone Video (round-trip proof)
+### Reference writers: HMIE, Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video (round-trip proof)
 
 `HmieWriter` (`_formats/hmie/writer.py`) is the first reference writer. Because
 databridge also has the HMIE *loader*, it closes a full round trip:
@@ -819,6 +830,13 @@ that `BoxTrackDataset` is a lossless hub. The writer emits annotations with
 back) and labels as ontology URIs (so categories re-resolve to the same names);
 the integer `category_id` is reassigned on reload, so round-trip equivalence is
 by `category_uri`, not by id.
+
+`HuggingFaceVideoClassificationWriter`
+(`_formats/huggingface_video_classification/writer.py`) consumes the source-record
+`VideoClassificationDataset` (not a degenerate `BoxTrackDataset`) and emits a
+VideoFolder-style repository with copied videos plus `metadata.csv` or
+`metadata.jsonl`. This is the first non-MOT writer and establishes the
+writer-side task-dispatch pattern via `Writer.dataset_type`.
 
 `MotChallengeWriter` (`_formats/motchallenge/writer.py`) emits a standard
 MOTChallenge benchmark root with `train/` / `test` split directories,
@@ -848,12 +866,13 @@ represented in the model.
 
 1. Add the format to `DatasetFormat` (`_types.py`) if it isn't there yet.
 2. Create `_formats/<fmt>/writer.py` with a `Writer` subclass
-   (`format = DatasetFormat.<FMT>`), decorated with `@register_writer`.
+   (`format = DatasetFormat.<FMT>`, plus `dataset_type = ...` for non-MOT
+   datasets), decorated with `@register_writer`.
 3. Import it from the package `__init__` so registration runs.
 4. `databridge.write(ds, dest, output_format="<fmt>")` and `convert(...)` then
    work with no changes to the dispatcher.
 
-### What the model already gives writers
+### What the box-track model already gives MOT writers
 
 - **Frame indices are video-frame-space.** `BoxAnnotation.frame_index` is the
   mapped index (not the raw label key), so frame-indexed targets like
