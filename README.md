@@ -32,15 +32,15 @@ format on disk, and a **writer** serialises supported datasets out to an output
 format (`convert` pairs a loader and a writer for on-disk → on-disk conversion).
 HMIE/Scale, flat MP4 video folders, Hugging Face Video Classification,
 MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale,
-MOTChallenge, TAO, and VisDrone Video are implemented output formats (proving the
-writer architecture via load → write → load round trips), and other writers are
-planned.
+Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video are
+implemented output formats (proving the writer architecture via load → write →
+load round trips), and other writers are planned.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
-| Hugging Face Video Classification | ✅ | — | planned |
+| Hugging Face Video Classification | ✅ | — | ✅ |
 | MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
@@ -253,9 +253,10 @@ and are not exposed through this MAITE MOT surface.
 
 ## Writing & converting datasets (Python)
 
-A **writer** serialises a loaded `BoxTrackDataset` to an output format on disk;
-`convert` pairs a box-track loader and a writer for end-to-end on-disk → on-disk
-conversion. Video-classification datasets have no writer surface yet.
+A **writer** serialises a loaded task dataset to an output format on disk;
+`convert` pairs a compatible loader and writer for end-to-end on-disk → on-disk
+conversion. MOT writers consume `BoxTrackDataset`; the Hugging Face Video
+Classification writer consumes `VideoClassificationDataset`.
 
 ```python
 from databridge import load_mot, write, convert
@@ -286,24 +287,40 @@ write(ds, "/path/to/tao-out", output_format="tao", split="train")
 write(ds, "/path/to/visdrone-out", output_format="visdrone_video", variant="mot")
 ```
 
+Write Hugging Face Video Classification by loading the VC records and selecting
+the matching output format:
+
+```python
+from databridge import load_huggingface_video_classification, write
+
+vc = load_huggingface_video_classification("/path/to/hf-video-dataset")
+write(vc, "/path/to/hf-out", output_format="huggingface_video_classification")
+```
+
 For MOTChallenge, `annotation_source="gt"` (default) writes `gt/gt.txt` with
 class and visibility columns; `annotation_source="det"` writes `det/det.txt`
 with detection scores and optional world coordinates. For VisDrone Video,
 `variant="vid"` writes Object Detection in Videos split roots, `variant="mot"`
 writes Multi-Object Tracking split roots, and `variant="auto"` (default)
-preserves the loaded sequence variant when present.
+preserves the loaded sequence variant when present. For Hugging Face Video
+Classification, `metadata_format="csv"` (default) writes `metadata.csv`, while
+`metadata_format="jsonl"` writes `metadata.jsonl`.
 
-HMIE, MOTChallenge, TAO, and VisDrone Video have round-trip writers:
+HMIE, Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video
+have round-trip writers:
 `load_mot(..., dataset_format="hmie") → write(output_format="hmie") →
 load_mot(..., dataset_format="hmie")`,
+`load_huggingface_video_classification(...) →
+write(output_format="huggingface_video_classification") →
+load_huggingface_video_classification(...)`,
 `load_mot(..., dataset_format="motchallenge") → write(output_format="motchallenge") →
 load_mot(..., dataset_format="motchallenge")`,
 `load_mot(..., dataset_format="tao") → write(output_format="tao") →
 load_mot(..., dataset_format="tao")`, and
 `load_mot(..., dataset_format="visdrone_video") → write(output_format="visdrone_video") →
-load_mot(..., dataset_format="visdrone_video")` recover the same box/category/frame content
-represented by `BoxTrackDataset`. Adding a new output format is a `Writer`
-subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
+load_mot(..., dataset_format="visdrone_video")` recover the same task content
+represented by their in-memory datasets. Adding a new output format is a
+`Writer` subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
 
 ## CLI Usage
 

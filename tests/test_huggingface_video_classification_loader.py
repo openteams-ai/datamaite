@@ -245,10 +245,10 @@ class TestHuggingFaceVideoClassificationMalformedInputs:
 
 
 class TestVideoClassificationTaskGuards:
-    def test_convert_rejects_video_classification_dataset(self, tmp_path: Path) -> None:
+    def test_convert_rejects_incompatible_box_track_writer(self, tmp_path: Path) -> None:
         _write_video(tmp_path / "cat" / "clip.mp4")
 
-        with pytest.raises(TypeError, match="box-track datasets only"):
+        with pytest.raises(TypeError, match="requires BoxTrackDataset"):
             convert(
                 tmp_path,
                 tmp_path / "out",

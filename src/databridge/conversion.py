@@ -1,17 +1,16 @@
 """On-disk dataset conversion: read format A, write format B.
 
 The end-to-end orchestration of the N-to-M bridge. :func:`convert` pairs a
-box-track *loader* (:mod:`databridge.loaders`) with a *writer*
-(:mod:`databridge.writers`) via the neutral
-:class:`databridge.model.BoxTrackDataset` hub: it reads a dataset from disk in
-one format and writes it back out in another, without the caller wiring the
-in-memory model by hand.
+*loader* (:mod:`databridge.loaders`) with a compatible *writer*
+(:mod:`databridge.writers`): it reads a dataset from disk in one format and
+writes it back out in another, without the caller wiring the in-memory model by
+hand.
 
-Because both halves bind to ``BoxTrackDataset`` and not to each other, any
-registered box-track input format can be converted to any registered box-track
-output format -- adding a MOT loader or writer extends the matrix without
-touching this module. Task siblings such as ``VideoClassificationDataset`` need
-their own writer surface before conversion is enabled.
+Writers declare the task dataset type they consume (for example
+``BoxTrackDataset`` for MOT writers or ``VideoClassificationDataset`` for the
+Hugging Face video-classification writer). ``convert`` deliberately delegates
+that compatibility check to :func:`databridge.write`, so task-compatible A→B
+pairs work and cross-task conversions fail before a writer fabricates data.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from typing import Any
 
 from databridge._types import DatasetFormat
 from databridge.loaders import load
-from databridge.model import BoxTrackDataset
 from databridge.writers import write
 
 
@@ -36,9 +34,10 @@ def convert(
 ) -> list[Path] | None:
     """Convert the dataset at ``src`` (``input_format``) to ``dest`` (``output_format``).
 
-    Reads ``src`` with the registered loader for ``input_format``. The loaded
-    dataset must be a :class:`~databridge.model.BoxTrackDataset`; task siblings
-    without writer support raise ``TypeError``.
+    Reads ``src`` with the registered loader for ``input_format`` and writes the
+    loaded task dataset with the registered writer for ``output_format``. The
+    writer's declared dataset type decides compatibility; incompatible task
+    pairs raise ``TypeError``.
 
     Parameters
     ----------
@@ -62,9 +61,4 @@ def convert(
         The files written when ``verbose=True`` is passed; otherwise ``None``.
     """
     dataset = load(src, dataset_format=input_format, **(read_options or {}))
-    if not isinstance(dataset, BoxTrackDataset):
-        raise TypeError(
-            "convert currently supports box-track datasets only; "
-            f"{type(dataset).__name__} has no registered writer surface"
-        )
     return write(dataset, dest, output_format=output_format, **write_options)

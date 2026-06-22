@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         HuggingFaceVideoClassificationLoader,
         load_huggingface_video_classification,
     )
+    from databridge._formats.huggingface_video_classification.writer import HuggingFaceVideoClassificationWriter
     from databridge._formats.motchallenge.loader import MotChallengeLoader
     from databridge._formats.motchallenge.writer import MotChallengeWriter
     from databridge._formats.tao.loader import TaoLoader
@@ -51,6 +52,10 @@ _LAZY_EXPORTS = {
     "HuggingFaceVideoClassificationLoader": (
         "databridge._formats.huggingface_video_classification.loader",
         "HuggingFaceVideoClassificationLoader",
+    ),
+    "HuggingFaceVideoClassificationWriter": (
+        "databridge._formats.huggingface_video_classification.writer",
+        "HuggingFaceVideoClassificationWriter",
     ),
     "MotChallengeLoader": ("databridge._formats.motchallenge.loader", "MotChallengeLoader"),
     "MotChallengeWriter": ("databridge._formats.motchallenge.writer", "MotChallengeWriter"),
@@ -86,6 +91,7 @@ __all__ = [
     "HmieLoader",
     "HmieWriter",
     "HuggingFaceVideoClassificationLoader",
+    "HuggingFaceVideoClassificationWriter",
     "Loader",
     "MotChallengeLoader",
     "MotChallengeWriter",
