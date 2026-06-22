@@ -86,6 +86,71 @@ class TestRegisterAndDispatch:
         assert captured["options"] == {"custom_option": 7}
 
 
+class TestMissingRoot:
+    """A nonexistent or non-directory root is a caller error, not bad data.
+
+    Loaders are best-effort about *data* (skip unparseable items, warn), but a
+    root that does not exist is a bad argument -- ``load`` raises rather than
+    silently returning an empty dataset (which masked typo'd reload paths).
+    """
+
+    def test_nonexistent_root_raises(self, tmp_path: Path) -> None:
+        missing = tmp_path / "does-not-exist"
+        with pytest.raises(FileNotFoundError, match="does-not-exist"):
+            load(missing, dataset_format="tao")
+
+    def test_file_root_raises_not_a_directory(self, tmp_path: Path) -> None:
+        a_file = tmp_path / "a_file.txt"
+        a_file.write_text("not a dataset directory", encoding="utf-8")
+        with pytest.raises(NotADirectoryError, match=r"a_file\.txt"):
+            load(a_file, dataset_format="tao")
+
+    def test_load_mot_also_raises_on_missing_root(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_mot(tmp_path / "nope", dataset_format="hmie")
+
+    def test_existing_empty_root_returns_empty_without_raising(self, tmp_path: Path) -> None:
+        # Root exists but holds no loadable TAO data: best-effort empty, no raise.
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        ds = load(empty, dataset_format="tao")
+        assert isinstance(ds, BoxTrackDataset)
+        assert len(ds) == 0
+
+
+class TestEmptyResultWarns:
+    """An existing root that yields no loadable items warns (but does not raise).
+
+    Distinct from a missing root (which raises): the root is valid, the load ran
+    to completion, but the result is empty -- usually a wrong format or wrong
+    subdirectory. The dispatch layer emits one uniform warning so this is never
+    silent, closing per-loader gaps (HMIE, MOTChallenge empty splits).
+    """
+
+    def test_empty_hmie_load_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # Directory exists and is a plausible HMIE root, but holds no annotations.
+        (tmp_path / "video_001_000000").mkdir()
+        with caplog.at_level("WARNING"):
+            ds = load(tmp_path, dataset_format="hmie")
+        assert len(ds.sequences) == 0
+        assert any("empty dataset" in record.message.lower() for record in caplog.records)
+
+    def test_empty_motchallenge_split_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # train/ exists but contains no sequence directories -> empty, no per-loader warning.
+        (tmp_path / "train").mkdir()
+        with caplog.at_level("WARNING"):
+            ds = load(tmp_path, dataset_format="motchallenge")
+        assert len(ds.sequences) == 0
+        assert any("empty dataset" in record.message.lower() for record in caplog.records)
+
+    def test_nonempty_load_does_not_warn_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        default_happy_dataset(tmp_path)
+        with caplog.at_level("WARNING"):
+            ds = load(tmp_path, dataset_format="hmie")
+        assert ds.sequence_count > 0
+        assert not any("empty dataset" in record.message.lower() for record in caplog.records)
+
+
 class TestAutodetect:
     def test_autodetect_uses_sniff(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         class SniffLoader(Loader):
