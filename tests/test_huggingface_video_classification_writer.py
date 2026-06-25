@@ -9,15 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from databridge import (
+from datamaite import (
     DatasetFormat,
     HuggingFaceVideoClassificationWriter,
     convert,
     load_huggingface_video_classification,
     write,
 )
-from databridge.model import BoxTrackDataset, VideoClassificationDataset, VideoClassificationSample
-from databridge.writers import available_output_formats, get_writer
+from datamaite.model import BoxTrackDataset, VideoClassificationDataset, VideoClassificationSample
+from datamaite.writers import available_output_formats, get_writer
 
 
 def _write_video(path: Path, payload: bytes = b"video") -> Path:
@@ -194,7 +194,7 @@ class TestHuggingFaceVideoClassificationWriterMalformedInputs:
         missing = tmp_path / "missing.mp4"
         ds = _dataset(_sample(0, missing, label="missing"))
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.huggingface_video_classification.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.huggingface_video_classification.writer"):
             write(ds, tmp_path / "out", output_format="huggingface_video_classification")
 
         assert (tmp_path / "out" / "metadata.csv").read_text(encoding="utf-8") == "file_name,label\n"

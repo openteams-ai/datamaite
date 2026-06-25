@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from databridge import load, load_mot
-from databridge._formats.hmie.loader import HmieLoader
-from databridge._types import DatasetFormat
-from databridge.loaders import Loader, available_formats, get_loader, register_loader
-from databridge.model import BoxTrackDataset
+from datamaite import load, load_mot
+from datamaite._formats.hmie.loader import HmieLoader
+from datamaite._types import DatasetFormat
+from datamaite.loaders import Loader, available_formats, get_loader, register_loader
+from datamaite.model import BoxTrackDataset
 
 from ._hmie_factory import default_happy_dataset
 
@@ -34,7 +34,7 @@ class TestRegistry:
             get_loader("does-not-exist")
 
     def test_get_loader_no_registered_loader_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("databridge.loaders._LOADERS", {})
+        monkeypatch.setattr("datamaite.loaders._LOADERS", {})
         with pytest.raises(ValueError, match="No loader registered"):
             get_loader(DatasetFormat.HMIE)
 
@@ -67,7 +67,7 @@ class TestRegisterAndDispatch:
     def test_register_loader_and_dispatch(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         # Patch the registry to empty *first* so register_loader mutates the
         # throwaway dict, not the real global one (which monkeypatch restores).
-        monkeypatch.setattr("databridge.loaders._LOADERS", {})
+        monkeypatch.setattr("datamaite.loaders._LOADERS", {})
         captured: dict[str, object] = {}
 
         class DummyLoader(Loader):
@@ -163,11 +163,11 @@ class TestAutodetect:
             def load(self, _root: str | Path, **_options: object) -> BoxTrackDataset:
                 return BoxTrackDataset(sequences=[], categories={})
 
-        monkeypatch.setattr("databridge.loaders._LOADERS", {DatasetFormat.HMIE: SniffLoader})
+        monkeypatch.setattr("datamaite.loaders._LOADERS", {DatasetFormat.HMIE: SniffLoader})
         assert isinstance(load(tmp_path, dataset_format=None), BoxTrackDataset)
 
     def test_autodetect_failure_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr("databridge.loaders._LOADERS", {})
+        monkeypatch.setattr("datamaite.loaders._LOADERS", {})
         with pytest.raises(ValueError, match="autodetect"):
             load(tmp_path, dataset_format=None)
 

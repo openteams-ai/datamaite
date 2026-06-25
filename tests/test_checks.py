@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from databridge._formats.hmie.annotation_checks import check_annotation_schema
-from databridge._types import Severity
+from datamaite._formats.hmie.annotation_checks import check_annotation_schema
+from datamaite._types import Severity
 from tests._scale_factory import default_frame, one_track_annotation
 
 

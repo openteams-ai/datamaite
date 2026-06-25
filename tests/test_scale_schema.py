@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from databridge._formats.hmie.schema import ScaleAnnotation
+from datamaite._formats.hmie.schema import ScaleAnnotation
 from tests._scale_factory import default_frame, one_track_annotation
 
 

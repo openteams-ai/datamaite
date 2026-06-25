@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from databridge._types import DatasetFormat, Severity
-from databridge.validation import validate, validate_annotation, validate_batches
+from datamaite._types import DatasetFormat, Severity
+from datamaite.validation import validate, validate_annotation, validate_batches
 
 
 def _raise_in_worker(pair, *, check_video):  # type: ignore[no-untyped-def]
@@ -156,7 +156,7 @@ class TestParallelWorkerCrash:
             ],
         )
 
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         monkeypatch.setattr(validation_module, "_safe_validate_pair", _raise_in_worker)
 
@@ -202,7 +202,7 @@ class TestParallelWorkerCrash:
             ],
         )
 
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         monkeypatch.setattr(validation_module, "_safe_validate_pair", _raise_in_worker)
 
@@ -288,7 +288,7 @@ class TestValidateBatches:
         propagate the exception and kill the loop."""
         root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
 
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         original = validation_module.validate
         bad_batch = root / "batch_a"
@@ -325,7 +325,7 @@ class TestValidateBatches:
         not registered, the entire text/HTML output path explodes."""
         root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
 
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         bad_batch = root / "batch_a"
 
@@ -348,7 +348,7 @@ class TestValidateBatches:
         root = _make_two_batch_root(tmp_path, valid_annotation.read_text())
 
         seen: list[bool] = []
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         original = validation_module.validate
 

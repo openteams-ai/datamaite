@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from databridge._types import Severity
-from databridge.validation import validate
+from datamaite._types import Severity
+from datamaite.validation import validate
 from tests._hmie_factory import (
     AnnotationSpec,
     FullVideoSpec,
@@ -102,7 +102,7 @@ class TestFindingCaps:
 
     def test_cap_keeps_html_report_totals_accurate(self, tmp_path: Path) -> None:
         """prepare_report_data must report uncapped error/warning totals."""
-        from databridge._report import prepare_report_data
+        from datamaite._report import prepare_report_data
 
         root = single_video_dataset(
             tmp_path / "hmie",
@@ -326,7 +326,7 @@ class TestWorkerCrashResilience:
         root = default_happy_dataset(tmp_path / "hmie")
 
         # Monkeypatch _validate_pair to raise on the first pair only
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         original_validate_pair = validation_module._validate_pair
         crashed = {"count": 0}

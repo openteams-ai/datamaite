@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from databridge import DatasetFormat, TaoWriter, convert, write
-from databridge._formats.tao.loader import load_tao
-from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
-from databridge.writers import available_output_formats, get_writer
+from datamaite import DatasetFormat, TaoWriter, convert, write
+from datamaite._formats.tao.loader import load_tao
+from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite.writers import available_output_formats, get_writer
 
 
 def write_tao(root: Path, payload: dict[str, Any], split: str = "train") -> Path:
@@ -296,7 +296,7 @@ class TestTaoWriterMalformedInputs:
         write_tao_frames(src, "train/video-a/000001.jpg")
         ds = load_tao(src)
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.tao.writer"):
             write(ds, tmp_path / "out", output_format="tao")
 
         written = json.loads((tmp_path / "out" / "annotations" / "train.json").read_text(encoding="utf-8"))
@@ -332,7 +332,7 @@ class TestTaoWriterMalformedInputs:
         )
         ds = BoxTrackDataset(sequences=(seq,), categories={"tao/category_1/person": 1})
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.tao.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.tao.writer"):
             write(ds, tmp_path / "out", output_format="tao")
 
         written = json.loads((tmp_path / "out" / "annotations" / "train.json").read_text(encoding="utf-8"))

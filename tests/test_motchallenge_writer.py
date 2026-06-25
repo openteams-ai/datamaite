@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from databridge import DatasetFormat, MotChallengeWriter, convert, write
-from databridge._formats.motchallenge.loader import load_motchallenge
-from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
-from databridge.writers import available_output_formats, get_writer
+from datamaite import DatasetFormat, MotChallengeWriter, convert, write
+from datamaite._formats.motchallenge.loader import load_motchallenge
+from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite.writers import available_output_formats, get_writer
 
 from ._hmie_factory import AnnotationSpec, SnippetSpec, TrackSpec, single_video_dataset
 
@@ -270,7 +270,7 @@ class TestMotChallengeWriterMalformedInputs:
             num_frames_exact=True,
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.motchallenge.writer"):
             write(
                 BoxTrackDataset(sequences=(seq,), categories={"motchallenge/pedestrian": 1}),
                 tmp_path / "out",
@@ -311,7 +311,7 @@ class TestMotChallengeWriterMalformedInputs:
             num_frames_exact=True,
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.motchallenge.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.motchallenge.writer"):
             write(BoxTrackDataset(sequences=(seq,), categories={}), tmp_path / "out", output_format="motchallenge")
 
         assert (tmp_path / "out" / "train" / "clip" / "gt" / "gt.txt").read_text(encoding="utf-8") == ""

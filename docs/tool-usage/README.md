@@ -1,6 +1,6 @@
 # Tool-usage notebooks
 
-Runnable notebooks for using `databridge`, organized to mirror the bridge
+Runnable notebooks for using `datamaite`, organized to mirror the bridge
 architecture (see [`../architecture.md`](../architecture.md)).
 
 - **`dataset_bridge_demo.ipynb`** — start here. A guided tour of the whole
@@ -25,14 +25,14 @@ MAITE-MOT surface until that task family gains a writer/protocol surface.
 
 ## Why this split
 
-For box-track/MOT data, databridge is an N-to-M bridge. *Loaders* and
+For box-track/MOT data, datamaite is an N-to-M bridge. *Loaders* and
 *validators* live on the **input** side (format-specific: HMIE, MOTChallenge,
 TAO, …); *writers* live on the **output** side (MOTChallenge, TAO, VisDrone,
 …); the neutral `BoxTrackDataset` model sits between them. Validation happens at
 two distinct points:
 
 1. **Input validation** (`validators/`) — per input format, on disk: *is the
-   source dataset trustworthy?* This is what `databridge.validate()` does, and
+   source dataset trustworthy?* This is what `datamaite.validate()` does, and
    it dispatches by format (`DatasetFormat`). Each input format has its own
    rules, so each gets its own validator notebook.
 2. **Model / export validation** — format-neutral, on the loaded

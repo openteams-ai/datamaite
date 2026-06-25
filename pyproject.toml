@@ -9,7 +9,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-name = "databridge"
+name = "datamaite"
 dynamic = ["version"]
 description = "A unified framework for dataset loading, conversion, and quality validation."
 readme = "README.md"
@@ -39,7 +39,7 @@ video = [
 notebook = [
     "ipykernel>=7.2,<8",
 ]
-# MAITE interoperability (databridge.maite). Optional: core `import databridge`
+# MAITE interoperability (datamaite.maite). Optional: core `import datamaite`
 # never imports these. ``numpy`` + ``av`` (PyAV) are the real runtime deps --
 # they build/decode the MOT view. ``maite`` itself is NOT imported at runtime
 # (BoxTrackDataset conforms to maite.protocols *structurally*); it's shipped in
@@ -61,13 +61,10 @@ dev = [
 ]
 
 [project.scripts]
-databridge = "databridge._cli:main"
-
-[project.urls]
-Repository = "https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge"
+datamaite = "datamaite._cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/databridge"]
+packages = ["src/datamaite"]
 
 [tool.hatch.version]
 source = "vcs"
@@ -77,7 +74,7 @@ version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/databridge/_version.py"
+version-file = "src/datamaite/_version.py"
 
 [tool.hatch.build.targets.sdist]
 # docs/ excluded so customer-facing tutorial notebooks (and any saved
@@ -94,7 +91,7 @@ exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
 # Version is managed by hatch-vcs from git tags; Poetry reads this
 # as a fallback. The actual wheel version comes from _version.py.
 version = "0.2.0"
-packages = [{ include = "databridge", from = "src" }]
+packages = [{ include = "datamaite", from = "src" }]
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = ">=3.6"
@@ -127,7 +124,7 @@ pydata-sphinx-theme = ">=0.15"
 line-length = 120
 target-version = "py310"
 src = ["src", "tests"]
-extend-exclude = ["src/databridge/_version.py"]
+extend-exclude = ["src/datamaite/_version.py"]
 
 [tool.ruff.lint]
 select = [
@@ -160,7 +157,7 @@ ignore = [
 "tests/**/*.py" = ["S101", "ARG001", "PLR2004"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["databridge"]
+known-first-party = ["datamaite"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -174,7 +171,7 @@ testpaths = ["tests"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=databridge",
+    "--cov=datamaite",
     "--cov-report=term-missing",
     "--cov-report=xml:coverage_report.xml",
     "--cov-fail-under=90",
@@ -193,7 +190,7 @@ markers = [
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 omit = [
-    "src/databridge/conversion.py",
+    "src/datamaite/conversion.py",
 ]
 
 # ---------------------------------------------------------------------------

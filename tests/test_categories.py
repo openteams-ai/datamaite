@@ -6,7 +6,7 @@ from collections import Counter
 
 import pytest
 
-from databridge._formats.hmie.categories import (
+from datamaite._formats.hmie.categories import (
     _CHECK_CATEGORIES,
     SKIP_VIDEO_CONSISTENCY,
     SKIP_VIDEO_INTEGRITY,

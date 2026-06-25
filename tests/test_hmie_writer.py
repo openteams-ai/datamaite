@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from databridge import convert, write
-from databridge._formats.hmie.loader import load_hmie
-from databridge.model import BoxTrackDataset, VideoSequence
+from datamaite import convert, write
+from datamaite._formats.hmie.loader import load_hmie
+from datamaite.model import BoxTrackDataset, VideoSequence
 
 from ._hmie_factory import (
     AnnotationSpec,

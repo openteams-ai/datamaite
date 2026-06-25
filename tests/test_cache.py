@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from databridge._cache import FileFingerprint, ValidationCache, fingerprint_file
-from databridge._types import Finding, Severity
+from datamaite._cache import FileFingerprint, ValidationCache, fingerprint_file
+from datamaite._types import Finding, Severity
 
 
 class TestFingerprint:
@@ -144,7 +144,7 @@ class TestValidationCache:
         """A corrupt cache row (bad JSON) must not crash lookup; the row is evicted."""
         import sqlite3
 
-        from databridge._cache import ValidationCache, fingerprint_file
+        from datamaite._cache import ValidationCache, fingerprint_file
 
         db = tmp_path / "cache.db"
         ann = tmp_path / "ann.json"
@@ -179,7 +179,7 @@ class TestValidationCache:
 
     def test_default_path(self) -> None:
         path = ValidationCache.default_path()
-        assert "databridge" in str(path)
+        assert "datamaite" in str(path)
         assert path.name == "validation.db"
 
     def test_flush_persists_pending_writes_without_close(self, tmp_path: Path) -> None:
@@ -220,8 +220,8 @@ class TestValidationCache:
         skipping ``cache.store()`` when the finding list contains a
         ``worker_crash`` entry.
         """
-        from databridge._formats.hmie import SnippetPair
-        from databridge.validation import _FindingAccumulator, _validate_pairs_cached
+        from datamaite._formats.hmie import SnippetPair
+        from datamaite.validation import _FindingAccumulator, _validate_pairs_cached
 
         # Build a real pair so fingerprinting succeeds
         ann = tmp_path / "ann.json"
@@ -233,7 +233,7 @@ class TestValidationCache:
 
         # Monkey-patch the upstream worker helper to return a worker_crash
         # finding, so we test the cache-store skip path end-to-end.
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         def _fake_validate_and_yield(pairs, *, check_video, workers):  # type: ignore[no-untyped-def]
             for p in pairs:

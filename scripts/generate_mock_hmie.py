@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Generate the standalone HMIE mock dataset tree (for the hmie-mock-data repo).
 
-Reuses databridge's HMIE test factory (``tests/_hmie_factory.py``) to write a
+Reuses datamaite's HMIE test factory (``tests/_hmie_factory.py``) to write a
 set of self-contained, **non-CUI** HMIE datasets -- one directory per scenario,
 covering the happy path plus each validation failure mode. The output is what
 gets checked into the separate ``hmie-mock-data`` repo (mp4 via git-LFS, JSON
-plain); this script itself stays in databridge as the documented regenerator.
+plain); this script itself stays in datamaite as the documented regenerator.
 
 Usage:
     poetry run python scripts/generate_mock_hmie.py <output_dir>
@@ -22,7 +22,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-# Reuse the in-repo factory; run from the databridge repo root via poetry.
+# Reuse the in-repo factory; run from the datamaite repo root via poetry.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests._hmie_factory import (
     AnnotationSpec,

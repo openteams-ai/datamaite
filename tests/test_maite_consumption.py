@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from databridge.maite._common import EMPTY_BOXES, boxes_array
-from databridge.maite._decode import DecodedFrame, PyAVDecoder, VideoInfo
-from databridge.maite._mot import _EMPTY_FRAME_TARGET
+from datamaite.maite._common import EMPTY_BOXES, boxes_array
+from datamaite.maite._decode import DecodedFrame, PyAVDecoder, VideoInfo
+from datamaite.maite._mot import _EMPTY_FRAME_TARGET
 
 from ._maite_factory import sample_dataset
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from databridge._cli import main
+from datamaite._cli import main
 
 
 @pytest.fixture
@@ -174,7 +174,7 @@ class TestCLI:
         monkeypatch.chdir(tmp_path)
         rc = main(["validate", str(single_snippet_hmie), "--skip-video-check", "-o"])
         assert rc == 0
-        html_reports = list(tmp_path.glob("databridge-report-*.html"))
+        html_reports = list(tmp_path.glob("datamaite-report-*.html"))
         assert len(html_reports) == 1
 
     def test_no_cache_flag(self, single_snippet_hmie: Path) -> None:
@@ -302,7 +302,7 @@ class TestMultiBatchCLI:
         notebook's try/except was working around. Pinning this here so
         the CLI stays consistent with validate_batches().
         """
-        from databridge import validation as validation_module
+        from datamaite import validation as validation_module
 
         bad_batch = multi_batch_hmie / "batch-a"
         original = validation_module.validate
@@ -334,26 +334,26 @@ class TestMultiBatchCLI:
 
 class TestFindBatchDirs:
     def test_single_batch_returns_self(self, single_snippet_hmie: Path) -> None:
-        from databridge._cli import _find_batch_dirs
+        from datamaite._cli import _find_batch_dirs
 
         result = _find_batch_dirs(single_snippet_hmie)
         assert result == [single_snippet_hmie]
 
     def test_multi_batch_returns_children(self, multi_batch_hmie: Path) -> None:
-        from databridge._cli import _find_batch_dirs
+        from datamaite._cli import _find_batch_dirs
 
         result = _find_batch_dirs(multi_batch_hmie)
         names = sorted(d.name for d in result)
         assert names == ["batch-a", "batch-b"]
 
     def test_nonexistent_returns_empty(self, tmp_path: Path) -> None:
-        from databridge._cli import _find_batch_dirs
+        from datamaite._cli import _find_batch_dirs
 
         result = _find_batch_dirs(tmp_path / "missing")
         assert result == []
 
     def test_empty_directory_returns_empty(self, tmp_path: Path) -> None:
-        from databridge._cli import _find_batch_dirs
+        from datamaite._cli import _find_batch_dirs
 
         empty = tmp_path / "empty"
         empty.mkdir()
@@ -363,7 +363,7 @@ class TestFindBatchDirs:
 
 class TestHelpers:
     def test_rpad_strips_ansi_for_width(self) -> None:
-        from databridge._cli import _rpad
+        from datamaite._cli import _rpad
 
         # ANSI-wrapped text should be padded to visible width, not byte length
         text = "\033[32mPASS\033[0m"  # visible length 4
@@ -375,13 +375,13 @@ class TestHelpers:
     def test_show_progress_quiet_returns_false(self) -> None:
         import argparse
 
-        from databridge._cli import _show_progress
+        from datamaite._cli import _show_progress
 
         args = argparse.Namespace(quiet=True)
         assert _show_progress(args) is False
 
     def test_make_status_callback_writes_when_show(self, capsys) -> None:
-        from databridge._cli import _make_status_callback
+        from datamaite._cli import _make_status_callback
 
         cb = _make_status_callback(show=True)
         cb("hello")
@@ -389,7 +389,7 @@ class TestHelpers:
         assert "hello" in err
 
     def test_make_status_callback_noop_when_not_show(self, capsys) -> None:
-        from databridge._cli import _make_status_callback
+        from datamaite._cli import _make_status_callback
 
         cb = _make_status_callback(show=False)
         cb("should be silent")
@@ -397,8 +397,8 @@ class TestHelpers:
         assert err == ""
 
     def test_multi_exit_code_all_passed(self, tmp_path: Path) -> None:
-        from databridge._cli import _multi_exit_code
-        from databridge._types import DatasetFormat, ValidationResult
+        from datamaite._cli import _multi_exit_code
+        from datamaite._types import DatasetFormat, ValidationResult
 
         results = [
             (
@@ -409,8 +409,8 @@ class TestHelpers:
         assert _multi_exit_code(results) == 0
 
     def test_multi_exit_code_one_failed(self, tmp_path: Path) -> None:
-        from databridge._cli import _multi_exit_code
-        from databridge._types import DatasetFormat, ValidationResult
+        from datamaite._cli import _multi_exit_code
+        from datamaite._types import DatasetFormat, ValidationResult
 
         results = [
             (
@@ -426,8 +426,8 @@ class TestHelpers:
 
     def test_multi_exit_code_warnings_only(self, tmp_path: Path) -> None:
         """Warnings without errors must return 1, matching single-batch semantics."""
-        from databridge._cli import _multi_exit_code
-        from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
+        from datamaite._cli import _multi_exit_code
+        from datamaite._types import DatasetFormat, Finding, Severity, ValidationResult
 
         warning_finding = Finding(
             severity=Severity.WARNING,
@@ -475,8 +475,8 @@ class TestHelpers:
         read WARN in the table, not SKIP -- SKIP must not mask real findings."""
         from collections import Counter
 
-        from databridge import DatasetFormat, ValidationResult
-        from databridge._cli import _print_batch_table
+        from datamaite import DatasetFormat, ValidationResult
+        from datamaite._cli import _print_batch_table
 
         result = ValidationResult(
             dataset_path=tmp_path / "batch-a",
@@ -492,7 +492,7 @@ class TestHelpers:
         assert "SKIP" not in out
 
     def test_make_batch_progress_increments(self, capsys) -> None:
-        from databridge._cli import _make_batch_progress
+        from datamaite._cli import _make_batch_progress
 
         cb = _make_batch_progress(1, 3, "batch-a", show=True)
         cb()
@@ -505,8 +505,8 @@ class TestHelpers:
         """_print_batch_table must not crash on any row shape (PASS/struct_fail/no_annotations)."""
         from collections import Counter
 
-        from databridge._cli import _print_batch_table
-        from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
+        from datamaite._cli import _print_batch_table
+        from datamaite._types import DatasetFormat, Finding, Severity, ValidationResult
 
         passing = ValidationResult(
             dataset_path=tmp_path / "a",

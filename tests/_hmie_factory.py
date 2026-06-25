@@ -1,6 +1,6 @@
 """Factory helpers for building realistic HMIE test datasets.
 
-Creates the full directory hierarchy described in the databridge HMIE
+Creates the full directory hierarchy described in the datamaite HMIE
 validator design: dataset root -> full-length video dirs -> snippet dirs
 -> labeler subdirs with Scale annotation JSON, plus seq_mp4/ siblings
 with matching mp4 files.

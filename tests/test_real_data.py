@@ -1,10 +1,10 @@
 """Tests that run against real HMIE data on SUNet.
 
 These tests are skipped by default. To run them locally when you have
-access to real HMIE data, set the DATABRIDGE_HMIE_ROOT environment
+access to real HMIE data, set the DATAMAITE_HMIE_ROOT environment
 variable to the dataset root and invoke pytest with -m real_data:
 
-    export DATABRIDGE_HMIE_ROOT=/path/to/hmie/dataset
+    export DATAMAITE_HMIE_ROOT=/path/to/hmie/dataset
     uv run pytest -m real_data
 
 These tests verify that the validator's assumptions about the HMIE folder
@@ -19,21 +19,21 @@ from pathlib import Path
 
 import pytest
 
-from databridge._formats.hmie.discovery import discover_hmie_pairs
-from databridge._types import Severity
-from databridge.validation import validate
+from datamaite._formats.hmie.discovery import discover_hmie_pairs
+from datamaite._types import Severity
+from datamaite.validation import validate
 
 pytestmark = pytest.mark.real_data
 
 
 @pytest.fixture
 def hmie_root() -> Path:
-    root = os.environ.get("DATABRIDGE_HMIE_ROOT")
+    root = os.environ.get("DATAMAITE_HMIE_ROOT")
     if not root:
-        pytest.skip("DATABRIDGE_HMIE_ROOT not set")
+        pytest.skip("DATAMAITE_HMIE_ROOT not set")
     path = Path(root)
     if not path.is_dir():
-        pytest.skip(f"DATABRIDGE_HMIE_ROOT does not exist: {path}")
+        pytest.skip(f"DATAMAITE_HMIE_ROOT does not exist: {path}")
     return path
 
 
@@ -57,7 +57,7 @@ class TestRealHmieValidation:
         """Run the full validator against real data and report stats.
 
         This test does not assert PASS -- real data is expected to have
-        failures (that's the whole point of databridge). It asserts that
+        failures (that's the whole point of datamaite). It asserts that
         validation completes without crashing and produces a report.
         """
         result = validate(hmie_root)
@@ -90,7 +90,7 @@ class TestRealHmieLoader:
         the actual SUNet layout: at least one sequence with boxes, and a
         non-empty category map.
         """
-        from databridge._formats.hmie.loader import load_hmie
+        from datamaite._formats.hmie.loader import load_hmie
 
         ds = load_hmie(hmie_root)
 

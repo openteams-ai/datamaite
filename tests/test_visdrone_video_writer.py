@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from databridge import DatasetFormat, VisDroneVideoWriter, convert, write
-from databridge._formats.visdrone.loader import load_visdrone_video
-from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
-from databridge.writers import available_output_formats, get_writer
+from datamaite import DatasetFormat, VisDroneVideoWriter, convert, write
+from datamaite._formats.visdrone.loader import load_visdrone_video
+from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite.writers import available_output_formats, get_writer
 
 
 def write_visdrone_split(
@@ -301,7 +301,7 @@ class TestVisDroneVideoWriterMalformedInputs:
             num_frames_exact=True,
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.visdrone.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.visdrone.writer"):
             write(
                 BoxTrackDataset(sequences=(seq,), categories={"visdrone_video/car": 4}),
                 tmp_path / "out",
@@ -342,7 +342,7 @@ class TestVisDroneVideoWriterMalformedInputs:
             num_frames_exact=True,
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.visdrone.writer"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.visdrone.writer"):
             write(BoxTrackDataset(sequences=(seq,), categories={}), tmp_path / "out", output_format="visdrone_video")
 
         rows = (tmp_path / "out" / "VisDrone2019-VID-train" / "annotations" / "clip.txt").read_text(encoding="utf-8")

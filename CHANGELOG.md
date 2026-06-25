@@ -9,13 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `databridge.load` (and `load_mot`) now fail fast on a bad dataset root: a
+- `datamaite.load` (and `load_mot`) now fail fast on a bad dataset root: a
   nonexistent path raises `FileNotFoundError` and a non-directory path raises
   `NotADirectoryError`, instead of silently returning an empty dataset. A root
   that exists but yields no loadable items still returns an empty dataset, now
   with a `WARNING` so an empty result (e.g. wrong format or wrong subdirectory)
   is never silent.
-- `databridge.write` (and `convert`, which forwards to it) now return ``None``
+- `datamaite.write` (and `convert`, which forwards to it) now return ``None``
   by default and only return the ``list[Path]`` of files written when called
   with ``verbose=True``. The full list is one path per frame image, which
   floods interactive/REPL output; the file list is now opt-in. Side effects
@@ -25,17 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Neutral in-memory dataset model (`databridge.model`): `Dataset` /
+- Neutral in-memory dataset model (`datamaite.model`): `Dataset` /
   `VideoSequence` / `BoxAnnotation` form the format-agnostic hub that
   every loader produces and every converter will consume, so any loader
   can feed any output format (N-to-M bridge).
-- Loader architecture (`databridge.loaders`): a `Loader` base class
+- Loader architecture (`datamaite.loaders`): a `Loader` base class
   defines the input-side contract, `register_loader` is the extension
-  point, and `databridge.load(root, dataset_format=…)` dispatches across
+  point, and `datamaite.load(root, dataset_format=…)` dispatches across
   registered formats (with a `sniff`-based autodetection hook). `HmieLoader`
   is the reference implementation; adding a format is additive (subclass +
   register). See the "Loader architecture" section in `docs/architecture.md`.
-- HMIE dataloader (`databridge.load_mot(..., dataset_format="hmie")`):
+- HMIE dataloader (`datamaite.load_mot(..., dataset_format="hmie")`):
   loads an HMIE/Scale dataset into the neutral `BoxTrackDataset` model
   (`VideoSequence` / `BoxAnnotation`
   records with a dataset-wide ontology-URI → category-id map). Reuses the
@@ -43,10 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notebook walk; supports `annotation_dir` / `video_dir` overrides for
   flat layouts and an opt-in `require_video` mode that reads true frame
   counts via the `video` extra.
-- Writer architecture (`databridge.writers`): a `Writer` base class defines
+- Writer architecture (`datamaite.writers`): a `Writer` base class defines
   the output-side contract (`BoxTrackDataset` → `list[Path]`), `register_writer`
-  is the extension point, and `databridge.write(ds, dest, output_format=…)`
-  dispatches across registered formats. `databridge.conversion.convert` pairs a
+  is the extension point, and `datamaite.write(ds, dest, output_format=…)`
+  dispatches across registered formats. `datamaite.conversion.convert` pairs a
   loader and a writer for end-to-end on-disk → on-disk conversion. See the
   "Writer architecture" section in `docs/architecture.md`.
 - HMIE writer (`HmieWriter`): the reference writer that serialises a
@@ -55,13 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   box/category content, proving the writer architecture and that
   `BoxTrackDataset` is a lossless hub.
 - Flat-folder MP4 loader
-  (`databridge.load_mot(..., dataset_format="flat_mp4")`, IR-3.3-S-1):
+  (`datamaite.load_mot(..., dataset_format="flat_mp4")`, IR-3.3-S-1):
   loads immediate `.mp4` children encoded as H.264 or MPEG-2 into video-backed
   `VideoSequence` records with media metadata and no annotations.
 - MOTChallenge loader and writer (`dataset_format="motchallenge"` /
   `MotChallengeWriter`).
 - TAO (Tracking Any Object) loader and writer (`dataset_format="tao"` /
-  `TaoWriter`); video-backed TAO writes need the `databridge[video]` extra.
+  `TaoWriter`); video-backed TAO writes need the `datamaite[video]` extra.
 - VisDrone video loader and writer (`dataset_format="visdrone"` /
   `VisDroneVideoWriter`).
 - Hugging Face VideoFolder-style video-classification loader
@@ -69,9 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `load_huggingface_video_classification`) into the
   `VideoClassificationDataset` model.
 - Task / IC / OD foundation: `Task` taxonomy, source-preserving `Taxonomy` /
-  `CategoryEntry` (`databridge.taxonomy`), and canonical `xywh` bbox +
-  conversions (`databridge.geometry`).
-- MAITE interoperability (`databridge.maite`, optional `databridge[maite]`
+  `CategoryEntry` (`datamaite.taxonomy`), and canonical `xywh` bbox +
+  conversions (`datamaite.geometry`).
+- MAITE interoperability (`datamaite.maite`, optional `datamaite[maite]`
   extra): `BoxTrackDataset` conforms to the MAITE MOT protocol structurally;
   `load_mot` returns a MAITE-indexable dataset and `with_mot_options`
   configures the view.
@@ -80,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Task-first loader API: `load_mot(root, dataset_format=…)` replaces the
   per-format `load_*` public functions.
-- Format loaders/writers reorganised into per-format `databridge._formats`
+- Format loaders/writers reorganised into per-format `datamaite._formats`
   packages.
 - Skipped video checks are reported as `SKIPPED` instead of `PASS`.
 - Validator notebook exposes the multi-dataset (collection) HTML report.
@@ -106,11 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial `databridge` package scaffold (pyproject, Poetry primary, uv/pixi
+- Initial `datamaite` package scaffold (pyproject, Poetry primary, uv/pixi
   alternatives, hatchling build backend with hatch-vcs versioning).
 - GitLab CI pipeline: lint (pre-commit), typecheck (pyright), build (uv build),
   test matrix (Python 3.10 / 3.11 / 3.12 with 90% coverage gate), dr-compliance.
-- HMIE / Scale Video Playback dataset validator (`databridge validate <path>`):
+- HMIE / Scale Video Playback dataset validator (`datamaite validate <path>`):
   - Snippet-centric folder-structure discovery for the CDAO SUNet layout.
   - FMV integrity checks (open, frame count, resolution, first/mid/last frame,
     FPS, flat-frame detection) using OpenCV.
@@ -128,7 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Per-file fingerprints (SHA-256 of first 1 MB + size + mtime).
   - WAL journal mode with batched commits (50 writes per flush).
   - `--no-cache` and `--clean` CLI flags; cache hit/miss reporting.
-  - Per-user cache at `~/.cache/databridge/validation.db`.
+  - Per-user cache at `~/.cache/datamaite/validation.db`.
 - CLI dashboard output:
   - 4-check status grid (Folder structure, FMV integrity, Annotation
     coverage, Scale spec compliance) with PASS / WARN / FAIL / N/A states.
@@ -153,7 +153,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `README.md`: install / quick-start with Poetry.
 - `README_DEV.md`: uv and pixi alternatives for contributors.
-
-[Unreleased]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/compare/0.2.0...main
-[0.2.0]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/compare/0.1.0...0.2.0
-[0.1.0]: https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge/-/tags/0.1.0

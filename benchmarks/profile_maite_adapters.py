@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Profile the databridge MAITE MOT surface: time, peak RSS, and file opens.
+"""Profile the datamaite MAITE MOT surface: time, peak RSS, and file opens.
 
 Why subprocesses: peak RSS (``resource.ru_maxrss``) is monotonic over a process
 lifetime, so each (policy, num_frames) config runs in its own child to isolate
@@ -61,7 +61,7 @@ def _run_child(policy: str, video_path: str, num_frames: int, stride: int) -> No
 
     av.open = _counting_open  # type: ignore[assignment]
 
-    from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+    from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 
     boxes = [
         BoxAnnotation(

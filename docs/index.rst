@@ -1,4 +1,4 @@
-Databridge Documentation
+Datamaite Documentation
 ========================
 
 
