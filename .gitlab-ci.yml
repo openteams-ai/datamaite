@@ -46,10 +46,16 @@ variables:
     - poetry --version
     - poetry check
   cache:
+    # Key the venv cache per job (CI_JOB_NAME), not just per Python version.
+    # Jobs install different dependency groups (lint/typecheck/test use
+    # --with dev; build runs `poetry build` with none), but they previously
+    # shared one key per Python version. Last-writer-wins then let a job
+    # restore a .venv another job had populated without the dev group, so
+    # `poetry install --with dev` no-op'd and `pre-commit` was missing.
     - key:
         files:
           - poetry.lock
-        prefix: "venv-py${VERSION}-${CI_COMMIT_REF_SLUG}"
+        prefix: "venv-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
       paths:
         - .venv/
     - key: pip-downloads
