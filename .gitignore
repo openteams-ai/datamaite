@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+_build/
 develop-eggs/
 dist/
 downloads/
@@ -77,6 +78,9 @@ venv.bak/
 # mkdocs documentation
 /site
 /public
+
+#sphinx build
+jupyter_execute/
 
 # mypy
 .mypy_cache/
