@@ -37,7 +37,7 @@ video = [
 # Jupyter kernel for running the docs/tutorial notebooks. Optional so it does
 # not pull the Jupyter stack into a production install.
 notebook = [
-    "ipykernel>=7.2,<8",
+    "ipykernel>=7.2",
 ]
 # MAITE interoperability (datamaite.maite). Optional: core `import datamaite`
 # never imports these. ``numpy`` + ``av`` (PyAV) are the real runtime deps --
@@ -47,7 +47,7 @@ notebook = [
 # surface has maite installed anyway -- and the test suite uses it to verify
 # conformance (isinstance + a maite.tasks.predict round-trip).
 maite = [
-    "maite>=0.9,<0.10",
+    "maite>=0.9",
     "numpy>=1.24",
     "av>=11",
 ]
@@ -105,16 +105,19 @@ pyright = ">=1.1"
 opencv-python-headless = ">=4.8"
 
 [tool.poetry.group.maite.dependencies]
-maite = ">=0.9,<0.10"
+maite = ">=0.9"
 numpy = ">=1.24"
 av = ">=11"
 
 [tool.poetry.group.notebook.dependencies]
-ipykernel = ">=7.2,<8"
+ipykernel = ">=7.2"
+
+[tool.poetry.group.docs]
+include-groups = ["notebook", "video", "maite"]
 
 [tool.poetry.group.docs.dependencies]
 sphinx = ">=7.0"
-myst-parser = ">=2.0"
+myst-nb = ">=1.0"
 pydata-sphinx-theme = ">=0.15"
 
 # ---------------------------------------------------------------------------

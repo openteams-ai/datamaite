@@ -28,7 +28,7 @@ variables:
   # Full clone history so hatch-vcs can compute the correct devN version.
   GIT_DEPTH: "0"
   # Pin Poetry to avoid silent drift.
-  POETRY_PIN: "2.1.2"
+  POETRY_PIN: "2.4.1"
 
 .shared-setup:
   interruptible: true
@@ -149,6 +149,29 @@ pages:
       - public
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - when: never
+
+# Builds a Sphinx HTML preview for every merge request.
+# The rendered docs are accessible via the "Documentation Preview" artifact link in the MR.
+pages-preview:
+  extends: .shared-setup
+  stage: pages
+  variables:
+    VERSION: "3.12"
+  script:
+    - poetry install --with docs
+    - poetry run sphinx-build -b html docs public
+  artifacts:
+    expose_as: "Documentation Preview"
+    paths:
+      - public/
+  environment:
+    name: docs-preview/$CI_MERGE_REQUEST_IID
+    url: "https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite/-/jobs/$CI_JOB_ID/artifacts/public/index.html"
+    auto_stop_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: on_success
     - when: never
 
