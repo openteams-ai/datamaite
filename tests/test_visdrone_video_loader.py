@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from databridge import DatasetFormat, load
-from databridge._formats.visdrone.loader import VisDroneVideoLoader, load_visdrone_video
-from databridge.loaders import available_formats, get_loader
-from databridge.model import BoxTrackDataset
+from datamaite import DatasetFormat, load
+from datamaite._formats.visdrone.loader import VisDroneVideoLoader, load_visdrone_video
+from datamaite.loaders import available_formats, get_loader
+from datamaite.model import BoxTrackDataset
 
 
 def _write_visdrone_split(
@@ -185,7 +185,7 @@ class TestVisDroneVideoHappyPath:
 
 class TestVisDroneVideoMalformedInputs:
     def test_missing_split_root_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.visdrone.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.visdrone.loader"):
             ds = load_visdrone_video(tmp_path)
 
         assert ds.sequence_count == 0
@@ -194,7 +194,7 @@ class TestVisDroneVideoMalformedInputs:
     def test_no_annotation_files_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         _write_visdrone_split(tmp_path, rows=None)
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.visdrone.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.visdrone.loader"):
             ds = load_visdrone_video(tmp_path)
 
         assert ds.sequence_count == 0
@@ -209,7 +209,7 @@ class TestVisDroneVideoMalformedInputs:
             make_sequence_dir=False,
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.visdrone.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.visdrone.loader"):
             ds = load_visdrone_video(tmp_path)
 
         seq = ds.sequences[0]
@@ -235,7 +235,7 @@ class TestVisDroneVideoMalformedInputs:
             ],
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.visdrone.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.visdrone.loader"):
             ds = load_visdrone_video(tmp_path)
 
         assert ds.num_boxes == 1
@@ -248,7 +248,7 @@ class TestVisDroneVideoMalformedInputs:
         def fail_sorted_scan(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("sorted frame scan should not run")
 
-        monkeypatch.setattr("databridge._formats.visdrone.loader._frame_paths", fail_sorted_scan)
+        monkeypatch.setattr("datamaite._formats.visdrone.loader._frame_paths", fail_sorted_scan)
 
         ds = load_visdrone_video(tmp_path)
 

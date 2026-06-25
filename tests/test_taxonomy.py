@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from databridge import CategoryEntry, Taxonomy
+from datamaite import CategoryEntry, Taxonomy
 
 
 def _coco_like() -> Taxonomy:

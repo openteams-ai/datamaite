@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from databridge._types import DatasetFormat
-from databridge.model import BoxTrackDataset
-from databridge.writers import (
+from datamaite._types import DatasetFormat
+from datamaite.model import BoxTrackDataset
+from datamaite.writers import (
     Writer,
     available_output_formats,
     get_writer,
@@ -19,20 +19,20 @@ from databridge.writers import (
 
 class TestRegistry:
     def test_hmie_writer_is_registered(self) -> None:
-        # Importing databridge registers the reference HMIE writer.
-        import databridge  # noqa: F401
+        # Importing datamaite registers the reference HMIE writer.
+        import datamaite  # noqa: F401
 
         assert DatasetFormat.HMIE in available_output_formats()
 
     def test_get_writer_returns_instance(self) -> None:
-        import databridge  # noqa: F401
+        import datamaite  # noqa: F401
 
         writer = get_writer(DatasetFormat.HMIE)
         assert isinstance(writer, Writer)
         assert writer.format is DatasetFormat.HMIE
 
     def test_get_writer_accepts_string(self) -> None:
-        import databridge  # noqa: F401
+        import datamaite  # noqa: F401
 
         assert get_writer("hmie").format is DatasetFormat.HMIE
         assert get_writer("HMIE").format is DatasetFormat.HMIE
@@ -42,7 +42,7 @@ class TestRegistry:
             get_writer("does-not-exist")
 
     def test_get_writer_no_registered_writer_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("databridge.writers._WRITERS", {})
+        monkeypatch.setattr("datamaite.writers._WRITERS", {})
         with pytest.raises(ValueError, match="No writer registered"):
             get_writer(DatasetFormat.HMIE)
 
@@ -72,7 +72,7 @@ class TestRegisterAndDispatch:
     def test_register_writer_and_dispatch(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         # Patch the registry to empty *first* so register_writer mutates the
         # throwaway dict, not the real global one (which monkeypatch restores).
-        monkeypatch.setattr("databridge.writers._WRITERS", {})
+        monkeypatch.setattr("datamaite.writers._WRITERS", {})
         captured: dict[str, object] = {}
 
         class DummyWriter(Writer):
@@ -108,7 +108,7 @@ class TestVerboseReturn:
     """
 
     def _register_dummy(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
-        monkeypatch.setattr("databridge.writers._WRITERS", {})
+        monkeypatch.setattr("datamaite.writers._WRITERS", {})
         calls = {"writes": 0}
 
         class DummyWriter(Writer):

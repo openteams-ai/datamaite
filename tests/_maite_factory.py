@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from databridge.model import BBox, BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite.model import BBox, BoxAnnotation, BoxTrackDataset, VideoSequence
 
 from ._hmie_factory import VideoSpec, make_video
 

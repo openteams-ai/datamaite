@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from databridge._formats.hmie.consistency_checks import check_video_annotation_consistency
-from databridge._formats.hmie.schema import ScaleAnnotation
-from databridge._formats.hmie.video_checks import probe_video
-from databridge._types import Severity
+from datamaite._formats.hmie.consistency_checks import check_video_annotation_consistency
+from datamaite._formats.hmie.schema import ScaleAnnotation
+from datamaite._formats.hmie.video_checks import probe_video
+from datamaite._types import Severity
 from tests._scale_factory import default_frame, one_track_annotation
 
 
@@ -278,7 +278,7 @@ class TestProbeVideo:
 class TestSilenceCv2Logging:
     def test_tolerates_cv2_without_utils_logging(self) -> None:
         """Variant cv2 builds (headless / custom / older) may omit cv2.utils.logging."""
-        import databridge._formats.hmie.video_checks as vc
+        import datamaite._formats.hmie.video_checks as vc
 
         class FakeCV2:  # no .utils at all
             pass
@@ -369,7 +369,7 @@ class TestCheckVideoAnnotationConsistency:
 
     def test_non_finite_video_fps_does_not_crash(self, tmp_path: Path) -> None:
         """NaN/Inf video FPS must emit a finding and not crash frame-bounds math."""
-        from databridge._formats.hmie.video_checks import VideoProperties
+        from datamaite._formats.hmie.video_checks import VideoProperties
 
         ann = self._make_annotation(fps=30.0, afr=5.0, max_key=4)
         fake_video = tmp_path / "fake.mp4"
@@ -392,7 +392,7 @@ class TestCheckVideoAnnotationConsistency:
 
     def test_non_finite_annotation_fps_is_flagged(self, tmp_path: Path) -> None:
         """NaN annotation FPS must produce a consistency_fps_invalid finding."""
-        from databridge._formats.hmie.video_checks import VideoProperties
+        from datamaite._formats.hmie.video_checks import VideoProperties
 
         data = one_track_annotation(
             afr=5.0,

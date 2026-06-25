@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from databridge.model import BoxTrackDataset, VideoSequence, category_name_from_uri
+from datamaite.model import BoxTrackDataset, VideoSequence, category_name_from_uri
 
 from ._maite_factory import WIDGET, box, make_mp4, sequence
 
@@ -56,16 +56,16 @@ class TestModelHelpers:
         assert ds.metadata["id"] == "my-set"
         assert ds.metadata["index2label"] == {1: "widget"}
 
-    def test_dataset_id_defaults_to_databridge(self) -> None:
+    def test_dataset_id_defaults_to_datamaite(self) -> None:
         ds = BoxTrackDataset(sequences=[], categories={})
-        assert ds.metadata["id"] == "databridge"
+        assert ds.metadata["id"] == "datamaite"
 
 
 class TestImportIsolation:
     def test_core_import_does_not_pull_maite_or_av(self) -> None:
         code = (
-            "import sys, databridge; "
-            "leaked = [m for m in ('databridge.maite', 'maite', 'av') if m in sys.modules]; "
+            "import sys, datamaite; "
+            "leaked = [m for m in ('datamaite.maite', 'maite', 'av') if m in sys.modules]; "
             "assert not leaked, leaked"
         )
         result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)  # noqa: S603
@@ -76,21 +76,21 @@ class TestImportIsolation:
         # __getitem__ to fail the way a missing numpy/av would. The dataset needs
         # one video-bearing sequence so __getitem__ reaches the import (it selects
         # from _mot_sequences first).
-        monkeypatch.setitem(sys.modules, "databridge.maite._mot", None)
+        monkeypatch.setitem(sys.modules, "datamaite.maite._mot", None)
         ds = BoxTrackDataset(sequences=[sequence("/tmp/x.mp4")], categories={})  # noqa: S108 - synthetic
-        with pytest.raises(ImportError, match=r"pip install databridge\[maite\]"):
+        with pytest.raises(ImportError, match=r"pip install datamaite\[maite\]"):
             _ = ds[0]
 
 
 class TestDecodeBackend:
     def test_pyav_decoder_is_a_decoder(self) -> None:
-        from databridge.maite._decode import Decoder, PyAVDecoder, default_decoder
+        from datamaite.maite._decode import Decoder, PyAVDecoder, default_decoder
 
         assert isinstance(PyAVDecoder(), Decoder)
         assert isinstance(default_decoder(), Decoder)
 
     def test_info_reads_dimensions_and_time_base(self, tmp_path: Path) -> None:
-        from databridge.maite._decode import PyAVDecoder
+        from datamaite.maite._decode import PyAVDecoder
 
         video_path = make_mp4(tmp_path / "v.mp4", width=64, height=48)
         info = PyAVDecoder().info(str(video_path))
@@ -99,7 +99,7 @@ class TestDecodeBackend:
         assert info.size_bytes == video_path.stat().st_size
 
     def test_stream_none_yields_all_frames(self, tmp_path: Path) -> None:
-        from databridge.maite._decode import PyAVDecoder
+        from datamaite.maite._decode import PyAVDecoder
 
         video_path = make_mp4(tmp_path / "v.mp4", num_frames=6)
         frames = list(PyAVDecoder().stream(str(video_path), None))
@@ -107,14 +107,14 @@ class TestDecodeBackend:
         assert [f.frame_index for f in frames] == list(range(6))
 
     def test_decode_one_out_of_range_raises(self, tmp_path: Path) -> None:
-        from databridge.maite._decode import PyAVDecoder
+        from datamaite.maite._decode import PyAVDecoder
 
         video_path = make_mp4(tmp_path / "v.mp4", num_frames=3)
         with pytest.raises(IndexError):
             PyAVDecoder().decode_one(str(video_path), 999)
 
     def test_resolve_video_info_falls_back_on_probe_failure(self, tmp_path: Path, caplog) -> None:
-        from databridge.maite._decode import PyAVDecoder, VideoInfo, resolve_video_info
+        from datamaite.maite._decode import PyAVDecoder, VideoInfo, resolve_video_info
 
         fallback = VideoInfo(width=1, height=2, time_base=Fraction(1, 30), size_bytes=3)
         missing = str(tmp_path / "nope.mp4")
@@ -124,7 +124,7 @@ class TestDecodeBackend:
         assert "probe failed" in caplog.text
 
     def test_fallback_video_info_branches(self) -> None:
-        from databridge.maite._common import fallback_video_info
+        from datamaite.maite._common import fallback_video_info
 
         seq_known = sequence("/tmp/a.mp4", fps=25.0, width=8, height=9, size_bytes=10)  # noqa: S108
         info = fallback_video_info(seq_known)
@@ -179,7 +179,7 @@ class TestDefaultMaiteSurface:
 
 class TestEndToEndFromLoader:
     def test_load_hmie_is_directly_maite_indexable(self, tmp_path: Path) -> None:
-        from databridge._formats.hmie.loader import load_hmie
+        from datamaite._formats.hmie.loader import load_hmie
 
         from ._hmie_factory import SnippetSpec, single_video_dataset
 

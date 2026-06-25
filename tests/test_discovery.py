@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from databridge._formats.hmie.discovery import discover_hmie_pairs
+from datamaite._formats.hmie.discovery import discover_hmie_pairs
 
 
 @pytest.fixture
@@ -524,14 +524,14 @@ class TestBatchScaleMerge:
 
 class TestMatchAnnotationAmbiguity:
     def test_duplicate_basename_is_ambiguous_orphan(self) -> None:
-        from databridge._formats.hmie.discovery import match_annotation_to_video
+        from datamaite._formats.hmie.discovery import match_annotation_to_video
 
         videos = [Path("/a/snippet_1/seq_mp4/clip.mp4"), Path("/a/snippet_2/seq_mp4/clip.mp4")]
         # two distinct videos share the basename -> ambiguous -> None (orphan)
         assert match_annotation_to_video("CDAO_clip.mp4_h.json", videos) is None
 
     def test_longer_embedded_name_still_wins_uniquely(self) -> None:
-        from databridge._formats.hmie.discovery import match_annotation_to_video
+        from datamaite._formats.hmie.discovery import match_annotation_to_video
 
         videos = [Path("/a/clip_a.mp4"), Path("/b/a.mp4")]
         # 'a.mp4' is an anchored suffix inside the embedded 'clip_a.mp4'; longest wins

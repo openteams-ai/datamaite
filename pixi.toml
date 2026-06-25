@@ -1,5 +1,5 @@
 [workspace]
-name = "databridge"
+name = "datamaite"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64"]
 

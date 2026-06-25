@@ -112,7 +112,7 @@ toml = [
 ]
 
 [[package]]
-name = "databridge"
+name = "datamaite"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

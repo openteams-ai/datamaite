@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from databridge import (
+from datamaite import (
     DatasetFormat,
     HuggingFaceVideoClassificationLoader,
     VideoClassificationDataset,
@@ -17,8 +17,8 @@ from databridge import (
     load,
     load_huggingface_video_classification,
 )
-from databridge._cli import main
-from databridge.loaders import available_formats, get_loader
+from datamaite._cli import main
+from datamaite.loaders import available_formats, get_loader
 
 
 def _write_video(path: Path) -> Path:
@@ -98,7 +98,7 @@ class TestHuggingFaceVideoClassificationHappyPath:
         assert ds[0] == ds.samples[0]
         assert "index2label" not in ds.metadata
         assert ds.metadata == {
-            "id": "databridge",
+            "id": "datamaite",
             "task": "vc",
             "maite_protocol": None,
             "labels": {0: "cat"},
@@ -173,7 +173,7 @@ class TestHuggingFaceVideoClassificationHappyPath:
 
 class TestHuggingFaceVideoClassificationMalformedInputs:
     def test_missing_or_empty_root_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.huggingface_video_classification.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.huggingface_video_classification.loader"):
             missing = load_huggingface_video_classification(tmp_path / "missing")
             empty = load_huggingface_video_classification(tmp_path)
 
@@ -201,7 +201,7 @@ class TestHuggingFaceVideoClassificationMalformedInputs:
             encoding="utf-8",
         )
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.huggingface_video_classification.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.huggingface_video_classification.loader"):
             ds = load_huggingface_video_classification(tmp_path)
 
         assert ds.sample_count == 1
@@ -220,7 +220,7 @@ class TestHuggingFaceVideoClassificationMalformedInputs:
         (tmp_path / "metadata.csv").write_text("path,label\nclip.mp4,cat\n", encoding="utf-8")
         _write_video(tmp_path / "cat" / "clip.mp4")
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.huggingface_video_classification.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.huggingface_video_classification.loader"):
             ds = load_huggingface_video_classification(tmp_path)
 
         assert ds.sample_count == 0
@@ -232,7 +232,7 @@ class TestHuggingFaceVideoClassificationMalformedInputs:
         (tmp_path / "metadata.parquet").write_bytes(b"not a parquet file")
         _write_video(tmp_path / "cat" / "clip.mp4")
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.huggingface_video_classification.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.huggingface_video_classification.loader"):
             ds = load_huggingface_video_classification(tmp_path)
 
         assert ds.sample_count == 1

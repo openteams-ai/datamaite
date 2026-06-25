@@ -1,4 +1,4 @@
-"""Tests for the HMIE dataloader (databridge.load_hmie)."""
+"""Tests for the HMIE dataloader (datamaite.load_hmie)."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from databridge import BoxAnnotation, BoxTrackDataset, VideoSequence
-from databridge._formats.hmie.loader import load_hmie
+from datamaite import BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite._formats.hmie.loader import load_hmie
 
 from ._hmie_factory import (
     AnnotationSpec,
@@ -221,7 +221,7 @@ class TestPrototypeParity:
         }
         _write_annotation(ann_dir / "CDAO_SRC1_clip.mp4_h.json", data)
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.hmie.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.hmie.loader"):
             ds = load_hmie(tmp_path, annotation_dir=ann_dir)
 
         seq = ds.sequences[0]
@@ -446,7 +446,7 @@ class TestTolerance:
         }
         _write_annotation(ann_dir / "CDAO_SRC1_clip.mp4_h.json", data)
 
-        with caplog.at_level(logging.WARNING, logger="databridge._formats.hmie.loader"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.hmie.loader"):
             ds = load_hmie(tmp_path, annotation_dir=ann_dir)
 
         # Identity fallback: raw key preserved.

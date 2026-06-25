@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 from maite.protocols import multiobject_tracking as mot
 
-from databridge.maite._decode import DecodedFrame, VideoInfo
-from databridge.model import BoxTrackDataset
+from datamaite.maite._decode import DecodedFrame, VideoInfo
+from datamaite.model import BoxTrackDataset
 
 from ._maite_factory import WIDGET, box, make_mp4, sample_dataset, sequence
 
@@ -28,7 +28,7 @@ class TestStructuralConformance:
 
     def test_dataset_metadata_has_id_and_index2label(self, tmp_path: Path) -> None:
         ds, _ = sample_dataset(tmp_path)
-        assert ds.metadata["id"] == "databridge"
+        assert ds.metadata["id"] == "datamaite"
         assert ds.with_mot_options(dataset_id="my-set").metadata["id"] == "my-set"
         assert ds.metadata["index2label"] == {1: "widget", 2: "boat"}
 

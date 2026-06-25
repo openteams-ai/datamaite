@@ -1,6 +1,6 @@
 """Cross-format conversion matrix: read format A, write format B, reload B.
 
-``databridge`` is an N-to-M bridge -- any registered box-track loader feeds the
+``datamaite`` is an N-to-M bridge -- any registered box-track loader feeds the
 neutral ``BoxTrackDataset``, which any registered box-track writer serialises.
 The per-format ``test_<format>_writer.py`` files cover each writer's *own*
 round trip (A->A); this module covers the *cross-format* matrix the bridge
@@ -22,11 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from databridge import convert
-from databridge._types import DatasetFormat
-from databridge.loaders import available_formats, load
-from databridge.model import BoxTrackDataset
-from databridge.writers import available_output_formats, get_writer
+from datamaite import convert
+from datamaite._types import DatasetFormat
+from datamaite.loaders import available_formats, load
+from datamaite.model import BoxTrackDataset
+from datamaite.writers import available_output_formats, get_writer
 
 from ._hmie_factory import (
     AnnotationSpec,

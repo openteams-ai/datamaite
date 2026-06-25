@@ -6,9 +6,9 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "databridge"
+project = "datamaite"
 copyright = "2026, OpenTeams"  # noqa: A001
-author = "Databridge Team"
+author = "Datamaite Team"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

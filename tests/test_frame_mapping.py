@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from databridge._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
+from datamaite._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
 
 
 class TestIsMappable:

@@ -2,7 +2,7 @@
 
 A reviewer's map of the codebase. Read this with the code open.
 
-## What databridge does (today)
+## What datamaite does (today)
 
 One validation pipeline: **walk a dataset root on disk → pair each annotation
 JSON with its video → run checks on each pair → aggregate findings into a
@@ -56,7 +56,7 @@ flowchart LR
     subgraph consumers [Consumers]
         VCREC["<b>VC records</b><br/>no MAITE protocol yet"]
         THF["<b>to_hf_video_classification</b>"]
-        MAITE["<b>MAITE MOT</b><br/>databridge.maite<br/>(BoxTrackDataset IS one)"]
+        MAITE["<b>MAITE MOT</b><br/>datamaite.maite<br/>(BoxTrackDataset IS one)"]
         TM["<b>to_mot</b>"]
         TT["<b>to_tao</b>"]
         TV["<b>to_visdrone</b>"]
@@ -120,7 +120,7 @@ all reached through the task-first `load_mot(dataset_format=…)` entry point; t
 Hugging Face Video Classification loader (`load_huggingface_video_classification`),
 the HMIE validation pipeline, the HMIE, Hugging Face Video Classification,
 MOTChallenge, TAO, and VisDrone Video writers, and the MAITE surface
-(`databridge.maite`) are implemented. Hugging Face Video Classification returns
+(`datamaite.maite`) are implemented. Hugging Face Video Classification returns
 its own `VideoClassificationDataset` records and has no MAITE surface yet. See
 [Loading](#loading--hmie-loader) for how MOT loaders build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
@@ -130,9 +130,9 @@ writer contract.
 ## Project layout
 
 ```
-src/databridge/
+src/datamaite/
     __init__.py              Public API surface
-    _cli.py                  CLI entrypoint (`databridge validate ...`)
+    _cli.py                  CLI entrypoint (`datamaite validate ...`)
     _types.py                Shared types: Finding, Severity, ValidationResult, DatasetFormat, Task
     _cache.py                On-disk cache for expensive video probes
     _report.py               Text / JSON / JSONL / HTML report rendering
@@ -144,7 +144,7 @@ src/databridge/
     writers.py               Writer contract (ABC) + registry + write() dispatch
     validation.py            Orchestration: discovery -> checks -> aggregation
     conversion.py            convert(): end-to-end load + write (on-disk -> on-disk)
-    maite/                   Optional MAITE surface (databridge[maite] extra)
+    maite/                   Optional MAITE surface (datamaite[maite] extra)
         __init__.py              package doc; the model is MAITE directly (no adapter)
         _mot.py                  build_mot_item: the MOT view computed from the model
         _decode.py               Decoder protocol + PyAV backend (lazy)
@@ -258,7 +258,7 @@ view inside a cell.
 ```mermaid
 flowchart TD
     ROOT([root path])
-    NB["<b>notebook.ipynb / script.py</b><br/>from databridge import validate"]
+    NB["<b>notebook.ipynb / script.py</b><br/>from datamaite import validate"]
     VAL["<b>validation.py</b><br/>validate()"]
     DISC["<b>_formats/hmie/discovery.py</b>"]
     DR[/"DiscoveryResult"/]
@@ -504,7 +504,7 @@ flowchart TD
   `annotation_source`, TAO's `probe_images`, or VisDrone Video's `variant`). The
   public, task-first MOT entry point is `load_mot(root, dataset_format=…)` (a
   thin typed wrapper over `load`); MOT format-specific `load_<format>` helpers
-  live on internally in `databridge._formats.<format>.loader` but are no longer
+  live on internally in `datamaite._formats.<format>.loader` but are no longer
   part of the public API. Hugging Face Video Classification also provides the
   public `load_huggingface_video_classification(...)` helper.
 
@@ -542,7 +542,7 @@ MOTChallenge and VisDrone Video, explicit `frame_files` for TAO, plus
 
 **Non-MOT tasks are separate, not sample variants inside `BoxTrackDataset`.** A
 still image is not a degenerate one-frame video, and a video-level clip label is
-not a degenerate empty-box track dataset. Databridge therefore grows a **task
+not a degenerate empty-box track dataset. Datamaite therefore grows a **task
 axis**: `BoxTrackDataset` (MOT) gains sibling task datasets. The first such
 sibling implemented here is `VideoClassificationDataset`, explicitly with no
 MAITE surface because MAITE 0.9.5 has no video-classification protocol. Future
@@ -590,7 +590,7 @@ parent that contains multiple such split roots. All set image-sequence metadata
 and helpers (`VideoSequence.frame_dir`, `frame_filename()`, `frame_path()`)
 instead of `video_path`.
 
-`databridge.load(root, dataset_format="foo")` then works with no changes to
+`datamaite.load(root, dataset_format="foo")` then works with no changes to
 the dispatcher. Converters currently accept `BoxTrackDataset` outputs; task
 siblings such as VC need their own writer surface before conversion is enabled.
 
@@ -618,7 +618,7 @@ discover_hmie_pairs(root) ─► [SnippetPair]
 `_formats/hmie/loader.py`, on purpose: the model is the **format-neutral hub** of the
 bridge. `HmieLoader` (via `load_mot(dataset_format="hmie")`) is one loader that produces
 it; the other MOT loaders produce the same `BoxTrackDataset`, and converters consume it
-without depending on any loader. That is what makes databridge an N-to-M
+without depending on any loader. That is what makes datamaite an N-to-M
 bridge (loaders × converters) rather than an HMIE-to-X path.
 
 Design points:
@@ -651,7 +651,7 @@ protocol** — so `load_mot(root)` returns an object a MAITE model or metric can
 consume directly, with no adapter call:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot(root)
 stream, target, metadata = ds[0]      # MAITE MOT item — one per video
@@ -698,10 +698,10 @@ flowchart TB
 
 Mechanics that keep this honest:
 
-- **`databridge.maite` is optional and lazy.** Core `import databridge`,
+- **`datamaite.maite` is optional and lazy.** Core `import datamaite`,
   `load`, and `validate` never import `maite`, `numpy`, or a video decoder.
   The view machinery is imported lazily inside `ds[i]`; indexing without the
-  `databridge[maite]` extra raises an actionable error. Conformance is
+  `datamaite[maite]` extra raises an actionable error. Conformance is
   *structural* (no runtime `maite` import) — `BoxTrackDataset` satisfies
   `maite.protocols.multiobject_tracking.Dataset` by shape. (The `maite`
   package itself is only used in tests; the `[maite]` extra ships it for the
@@ -733,7 +733,7 @@ MAITE's own `maite.tasks.predict` with a stub model — proving the object is
 actually consumable by MAITE tooling (dataloader + collation + iteration),
 not merely shaped right.
 
-`databridge.maite` layout: `_mot.py` (`build_mot_item` — the MOT view),
+`datamaite.maite` layout: `_mot.py` (`build_mot_item` — the MOT view),
 `_decode.py` (the pluggable `Decoder` protocol + PyAV backend), `_common.py`
 (numpy-array + datum-metadata helpers).
 
@@ -815,7 +815,7 @@ flowchart TD
 ### Reference writers: HMIE, Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video (round-trip proof)
 
 `HmieWriter` (`_formats/hmie/writer.py`) is the first reference writer. Because
-databridge also has the HMIE *loader*, it closes a full round trip:
+datamaite also has the HMIE *loader*, it closes a full round trip:
 
 ```
 load_mot(src, dataset_format="hmie")
@@ -869,7 +869,7 @@ represented in the model.
    (`format = DatasetFormat.<FMT>`, plus `dataset_type = ...` for non-MOT
    datasets), decorated with `@register_writer`.
 3. Import it from the package `__init__` so registration runs.
-4. `databridge.write(ds, dest, output_format="<fmt>")` and `convert(...)` then
+4. `datamaite.write(ds, dest, output_format="<fmt>")` and `convert(...)` then
    work with no changes to the dispatcher.
 
 ### What the box-track model already gives MOT writers
@@ -883,7 +883,7 @@ represented in the model.
 
 ## Task-aware datasets — IC, OD, and VC
 
-databridge is centered on FMV/video box tracks (the MOT task). The roadmap adds
+datamaite is centered on FMV/video box tracks (the MOT task). The roadmap adds
 still-image **object detection (OD)**, **image classification (IC)**, and
 **video classification (VC)**. These are *separate tasks*, not variants of the
 video box-track model — a still image has different task semantics, a clip label
@@ -907,7 +907,7 @@ source-record-only until MAITE grows a video-classification protocol. A
 polymorphic `VisionDataset` could not itself be a native MAITE dataset and would
 force an adapter back.
 
-| databridge class | MAITE protocol (0.9.5) | `ds[i]` input | `ds[i]` target |
+| datamaite class | MAITE protocol (0.9.5) | `ds[i]` input | `ds[i]` target |
 |---|---|---|---|
 | `BoxTrackDataset` (today) | `multiobject_tracking` | `VideoStream` | `MultiobjectTrackingTarget` (per-frame `boxes/labels/scores/track_ids`) |
 | `ObjectDetectionDataset` | `object_detection` | `Image` (single) | `ObjectDetectionTarget{boxes,labels,scores}` |

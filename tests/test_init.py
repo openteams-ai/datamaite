@@ -10,13 +10,13 @@ from pathlib import Path
 
 
 def test_import() -> None:
-    import databridge
+    import datamaite
 
-    assert databridge.__version__
+    assert datamaite.__version__
 
 
 def test_public_api() -> None:
-    from databridge import (
+    from datamaite import (
         CategoryEntry,
         DatasetFormat,
         Finding,
@@ -79,13 +79,13 @@ def test_public_api() -> None:
 def test_per_format_load_functions_not_in_public_api() -> None:
     """The old per-format ``load_*`` functions are replaced by task-first ``load_mot``.
 
-    They live on internally (``databridge._formats.<format>.loader``) but are no
-    longer exposed on the top-level ``databridge`` namespace.
+    They live on internally (``datamaite._formats.<format>.loader``) but are no
+    longer exposed on the top-level ``datamaite`` namespace.
     """
-    import databridge
+    import datamaite
 
     for name in ("load_hmie", "load_tao", "load_motchallenge", "load_visdrone_video", "load_flat_mp4"):
-        assert not hasattr(databridge, name), f"{name} should be removed from the public API (use load_mot)"
+        assert not hasattr(datamaite, name), f"{name} should be removed from the public API (use load_mot)"
 
 
 def test_validation_import_keeps_loader_and_writer_modules_lazy() -> None:
@@ -93,10 +93,10 @@ def test_validation_import_keeps_loader_and_writer_modules_lazy() -> None:
     code = """
 import json
 import sys
-import databridge.validation
+import datamaite.validation
 modules = (
-    "databridge._formats.hmie.loader",
-    "databridge._formats.hmie.writer",
+    "datamaite._formats.hmie.loader",
+    "datamaite._formats.hmie.writer",
 )
 print(json.dumps({module: module in sys.modules for module in modules}))
 """
@@ -113,19 +113,19 @@ print(json.dumps({module: module in sys.modules for module in modules}))
 
     loaded = json.loads(completed.stdout)
     assert loaded == {
-        "databridge._formats.hmie.loader": False,
-        "databridge._formats.hmie.writer": False,
+        "datamaite._formats.hmie.loader": False,
+        "datamaite._formats.hmie.writer": False,
     }
 
 
 def test_version_module_shape() -> None:
     """The committed _version.py fallback exposes the attrs __init__.py imports.
 
-    Regression guard: if someone re-adds src/databridge/_version.py to
+    Regression guard: if someone re-adds src/datamaite/_version.py to
     .gitignore, `poetry install` + `pytest` on a fresh clone will fail
     because hatch-vcs doesn't run for editable installs.
     """
-    from databridge import _version
+    from datamaite import _version
 
     assert isinstance(_version.__version__, str)
     assert _version.__version__  # non-empty
@@ -135,7 +135,7 @@ def test_version_module_shape() -> None:
 
 def test_version_tuple_parsing() -> None:
     """_as_tuple preserves numeric segments and falls back to strings."""
-    from databridge._version import _as_tuple
+    from datamaite._version import _as_tuple
 
     assert _as_tuple("0.1.0") == (0, 1, 0)
     assert _as_tuple("0.1.dev59") == (0, 1, "dev59")

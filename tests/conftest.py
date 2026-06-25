@@ -1,4 +1,4 @@
-"""Shared test fixtures for databridge."""
+"""Shared test fixtures for datamaite."""
 
 from __future__ import annotations
 

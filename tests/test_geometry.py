@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from databridge import geometry as g
+from datamaite import geometry as g
 
 
 class TestCornerConversions:

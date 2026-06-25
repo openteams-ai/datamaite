@@ -1,14 +1,14 @@
-"""Tests for dataset_stats and the `databridge stats` CLI command."""
+"""Tests for dataset_stats and the `datamaite stats` CLI command."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from databridge import dataset_stats
-from databridge._cli import main
-from databridge._stats import _percentiles, format_stats
-from databridge.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite import dataset_stats
+from datamaite._cli import main
+from datamaite._stats import _percentiles, format_stats
+from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 
 WIDGET = "http://example.com/ontology/a/widget"
 

@@ -121,6 +121,7 @@ AGENTS.md
 # Local reference files (not part of the package)
 mattermost.txt
 databridge.txt
+datamaite.txt
 issues.txt
 references.txt
 *.docx

@@ -155,9 +155,9 @@ pages:
   timeout: 30m
   script:
     # maite group adds the MAITE adapters' deps (maite/numpy/av) so the
-    # databridge.maite tests run and count toward the 90% coverage gate.
+    # datamaite.maite tests run and count toward the 90% coverage gate.
     - poetry install --with dev --with video --with maite
-    - poetry run pytest tests -vvv --cov=databridge --cov-report term-missing
+    - poetry run pytest tests -vvv --cov=datamaite --cov-report term-missing
         --cov-report xml:coverage_report.xml --cov-fail-under=90
   coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
   artifacts:
@@ -193,10 +193,13 @@ test-py312:
 # async, not hidden.
 # ---------------------------------------------------------------------------
 include:
-  - component: gitlab.jatic.net/jatic/devsecops/components/dr-compliance@0.5.2
+  # Component address and base image come from project CI/CD variables
+  # (DR_COMPLIANCE_COMPONENT, DR_COMPLIANCE_IMAGE) so the URLs are not in the
+  # tracked file. The version is pinned here.
+  - component: ${DR_COMPLIANCE_COMPONENT}@0.5.2
     inputs:
       stage: dr-compliance
       sast_excluded_paths: tests
-      image: harbor.jatic.net:443/platform-team/base-images/python-base-image:3.11
+      image: ${DR_COMPLIANCE_IMAGE}
       full_execution_on_commit: true
       allow_failure: true

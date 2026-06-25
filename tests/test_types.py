@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
+from datamaite._types import DatasetFormat, Finding, Severity, ValidationResult
 
 
 class TestValidationResult:

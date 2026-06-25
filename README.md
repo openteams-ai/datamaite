@@ -1,4 +1,4 @@
-# databridge
+# datamaite
 
 A unified framework for dataset loading, conversion, and quality validation.
 
@@ -6,26 +6,26 @@ A unified framework for dataset loading, conversion, and quality validation.
 
 ```bash
 # Clone and install
-git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/databridge.git
-cd databridge
+git clone <url-to-datamaite-repo>
+cd datamaite
 poetry install --with dev --with video
 
 # Validate a dataset
-databridge validate /path/to/dataset
+datamaite validate /path/to/dataset
 
 # Validate multiple batches at once
-databridge validate /path/to/batches/
+datamaite validate /path/to/batches/
 
 # Verbose output (individual findings)
-databridge -v validate /path/to/dataset
+datamaite -v validate /path/to/dataset
 
 # Save full report to file
-databridge validate /path/to/dataset -o report.txt
+datamaite validate /path/to/dataset -o report.txt
 ```
 
 ## Supported formats
 
-databridge is a bridge: a **loader** reads an input format into a
+datamaite is a bridge: a **loader** reads an input format into a
 source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
 `VideoClassificationDataset` for video-level labels), a **validator** checks a
 format on disk, and a **writer** serialises supported datasets out to an output
@@ -55,7 +55,7 @@ and how to add a new loader or writer.
 Load an HMIE/Scale dataset into the neutral `BoxTrackDataset` model:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot("/path/to/dataset")  # HMIE is the default MOT format
 print(ds.sequence_count, "sequences,", ds.num_boxes, "boxes")
@@ -72,7 +72,7 @@ for seq in ds.iter_sequences():
 The lower-level generic dispatching entry point works too (same result):
 
 ```python
-from databridge import load
+from datamaite import load
 
 ds = load("/path/to/dataset", dataset_format="hmie")
 ```
@@ -94,12 +94,12 @@ Load a flat folder of `.mp4` videos (immediate children only, H.264 or
 MPEG-2 codec) as video-backed sequences:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot(
     "/path/to/mp4-folder",
     dataset_format="flat_mp4",
-)  # requires databridge[video]
+)  # requires datamaite[video]
 
 for seq in ds.iter_sequences():
     print(seq.video_path, seq.video_meta["codec"], seq.num_frames)
@@ -115,7 +115,7 @@ folders, optional `train` / `validation` / `test` splits, or `metadata.csv` /
 if parquet cannot be read, the loader warns and falls back to folder discovery.
 
 ```python
-from databridge import load_huggingface_video_classification
+from datamaite import load_huggingface_video_classification
 
 # Example layout: train/dog/clip.mp4, train/cat/clip.mp4, test/dog/clip.mp4
 # Metadata-file layouts use file_name paths relative to the metadata file.
@@ -136,7 +136,7 @@ Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
 splits) the same way:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot(
     "/path/to/MOT17",
@@ -160,13 +160,13 @@ unknown/non-standard IDs default to `class_<id>`. For MOT-style datasets with
 custom labels, pass `class_names={42: "vehicle"}`. Missing IDs, or an empty
 `class_names={}`, still fall back to the built-in names and `class_<id>`.
 To optionally probe the first frame image with OpenCV for metadata, pass
-`probe_images=True` after installing `databridge[video]`.
+`probe_images=True` after installing `datamaite[video]`.
 
 Load an official TAO dataset root (COCO-style `annotations/*.json` plus frame
 files) similarly:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot("/path/to/TAO", dataset_format="tao", probe_images=False)
 
@@ -183,7 +183,7 @@ Load an official VisDrone video split (VID object detection in videos or MOT
 multi-object tracking), or a parent containing multiple split roots:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot(
     "/path/to/VisDrone2019-VID-train",
@@ -214,14 +214,14 @@ multi-object-tracking dataset — no adapter or on-disk conversion step — so i
 feed MAITE-compatible models, metrics, and augmentations directly. Install the extra:
 
 ```bash
-pip install databridge[maite]
+pip install datamaite[maite]
 ```
 
 Video/FMV maps to MAITE's **multi-object-tracking** task (one item per video).
 Index the loaded dataset directly:
 
 ```python
-from databridge import load_mot
+from datamaite import load_mot
 
 ds = load_mot("/path/to/dataset")                # already a MAITE MOT Dataset
 
@@ -234,7 +234,7 @@ The MAITE surface probes each video's dimensions/time base itself (via PyAV), so
 quick snippet above needs only the `maite` extra. Loading with `require_video=True`
 (true frame counts up front, which the `empty_frame_policy="all"` view requires)
 additionally uses the OpenCV probe — install both extras for that:
-`pip install databridge[maite,video]`.
+`pip install datamaite[maite,video]`.
 
 To configure the MOT view, copy the dataset with options (it's not a conversion —
 the dataset is already MAITE):
@@ -259,7 +259,7 @@ conversion. MOT writers consume `BoxTrackDataset`; the Hugging Face Video
 Classification writer consumes `VideoClassificationDataset`.
 
 ```python
-from databridge import load_mot, write, convert
+from datamaite import load_mot, write, convert
 
 # Write an in-memory dataset to disk
 ds = load_mot("/path/to/dataset")
@@ -275,7 +275,7 @@ require the `video` extra, while existing image-sequence inputs copy their frame
 files directly.
 
 ```python
-from databridge import load_mot, write
+from datamaite import load_mot, write
 
 ds = load_mot(
     "/path/to/hmie",
@@ -291,7 +291,7 @@ Write Hugging Face Video Classification by loading the VC records and selecting
 the matching output format:
 
 ```python
-from databridge import load_huggingface_video_classification, write
+from datamaite import load_huggingface_video_classification, write
 
 vc = load_huggingface_video_classification("/path/to/hf-video-dataset")
 write(vc, "/path/to/hf-out", output_format="huggingface_video_classification")
@@ -325,7 +325,7 @@ represented by their in-memory datasets. Adding a new output format is a
 ## CLI Usage
 
 ```
-databridge validate <path> [options]
+datamaite validate <path> [options]
 
 Options:
   -v, --verbose          Show individual findings per file

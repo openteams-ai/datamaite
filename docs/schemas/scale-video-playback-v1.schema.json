@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/jatic/databridge/docs/schemas/scale-video-playback-v1.schema.json",
+  "$id": "urn:datamaite:schema:scale-video-playback-v1",
   "title": "Scale Video Playback Annotation Task",
   "description": "JSON Schema for Scale AI Video Playback annotation task response. Derived from the Scale Video Playback JSON Overview document provided by Scale AI to CDAO. This schema covers the completed task response including annotation tracks and per-frame bounding boxes.",
   "type": "object",

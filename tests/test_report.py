@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from databridge._report import (
+from datamaite._report import (
     _aggregate_batches,
     prepare_report_data,
     render_html_report,
     render_html_report_multi,
 )
-from databridge._types import DatasetFormat, Finding, Severity, ValidationResult
+from datamaite._types import DatasetFormat, Finding, Severity, ValidationResult
 
 
 class TestPrepareReportData:
@@ -321,7 +321,7 @@ class TestRenderMultiBatch:
         assert '"batch_name": "."' not in html_str
 
     def test_batch_label_helper(self, tmp_path: Path) -> None:
-        from databridge._report import _batch_label
+        from datamaite._report import _batch_label
 
         # relative path under root
         assert _batch_label(tmp_path / "valid" / "v1", tmp_path) == "valid/v1"
@@ -440,8 +440,8 @@ class TestAggregateBatches:
 
 
 def test_prepare_report_data_marks_video_skipped() -> None:
-    from databridge import DatasetFormat, ValidationResult
-    from databridge._report import prepare_report_data
+    from datamaite import DatasetFormat, ValidationResult
+    from datamaite._report import prepare_report_data
 
     result = ValidationResult(
         dataset_path=Path("/data"),
@@ -456,7 +456,7 @@ def test_prepare_report_data_marks_video_skipped() -> None:
 
 
 def test_render_html_report_contains_skipped_banner_and_css() -> None:
-    from databridge import DatasetFormat, ValidationResult, render_html_report
+    from datamaite import DatasetFormat, ValidationResult, render_html_report
 
     result = ValidationResult(
         dataset_path=Path("/data"),
@@ -472,8 +472,8 @@ def test_render_html_report_contains_skipped_banner_and_css() -> None:
 def test_prepare_report_data_skip_does_not_mask_video_warning() -> None:
     from collections import Counter
 
-    from databridge import DatasetFormat, ValidationResult
-    from databridge._report import prepare_report_data
+    from datamaite import DatasetFormat, ValidationResult
+    from datamaite._report import prepare_report_data
 
     # multiple_videos_in_seq_mp4 is a video-category WARNING that still fires
     # with video checks off. The category must read WARN, not skipped.
@@ -491,8 +491,8 @@ def test_prepare_report_data_skip_does_not_mask_video_warning() -> None:
 
 
 def test_render_html_report_no_skip_has_no_banner_flag() -> None:
-    from databridge import DatasetFormat, ValidationResult
-    from databridge._report import prepare_report_data
+    from datamaite import DatasetFormat, ValidationResult
+    from datamaite._report import prepare_report_data
 
     result = ValidationResult(dataset_path=Path("/data"), dataset_format=DatasetFormat.HMIE)
     data = prepare_report_data(result)
@@ -502,7 +502,7 @@ def test_render_html_report_no_skip_has_no_banner_flag() -> None:
 
 
 def _hmie_result(skip: bool) -> ValidationResult:
-    from databridge import DatasetFormat, ValidationResult
+    from datamaite import DatasetFormat, ValidationResult
 
     skips = {"video_integrity", "video_annotation_consistency"} if skip else set()
     return ValidationResult(
@@ -513,7 +513,7 @@ def _hmie_result(skip: bool) -> ValidationResult:
 
 
 def test_multi_report_all_skipped_aggregates_skipped() -> None:
-    from databridge._report import _aggregate_batches, prepare_report_data
+    from datamaite._report import _aggregate_batches, prepare_report_data
 
     batches = [prepare_report_data(_hmie_result(True)), prepare_report_data(_hmie_result(True))]
     for b, name in zip(batches, ("a", "b"), strict=True):
@@ -525,7 +525,7 @@ def test_multi_report_all_skipped_aggregates_skipped() -> None:
 
 
 def test_multi_report_mixed_skip_is_partial_not_clean_pass() -> None:
-    from databridge._report import _aggregate_batches, prepare_report_data
+    from datamaite._report import _aggregate_batches, prepare_report_data
 
     batches = [prepare_report_data(_hmie_result(True)), prepare_report_data(_hmie_result(False))]
     for b, name in zip(batches, ("a", "b"), strict=True):
@@ -539,7 +539,7 @@ def test_multi_report_mixed_skip_is_partial_not_clean_pass() -> None:
 
 
 def test_render_html_multi_mixed_skip_shows_partial() -> None:
-    from databridge._report import render_html_report_multi
+    from datamaite._report import render_html_report_multi
 
     html = render_html_report_multi(
         [(Path("/data/a"), _hmie_result(True)), (Path("/data/b"), _hmie_result(False))],
@@ -552,8 +552,8 @@ def test_render_html_multi_mixed_skip_shows_partial() -> None:
 def test_multi_report_mixed_skip_with_warning_stays_warn() -> None:
     from collections import Counter
 
-    from databridge import DatasetFormat, ValidationResult
-    from databridge._report import _aggregate_batches, prepare_report_data
+    from datamaite import DatasetFormat, ValidationResult
+    from datamaite._report import _aggregate_batches, prepare_report_data
 
     # One batch skipped video; the other has a real video warning. The warning
     # must win over "partial" -- partial only applies to otherwise-clean cats.
@@ -572,7 +572,7 @@ def test_multi_report_mixed_skip_with_warning_stays_warn() -> None:
 
 
 def test_multi_report_no_skip_clean() -> None:
-    from databridge._report import _aggregate_batches, prepare_report_data
+    from datamaite._report import _aggregate_batches, prepare_report_data
 
     batches = [prepare_report_data(_hmie_result(False)), prepare_report_data(_hmie_result(False))]
     for b, name in zip(batches, ("a", "b"), strict=True):
@@ -585,7 +585,7 @@ def test_multi_report_no_skip_clean() -> None:
 
 class TestReportE2E:
     def test_html_report_from_validation(self, tmp_path: Path) -> None:
-        from databridge.validation import validate
+        from datamaite.validation import validate
         from tests._hmie_factory import FullVideoSpec, SnippetSpec, make_hmie_dataset
 
         root = make_hmie_dataset(
@@ -600,7 +600,7 @@ class TestReportE2E:
         assert "</html>" in html_str
 
     def test_html_report_writes_to_file(self, tmp_path: Path) -> None:
-        from databridge.validation import validate
+        from datamaite.validation import validate
         from tests._hmie_factory import FullVideoSpec, SnippetSpec, make_hmie_dataset
 
         root = make_hmie_dataset(
