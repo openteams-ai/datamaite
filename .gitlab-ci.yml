@@ -76,6 +76,7 @@ variables:
 lint:
   extends: .shared-setup
   stage: lint
+  needs: []
   variables:
     VERSION: "3.11"
   script:
@@ -88,6 +89,7 @@ lint:
 pyright:
   extends: .shared-setup
   stage: typecheck
+  needs: []
   variables:
     VERSION: "3.11"
   script:
@@ -102,6 +104,7 @@ pyright:
 build:
   extends: .shared-setup
   stage: build
+  needs: []
   variables:
     VERSION: "3.11"
   script:
