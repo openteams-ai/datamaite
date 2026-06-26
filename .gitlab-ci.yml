@@ -218,6 +218,46 @@ test-py312:
     VERSION: "3.12"
 
 # ---------------------------------------------------------------------------
+# Integration (e2e): cross-format conversion matrix against the shared example-data
+# repo (jatic/orchestration-interoperability/datamaite-example-datasets). Loads
+# every input format and round-trips it through every box output format,
+# asserting the counts in tests/e2e/test_example_data_matrix.py. These e2e tests
+# live under tests/e2e/ (vs. the always-on hermetic suite in tests/); see
+# tests/README.md for the two-tier layout.
+#
+# Runs the opt-in `integration` marker only, with the coverage gate disabled
+# (the matrix exercises a subset, not the whole package). Dataset data is fetched
+# with git-LFS via CI_JOB_TOKEN. The datamaite-example-datasets project
+# allowlists this project under Settings -> CI/CD -> Job token permissions,
+# so the cross-repo clone + LFS pull is authorized and gates the pipeline.
+# ---------------------------------------------------------------------------
+integration:
+  extends: .shared-setup
+  stage: test
+  timeout: 30m
+  variables:
+    VERSION: "3.12"
+  allow_failure: false
+  script:
+    - apt-get install -y -qq git-lfs
+    - git lfs install
+    # Same group as this project -- derive the namespace instead of hardcoding
+    # it, so the group only lives in one place (CI_PROJECT_NAMESPACE ==
+    # jatic/orchestration-interoperability). git has no relative-repo concept,
+    # so the host + namespace + repo name are still required to form the URL.
+    # Clones the default branch (main): the multi-format datasets/<format>/
+    # layout and the counts this matrix asserts are merged there.
+    - git clone --depth 1
+        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_NAMESPACE}/datamaite-example-datasets.git"
+        "${CI_PROJECT_DIR}/example-data"
+    - git -C "${CI_PROJECT_DIR}/example-data" lfs pull
+    - export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
+    - poetry install --with dev --with video --with maite
+    # -s so the end-of-run matrix summary table is shown in the job log.
+    # Scope to tests/e2e (the e2e tier) and the `integration` marker.
+    - poetry run pytest tests/e2e -m integration -v -s --cov-fail-under=0
+
+# ---------------------------------------------------------------------------
 # DR Compliance (JATIC program requirement)
 #
 # allow_failure: true -- dr-compliance scans can produce false positives
