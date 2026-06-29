@@ -71,14 +71,14 @@ class TestImportIsolation:
         result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)  # noqa: S603
         assert result.returncode == 0, result.stderr
 
-    def test_indexing_without_maite_extra_raises_actionable_error(self, monkeypatch) -> None:
-        # Simulate the maite extra being absent: force the lazy import inside
-        # __getitem__ to fail the way a missing numpy/av would. The dataset needs
+    def test_indexing_without_fmv_extra_raises_actionable_error(self, monkeypatch) -> None:
+        # Simulate the fmv extra being absent: force the lazy import inside
+        # __getitem__ to fail the way a missing video decoder would. The dataset needs
         # one video-bearing sequence so __getitem__ reaches the import (it selects
         # from _mot_sequences first).
         monkeypatch.setitem(sys.modules, "datamaite.maite._mot", None)
         ds = BoxTrackDataset(sequences=[sequence("/tmp/x.mp4")], categories={})  # noqa: S108 - synthetic
-        with pytest.raises(ImportError, match=r"pip install datamaite\[maite\]"):
+        with pytest.raises(ImportError, match=r"pip install datamaite\[fmv\]"):
             _ = ds[0]
 
 

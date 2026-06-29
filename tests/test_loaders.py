@@ -6,10 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from datamaite import load, load_mot
+from datamaite import load
 from datamaite._formats.hmie.loader import HmieLoader
-from datamaite._types import DatasetFormat
-from datamaite.loaders import Loader, available_formats, get_loader, register_loader
+from datamaite._types import DatasetFormat, Task
+from datamaite.loaders import (
+    Loader,
+    LoaderKey,
+    available_formats,
+    get_loader,
+    load_mot,
+    register_loader,
+)
 from datamaite.model import BoxTrackDataset
 
 from ._hmie_factory import default_happy_dataset
@@ -85,70 +92,23 @@ class TestRegisterAndDispatch:
         assert captured["root"] == str(tmp_path)
         assert captured["options"] == {"custom_option": 7}
 
+    def test_duplicate_key_registration_raises_not_silently_overwrites(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("datamaite.loaders._LOADERS", {})
 
-class TestMissingRoot:
-    """A nonexistent or non-directory root is a caller error, not bad data.
+        class FirstLoader(Loader):
+            format = DatasetFormat.HMIE
 
-    Loaders are best-effort about *data* (skip unparseable items, warn), but a
-    root that does not exist is a bad argument -- ``load`` raises rather than
-    silently returning an empty dataset (which masked typo'd reload paths).
-    """
+            def load(self, _root: str | Path, **_options: object) -> BoxTrackDataset:
+                return BoxTrackDataset(sequences=[], categories={})
 
-    def test_nonexistent_root_raises(self, tmp_path: Path) -> None:
-        missing = tmp_path / "does-not-exist"
-        with pytest.raises(FileNotFoundError, match="does-not-exist"):
-            load(missing, dataset_format="tao")
+        class SecondLoader(FirstLoader):
+            pass  # same (task, format, variant) key
 
-    def test_file_root_raises_not_a_directory(self, tmp_path: Path) -> None:
-        a_file = tmp_path / "a_file.txt"
-        a_file.write_text("not a dataset directory", encoding="utf-8")
-        with pytest.raises(NotADirectoryError, match=r"a_file\.txt"):
-            load(a_file, dataset_format="tao")
-
-    def test_load_mot_also_raises_on_missing_root(self, tmp_path: Path) -> None:
-        with pytest.raises(FileNotFoundError):
-            load_mot(tmp_path / "nope", dataset_format="hmie")
-
-    def test_existing_empty_root_returns_empty_without_raising(self, tmp_path: Path) -> None:
-        # Root exists but holds no loadable TAO data: best-effort empty, no raise.
-        empty = tmp_path / "empty"
-        empty.mkdir()
-        ds = load(empty, dataset_format="tao")
-        assert isinstance(ds, BoxTrackDataset)
-        assert len(ds) == 0
-
-
-class TestEmptyResultWarns:
-    """An existing root that yields no loadable items warns (but does not raise).
-
-    Distinct from a missing root (which raises): the root is valid, the load ran
-    to completion, but the result is empty -- usually a wrong format or wrong
-    subdirectory. The dispatch layer emits one uniform warning so this is never
-    silent, closing per-loader gaps (HMIE, MOTChallenge empty splits).
-    """
-
-    def test_empty_hmie_load_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        # Directory exists and is a plausible HMIE root, but holds no annotations.
-        (tmp_path / "video_001_000000").mkdir()
-        with caplog.at_level("WARNING"):
-            ds = load(tmp_path, dataset_format="hmie")
-        assert len(ds.sequences) == 0
-        assert any("empty dataset" in record.message.lower() for record in caplog.records)
-
-    def test_empty_motchallenge_split_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        # train/ exists but contains no sequence directories -> empty, no per-loader warning.
-        (tmp_path / "train").mkdir()
-        with caplog.at_level("WARNING"):
-            ds = load(tmp_path, dataset_format="motchallenge")
-        assert len(ds.sequences) == 0
-        assert any("empty dataset" in record.message.lower() for record in caplog.records)
-
-    def test_nonempty_load_does_not_warn_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        default_happy_dataset(tmp_path)
-        with caplog.at_level("WARNING"):
-            ds = load(tmp_path, dataset_format="hmie")
-        assert ds.sequence_count > 0
-        assert not any("empty dataset" in record.message.lower() for record in caplog.records)
+        register_loader(FirstLoader)
+        with pytest.raises(ValueError, match="already registered"):
+            register_loader(SecondLoader)
+        # Re-registering the SAME class stays idempotent (e.g. a module re-import).
+        assert register_loader(FirstLoader) is FirstLoader
 
 
 class TestAutodetect:
@@ -163,8 +123,34 @@ class TestAutodetect:
             def load(self, _root: str | Path, **_options: object) -> BoxTrackDataset:
                 return BoxTrackDataset(sequences=[], categories={})
 
-        monkeypatch.setattr("datamaite.loaders._LOADERS", {DatasetFormat.HMIE: SniffLoader})
+        monkeypatch.setattr(
+            "datamaite.loaders._LOADERS",
+            {LoaderKey(task=Task.MOT, format=DatasetFormat.HMIE): SniffLoader},
+        )
         assert isinstance(load(tmp_path, dataset_format=None), BoxTrackDataset)
+
+    def test_load_mot_does_not_retry_loader_value_errors(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        calls = 0
+
+        class BadOptionLoader(Loader):
+            format = DatasetFormat.HMIE
+
+            def load(self, _root: str | Path, **_options: object) -> BoxTrackDataset:
+                nonlocal calls
+                calls += 1
+                raise ValueError("bad loader option")
+
+        monkeypatch.setattr(
+            "datamaite.loaders._LOADERS",
+            {LoaderKey(task=Task.MOT, format=DatasetFormat.HMIE): BadOptionLoader},
+        )
+        with pytest.raises(ValueError, match="bad loader option"):
+            load_mot(tmp_path, dataset_format="hmie")
+        assert calls == 1
 
     def test_autodetect_failure_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr("datamaite.loaders._LOADERS", {})

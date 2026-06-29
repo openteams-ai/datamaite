@@ -11,7 +11,7 @@ Both VisDrone Object Detection in Videos (``variant="vid"``) and
 Multi-Object Tracking (``variant="mot"``) use the same ten-column row shape;
 the writer option chooses the output variant. Existing image-sequence inputs
 copy source frames directly. Video-backed inputs are decoded to frame images
-with OpenCV (``datamaite[video]``).
+with OpenCV (``datamaite[fmv]``).
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class _FrameOutput:
 
 
 @register_writer
-class VisDroneVideoWriter(Writer):
+class VisDroneVideoWriter(Writer[BoxTrackDataset]):
     """Write a :class:`BoxTrackDataset` as VisDrone VID or MOT video split roots."""
 
     format = DatasetFormat.VISDRONE_VIDEO
@@ -314,7 +314,7 @@ def _extract_video_frames(  # pragma: no cover - optional OpenCV path covered by
         import cv2  # type: ignore[import-untyped]
     except ImportError as exc:
         raise ImportError(
-            "Writing video-backed sequences to VisDrone requires OpenCV. Install it with: pip install datamaite[video]"
+            "Writing video-backed sequences to VisDrone requires OpenCV. Install it with: pip install datamaite[fmv]"
         ) from exc
 
     video_path = Path(seq.video_path or "")

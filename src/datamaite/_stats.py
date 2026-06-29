@@ -2,8 +2,8 @@
 
 Answers "what does this data actually look like?" -- snippet duration, frame
 count, boxes per sequence, and fps -- as distributions, not just averages.
-Pure-Python (no numpy), so it stays in core and runs without the ``video`` or
-``maite`` extras.
+Pure-Python (no media decoder imports), so it stays in core and runs without
+any task extras.
 
 Note on accuracy: ``duration``/``num_frames`` come from the Scale annotation
 metadata when present, else from a frame-index *estimate* (max annotated frame

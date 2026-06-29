@@ -29,7 +29,7 @@ separate adapter call is required. MOT-view options are configured with
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,10 @@ from typing import Any
 # callers. geometry imports only stdlib, so this is import-cycle-free.
 from datamaite._types import Task
 from datamaite.geometry import BBox
+from datamaite.image_classification import ImageClassificationDataset
+from datamaite.object_detection import ObjectDetectionDataset
+from datamaite.records import DatasetMetadata
+from datamaite.taxonomy import CategoryEntry, Taxonomy
 
 
 def category_name_from_uri(category_uri: str) -> str:
@@ -68,14 +72,6 @@ class BoxAnnotation:
     from the source frame: ``is_inferred=True`` marks a tool-interpolated
     box rather than a human-placed keyframe, which a downstream consumer
     may want to weight or filter.
-
-    ``track_id`` follows a bridge-wide convention: a *positive* id is a
-    usable track (unique within its sequence); a *non-positive* id is a
-    sentinel for "no usable track" (e.g. MOTChallenge det-source rows and
-    VisDrone ignored regions get negative per-line pseudo-ids). Loaders
-    must emit positive ids for real tracks -- ground-truth writers drop
-    non-positive ids, so a 0-based loader silently loses the first track
-    of every sequence.
     """
 
     track_uuid: str
@@ -299,7 +295,7 @@ class BoxTrackDataset:
     ``len(ds)`` is the number of video-bearing sequences and ``ds[i]`` yields
     ``(VideoStream, MultiobjectTrackingTarget, DatumMetadata)`` for video ``i``
     (see :func:`datamaite.maite._mot.build_mot_item`). The MAITE surface is
-    computed lazily; importing/indexing it requires the ``datamaite[maite]``
+    computed lazily; importing/indexing it requires the ``datamaite[fmv]``
     extra, but ``import datamaite`` / ``load`` / ``validate`` never touch it.
 
     Two distinct "size" views, because the object wears two hats:
@@ -321,6 +317,7 @@ class BoxTrackDataset:
     sequences: tuple[VideoSequence, ...]
     categories: dict[str, int]
     dataset_id: str = "datamaite"
+    dataset_metadata: DatasetMetadata = field(default_factory=DatasetMetadata)
     task: Task = Task.MOT
     empty_frame_policy: str = "annotated"
     # MOT decode backend override (a datamaite.maite._decode.Decoder). None ->
@@ -337,6 +334,14 @@ class BoxTrackDataset:
         # ``_mot_sequences`` list. object.__setattr__ is the frozen-safe rebind.
         if not isinstance(self.sequences, tuple):
             object.__setattr__(self, "sequences", tuple(self.sequences))
+        if self.dataset_metadata.taxonomy is None and self.categories:
+            source_dataset = _mot_source_dataset(self.dataset_metadata, dataset_id=self.dataset_id)
+            taxonomy = _taxonomy_from_mot_categories(self.categories, source_dataset=source_dataset)
+            object.__setattr__(
+                self,
+                "dataset_metadata",
+                replace(self.dataset_metadata, taxonomy=taxonomy, source_dataset=source_dataset),
+            )
 
     @cached_property
     def _mot_sequences(self) -> tuple[VideoSequence, ...]:
@@ -364,7 +369,7 @@ class BoxTrackDataset:
                 raise
             raise ImportError(
                 "Indexing a datamaite dataset as a MAITE dataset requires the optional "
-                "video stack. Install it with: pip install datamaite[maite]"
+                "video stack. Install it with: pip install datamaite[fmv]"
             ) from exc
         return build_mot_item(self, seq)
 
@@ -442,7 +447,33 @@ class BoxTrackDataset:
         ``DatasetMetadata.index2label`` expects. Unlabeled tracks
         (``category_id == -1``) are not in ``categories`` and so are absent here.
         """
+        taxonomy = self.dataset_metadata.taxonomy
+        if taxonomy is not None:
+            labels = taxonomy.index2label()
+            if labels:
+                return labels
         return {cid: category_name_from_uri(uri) for uri, cid in self.categories.items()}
 
 
-VisionDataset = BoxTrackDataset | VideoClassificationDataset
+def _mot_source_dataset(metadata: DatasetMetadata, *, dataset_id: str) -> str:
+    """Choose taxonomy provenance without clobbering explicit metadata."""
+    if metadata.source_dataset != "datamaite":
+        return metadata.source_dataset
+    return dataset_id if dataset_id != "datamaite" else metadata.source_dataset
+
+
+def _taxonomy_from_mot_categories(categories: dict[str, int], *, source_dataset: str) -> Taxonomy:
+    """Build the shared taxonomy view for legacy MOT ``categories`` mappings."""
+    entries = tuple(
+        CategoryEntry(
+            source_id=category_id,
+            name=category_name_from_uri(category_uri),
+            source_dataset=source_dataset,
+            attributes={"category_uri": category_uri},
+        )
+        for category_uri, category_id in sorted(categories.items(), key=lambda item: item[1])
+    )
+    return Taxonomy(entries=entries, source_dataset=source_dataset, id_density="sparse")
+
+
+VisionDataset = BoxTrackDataset | VideoClassificationDataset | ObjectDetectionDataset | ImageClassificationDataset

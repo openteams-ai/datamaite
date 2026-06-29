@@ -18,13 +18,18 @@ def test_import() -> None:
 def test_public_api() -> None:
     from datamaite import (
         CategoryEntry,
+        CocoLoader,
+        CocoWriter,
         DatasetFormat,
+        DatasetMetadata,
         Finding,
         FlatMp4Loader,
         HuggingFaceVideoClassificationLoader,
-        HuggingFaceVideoClassificationWriter,
+        ImageObjectDetectionSample,
         MotChallengeLoader,
         MotChallengeWriter,
+        ObjectDetectionAnnotation,
+        ObjectDetectionDataset,
         Severity,
         TaoLoader,
         TaoWriter,
@@ -36,12 +41,15 @@ def test_public_api() -> None:
         VisDroneVideoLoader,
         VisDroneVideoWriter,
         VisionDataset,
+        WriterCapabilities,
         load_huggingface_video_classification,
         load_mot,
+        load_od,
         validate,
         validate_annotation,
     )
 
+    assert DatasetFormat.COCO.value == "coco"
     assert DatasetFormat.FLAT_MP4.value == "flat_mp4"
     assert DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION.value == "huggingface_video_classification"
     assert DatasetFormat.HMIE.value == "hmie"
@@ -56,6 +64,11 @@ def test_public_api() -> None:
     assert Task.VC.value == "vc"
     assert Taxonomy is not None
     assert CategoryEntry is not None
+    assert ObjectDetectionDataset is not None
+    assert callable(load_od)
+    assert ObjectDetectionAnnotation is not None
+    assert ImageObjectDetectionSample is not None
+    assert DatasetMetadata is not None
     assert Finding is not None
     assert ValidationResult is not None
     assert VideoClassificationDataset is not None
@@ -63,13 +76,15 @@ def test_public_api() -> None:
     assert VisionDataset is not None
     assert FlatMp4Loader is not None
     assert HuggingFaceVideoClassificationLoader is not None
-    assert HuggingFaceVideoClassificationWriter is not None
     assert MotChallengeLoader is not None
     assert MotChallengeWriter is not None
     assert TaoLoader is not None
     assert TaoWriter is not None
     assert VisDroneVideoLoader is not None
     assert VisDroneVideoWriter is not None
+    assert CocoLoader is not None
+    assert CocoWriter is not None
+    assert WriterCapabilities is not None
     assert callable(load_huggingface_video_classification)
     assert callable(load_mot)
     assert callable(validate)

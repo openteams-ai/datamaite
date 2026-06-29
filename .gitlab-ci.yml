@@ -93,9 +93,8 @@ pyright:
   variables:
     VERSION: "3.11"
   script:
-    # video + maite groups so cv2/numpy/av/maite resolve and pyright stays at
-    # 0 warnings (reportMissingImports would otherwise fire on the adapters).
-    - poetry install --with dev --with video --with maite
+    # Task extras so cv2/av resolve; --with maite for conformance imports.
+    - poetry install --with dev --with maite -E all
     - poetry run pyright src/
 
 # ---------------------------------------------------------------------------
@@ -186,9 +185,8 @@ pages-preview:
   stage: test
   timeout: 30m
   script:
-    # maite group adds the MAITE adapters' deps (maite/numpy/av) so the
-    # datamaite.maite tests run and count toward the 90% coverage gate.
-    - poetry install --with dev --with video --with maite
+    # Task extras add media decoders; --with maite for structural conformance tests.
+    - poetry install --with dev --with maite -E all
     - poetry run pytest tests -vvv --cov=datamaite --cov-report term-missing
         --cov-report xml:coverage_report.xml --cov-fail-under=90
   coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'

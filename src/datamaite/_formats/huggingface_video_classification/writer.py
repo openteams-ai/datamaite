@@ -26,7 +26,7 @@ import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
-from datamaite._types import DatasetFormat
+from datamaite._types import DatasetFormat, Task
 from datamaite.model import VideoClassificationDataset, VideoClassificationSample, VisionDataset
 from datamaite.writers import Writer, register_writer
 
@@ -46,11 +46,12 @@ _RESERVED_COLUMNS = frozenset({"file_name", "label"})
 
 
 @register_writer
-class HuggingFaceVideoClassificationWriter(Writer):
+class HuggingFaceVideoClassificationWriter(Writer[VideoClassificationDataset]):
     """Write a :class:`VideoClassificationDataset` as a Hugging Face VideoFolder repo."""
 
     format = DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION
-    dataset_type: ClassVar[type[VideoClassificationDataset]] = VideoClassificationDataset
+    task: ClassVar[Task] = Task.VC
+    consumes: ClassVar[type] = VideoClassificationDataset
 
     def write(
         self,

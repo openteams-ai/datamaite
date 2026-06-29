@@ -89,25 +89,21 @@ class TestRegisterAndDispatch:
             BoxTrackDataset(sequences=[], categories={}),
             tmp_path,
             output_format="hmie",
-            verbose=True,
             custom_option=7,
+            verbose=True,
         )
 
         assert files == [tmp_path / "out.txt"]
         assert captured["dest"] == str(tmp_path)
-        # `verbose` is consumed by write(), not forwarded to the writer.
         assert captured["options"] == {"custom_option": 7}
 
 
-class TestVerboseReturn:
-    """`write` returns the file list only when ``verbose=True``.
+class TestWriteReturn:
+    """`write` writes regardless; it returns the file list only with verbose=True."""
 
-    The full list is one path per written frame image -- large enough to spam
-    an interactive session -- so it is opt-in. Either way the files are written;
-    ``verbose`` controls only what is returned.
-    """
-
-    def _register_dummy(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    def test_verbose_returns_file_list_default_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setattr("datamaite.writers._WRITERS", {})
         calls = {"writes": 0}
 
@@ -119,15 +115,13 @@ class TestVerboseReturn:
                 return [Path(dest) / "a.txt", Path(dest) / "b.txt"]
 
         register_writer(DummyWriter)
-        return calls
+        ds = BoxTrackDataset(sequences=[], categories={})
 
-    def test_default_returns_none_but_still_writes(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        calls = self._register_dummy(monkeypatch)
-        result = write(BoxTrackDataset(sequences=[], categories={}), tmp_path, output_format="hmie")
-        assert result is None
-        assert calls["writes"] == 1  # side effect happened despite the None return
+        # Default: writes for side effects, returns None.
+        assert write(ds, tmp_path, output_format="hmie") is None
+        assert calls["writes"] == 1
 
-    def test_verbose_true_returns_file_list(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        self._register_dummy(monkeypatch)
-        result = write(BoxTrackDataset(sequences=[], categories={}), tmp_path, output_format="hmie", verbose=True)
+        # verbose=True: returns the list of files written.
+        result = write(ds, tmp_path, output_format="hmie", verbose=True)
         assert result == [tmp_path / "a.txt", tmp_path / "b.txt"]
+        assert calls["writes"] == 2

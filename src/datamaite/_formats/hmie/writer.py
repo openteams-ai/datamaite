@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 @register_writer
-class HmieWriter(Writer):
+class HmieWriter(Writer[BoxTrackDataset]):
     """Write a :class:`BoxTrackDataset` as an HMIE/Scale on-disk dataset."""
 
     format = DatasetFormat.HMIE

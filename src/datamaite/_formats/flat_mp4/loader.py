@@ -9,7 +9,7 @@ video-backed :class:`datamaite.model.VideoSequence` per accepted file.
 
 Like the other loaders, this is best-effort: malformed/unreadable videos and
 unsupported codecs are skipped with warnings rather than aborting the whole
-load. Install the video extra to enable probing: ``pip install datamaite[video]``.
+load. Install the fmv extra to enable probing: ``pip install datamaite[fmv]``.
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def _probe_mp4_video(video_path: Path) -> _VideoProbe:
     try:
         import cv2  # type: ignore[import-untyped]
     except ImportError:
-        logger.warning("OpenCV not installed; cannot load flat MP4 videos (install datamaite[video])")
+        logger.warning("OpenCV not installed; cannot load flat MP4 videos (install datamaite[fmv])")
         return _VideoProbe(opened=False)
 
     cap = cv2.VideoCapture(str(video_path))

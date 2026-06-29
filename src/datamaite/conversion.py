@@ -1,16 +1,9 @@
 """On-disk dataset conversion: read format A, write format B.
 
-The end-to-end orchestration of the N-to-M bridge. :func:`convert` pairs a
-*loader* (:mod:`datamaite.loaders`) with a compatible *writer*
-(:mod:`datamaite.writers`): it reads a dataset from disk in one format and
-writes it back out in another, without the caller wiring the in-memory model by
-hand.
-
-Writers declare the task dataset type they consume (for example
-``BoxTrackDataset`` for MOT writers or ``VideoClassificationDataset`` for the
-Hugging Face video-classification writer). ``convert`` deliberately delegates
-that compatibility check to :func:`datamaite.write`, so task-compatible A→B
-pairs work and cross-task conversions fail before a writer fabricates data.
+:func:`convert` pairs a task-aware loader with a task-aware writer through the
+neutral per-task model hub. Conversion is task-closed: the selected writer must
+consume the dataset produced by the selected loader, otherwise ``write`` raises
+``TypeError`` instead of fabricating cross-task data.
 """
 
 from __future__ import annotations
@@ -18,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from datamaite._types import DatasetFormat
+from datamaite._types import DatasetFormat, Task
 from datamaite.loaders import load
 from datamaite.writers import write
 
@@ -27,38 +20,82 @@ def convert(
     src: str | Path,
     dest: str | Path,
     *,
-    input_format: DatasetFormat | str,
+    input_format: DatasetFormat | str | None,
     output_format: DatasetFormat | str,
+    task: Task | str | None = None,
+    input_variant: str = "default",
+    output_variant: str = "default",
     read_options: dict[str, Any] | None = None,
-    **write_options: Any,
+    load_options: dict[str, Any] | None = None,
+    write_options: dict[str, Any] | None = None,
+    verbose: bool = False,
+    **writer_options: Any,
 ) -> list[Path] | None:
-    """Convert the dataset at ``src`` (``input_format``) to ``dest`` (``output_format``).
-
-    Reads ``src`` with the registered loader for ``input_format`` and writes the
-    loaded task dataset with the registered writer for ``output_format``. The
-    writer's declared dataset type decides compatibility; incompatible task
-    pairs raise ``TypeError``.
+    """Convert ``src`` from one on-disk format into another.
 
     Parameters
     ----------
     src, dest
         Source dataset root and destination directory.
     input_format, output_format
-        Registered input/output formats (a :class:`DatasetFormat` or its string
-        value). Both are required keyword arguments -- for a format-neutral A->B
-        bridge, defaulting the source would be an asymmetric, surprising contract.
+        Registered input/output formats. Both are required keyword arguments;
+        pass ``input_format=None`` to opt into loader sniffing. Defaulting only
+        the source format would be asymmetric and surprising.
+    task
+        Optional task discriminator for shared format families (for example
+        ``task="ic"`` with ``input_format="yolo"``).
+    input_variant, output_variant
+        Registry variants within a task/format pair.
     read_options
-        Keyword options forwarded to the loader (e.g. HMIE's ``require_video``,
-        ``annotation_dir``).
-    **write_options
-        Keyword options forwarded to the writer, including ``verbose``: when
-        ``True`` the files written are returned, when ``False`` (default) the
-        conversion runs for side effects and returns ``None``.
-
-    Returns
-    -------
-    list[Path] | None
-        The files written when ``verbose=True`` is passed; otherwise ``None``.
+        Backwards-compatible loader options dict.
+    load_options
+        Alias for ``read_options``. Supplying both is an error.
+    write_options, **writer_options
+        Writer options as a dict and/or direct keyword arguments. Direct keyword
+        options preserve the pre-existing public API.
+    verbose
+        When ``True``, return the list of files written; when ``False`` (default)
+        run for side effects and return ``None`` (the file list can be one path
+        per frame image, so it is opt-in to keep notebooks/REPLs quiet).
     """
-    dataset = load(src, dataset_format=input_format, **(read_options or {}))
-    return write(dataset, dest, output_format=output_format, **write_options)
+    loader_options = _merge_loader_options(read_options=read_options, load_options=load_options)
+    merged_writer_options = _merge_writer_options(write_options=write_options, writer_options=writer_options)
+    dataset = load(
+        src,
+        dataset_format=input_format,
+        task=task,
+        registry_variant=input_variant,
+        **loader_options,
+    )
+    return write(
+        dataset,
+        dest,
+        output_format=output_format,
+        output_variant=output_variant,
+        verbose=verbose,
+        **merged_writer_options,
+    )
+
+
+def _merge_loader_options(
+    *,
+    read_options: dict[str, Any] | None,
+    load_options: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if read_options is not None and load_options is not None:
+        raise ValueError("pass either read_options or load_options, not both")
+    return dict(read_options if read_options is not None else load_options or {})
+
+
+def _merge_writer_options(
+    *,
+    write_options: dict[str, Any] | None,
+    writer_options: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(write_options or {})
+    overlap = set(merged).intersection(writer_options)
+    if overlap:
+        names = ", ".join(sorted(overlap))
+        raise ValueError(f"writer option(s) supplied twice: {names}")
+    merged.update(writer_options)
+    return merged

@@ -28,7 +28,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
-from datamaite._types import DatasetFormat
+from datamaite._types import DatasetFormat, Task
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import VideoClassificationDataset, VideoClassificationSample
 
@@ -64,6 +64,7 @@ class _VideoRecord:
 class HuggingFaceVideoClassificationLoader(Loader):
     """Loader for Hugging Face VideoFolder video classification repositories."""
 
+    task = Task.VC
     format = DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION
 
     def load(

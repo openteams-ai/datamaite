@@ -68,7 +68,7 @@ def _reload_root(dest: Path, output_format: DatasetFormat) -> Path:
 # Formats with BOTH a loader and a writer *for the box-track task* -- the
 # convertible matrix. The cross-format matrix only makes sense within one task:
 # a writer for a different task (e.g. the video-classification writer, whose
-# ``dataset_type`` is ``VideoClassificationDataset``) consumes a different model
+# ``consumes`` is ``VideoClassificationDataset``) consumes a different model
 # and cannot round-trip through ``BoxTrackDataset``, so it is excluded here.
 # Derived so adding a 5th read+write *box-track* format auto-expands the matrix
 # (and trips the guardrail below if it lacks a source builder).
@@ -76,7 +76,7 @@ WRITABLE_FORMATS = sorted(
     (
         fmt
         for fmt in set(available_formats()) & set(available_output_formats())
-        if get_writer(fmt).dataset_type is BoxTrackDataset
+        if get_writer(fmt).consumes is BoxTrackDataset
     ),
     key=lambda fmt: fmt.value,
 )

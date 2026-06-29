@@ -1,4 +1,9 @@
-"""Dataset validation utilities."""
+"""HMIE/Scale dataset validation utilities.
+
+The public validation entry points currently support only ``DatasetFormat.HMIE``.
+Other formats may have loaders/writers, but non-HMIE on-disk validation is not
+implemented yet.
+"""
 
 from __future__ import annotations
 
@@ -31,18 +36,18 @@ def validate(
     status_callback: Callable[[str], None] | None = None,
     cache: ValidationCache | None = None,
 ) -> ValidationResult:
-    """Validate a dataset at the given path.
+    """Validate an HMIE/Scale dataset at the given path.
 
     Parameters
     ----------
     path
         Root directory of the dataset.
     dataset_format
-        Dataset format to validate against. Renamed from ``format`` to
-        avoid shadowing the builtin.
+        Dataset format to validate against. Currently only ``DatasetFormat.HMIE``
+        is implemented. Renamed from ``format`` to avoid shadowing the builtin.
     check_video_integrity
         If True, attempt to open FMV files to verify they are not corrupted.
-        Requires the ``video`` extra (``pip install datamaite[video]``).
+        Requires the ``fmv`` extra (``pip install datamaite[fmv]``).
     workers
         Number of worker processes for parallel per-pair validation.
         ``None`` (default) uses ``os.cpu_count()``. Pass ``1`` to force

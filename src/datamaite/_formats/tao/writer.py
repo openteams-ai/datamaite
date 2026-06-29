@@ -8,7 +8,7 @@ The writer emits the standard TAO shape::
 
 TAO is an image-sequence format. Image-sequence inputs copy their source frame
 files. Video-backed inputs are decoded into JPEG frames with OpenCV, so writing
-those sequences requires the optional ``datamaite[video]`` extra. Source TAO
+those sequences requires the optional ``datamaite[fmv]`` extra. Source TAO
 ``images.file_name`` values are preserved when possible; generated paths include
 the unique output video id so sanitized sequence-name collisions cannot overwrite
 frame data. The output JSON uses TAO's COCO-style top-level ``videos``,
@@ -199,7 +199,7 @@ class _SplitBuilder:
 
 
 @register_writer
-class TaoWriter(Writer):
+class TaoWriter(Writer[BoxTrackDataset]):
     """Write a :class:`BoxTrackDataset` as a TAO dataset root."""
 
     format = DatasetFormat.TAO
@@ -232,7 +232,7 @@ class TaoWriter(Writer):
         Notes
         -----
         Image-sequence inputs copy frames. Video-backed inputs are decoded into
-        images with OpenCV and therefore require ``datamaite[video]``. Video
+        images with OpenCV and therefore require ``datamaite[fmv]``. Video
         extraction currently writes every decoded frame (not only annotated or
         TAO-sampled frames), so long sparse videos can produce large outputs.
         Existing standard annotation JSONs in ``dest/annotations`` are
@@ -571,7 +571,7 @@ def _extract_video_frames(
         import cv2  # type: ignore[import-untyped]
     except ImportError as exc:
         raise ImportError(
-            "Writing video-backed sequences to TAO requires OpenCV. Install it with: pip install datamaite[video]"
+            "Writing video-backed sequences to TAO requires OpenCV. Install it with: pip install datamaite[fmv]"
         ) from exc
 
     video_path = Path(seq.video_path or "")
