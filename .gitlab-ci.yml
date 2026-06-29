@@ -250,7 +250,7 @@ integration:
         "${CI_PROJECT_DIR}/example-data"
     - git -C "${CI_PROJECT_DIR}/example-data" lfs pull
     - export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
-    - poetry install --with dev --with video --with maite
+    - poetry install --with dev --with maite -E all
     # -s so the end-of-run matrix summary table is shown in the job log.
     # Scope to tests/e2e (the e2e tier) and the `integration` marker.
     - poetry run pytest tests/e2e -m integration -v -s --cov-fail-under=0
