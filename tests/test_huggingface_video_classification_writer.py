@@ -202,7 +202,7 @@ class TestHuggingFaceVideoClassificationWriterMalformedInputs:
         assert "No Hugging Face video classification files were written" in caplog.text
 
     def test_box_track_dataset_is_rejected(self, tmp_path: Path) -> None:
-        with pytest.raises(TypeError, match="requires VideoClassificationDataset"):
+        with pytest.raises(TypeError, match="consumes VideoClassificationDataset"):
             write(
                 BoxTrackDataset(sequences=(), categories={}),
                 tmp_path / "out",

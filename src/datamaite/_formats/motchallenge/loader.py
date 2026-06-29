@@ -142,7 +142,7 @@ class MotChallengeLoader(Loader):
             built-in MOTChallenge names when known, else ``class_<id>``. An
             empty mapping behaves the same as omitting the option.
         probe_images
-            When True, use OpenCV (``pip install datamaite[video]``) to read
+            When True, use OpenCV (``pip install datamaite[fmv]``) to read
             the first frame image and fill/verify dimensions. Without OpenCV,
             loading continues with a warning and metadata from ``seqinfo.ini``.
 
@@ -626,7 +626,7 @@ def _probe_images(frame_dir: Path, im_ext: str, *, enabled: bool, count_frames: 
         try:
             import cv2  # type: ignore[import-untyped]
         except ImportError:
-            logger.warning("OpenCV not installed; skipping MOTChallenge image probing (install datamaite[video])")
+            logger.warning("OpenCV not installed; skipping MOTChallenge image probing (install datamaite[fmv])")
             return _ImageProbe(frame_count=frame_count)
 
         first = frame_paths[0]

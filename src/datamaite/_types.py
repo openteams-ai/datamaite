@@ -198,12 +198,14 @@ def _shorten_label(label: str) -> str:
 class DatasetFormat(enum.Enum):
     """Supported dataset formats (the on-disk *wire* format, independent of task)."""
 
+    COCO = "coco"
     FLAT_MP4 = "flat_mp4"
     HUGGINGFACE_VIDEO_CLASSIFICATION = "huggingface_video_classification"
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"
     VISDRONE_VIDEO = "visdrone_video"
+    YOLO = "yolo"
 
 
 class Task(enum.Enum):

@@ -6,9 +6,9 @@ A unified framework for dataset loading, conversion, and quality validation.
 
 ```bash
 # Clone and install
-git clone <url-to-datamaite-repo>
+git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite.git
 cd datamaite
-poetry install --with dev --with video
+poetry install --with dev -E all
 
 # Validate a dataset
 datamaite validate /path/to/dataset
@@ -27,28 +27,55 @@ datamaite validate /path/to/dataset -o report.txt
 
 datamaite is a bridge: a **loader** reads an input format into a
 source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
-`VideoClassificationDataset` for video-level labels), a **validator** checks a
-format on disk, and a **writer** serialises supported datasets out to an output
-format (`convert` pairs a loader and a writer for on-disk → on-disk conversion).
-HMIE/Scale, flat MP4 video folders, Hugging Face Video Classification,
-MOTChallenge, TAO, and VisDrone Video are implemented input formats; HMIE/Scale,
-Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video are
-implemented output formats (proving the writer architecture via load → write →
-load round trips), and other writers are planned.
+`ObjectDetectionDataset` for still-image object detection;
+`ImageClassificationDataset` for still-image classification;
+`VideoClassificationDataset` for video-level labels), a **validator** checks an
+HMIE/Scale dataset on disk, and a **writer** serialises supported datasets out to
+an output format (`convert` pairs a loader and a writer of the same task for
+on-disk → on-disk conversion). HMIE/Scale, flat MP4 video folders, Hugging Face
+Video Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, and YOLO image
+classification are implemented input formats; HMIE/Scale, MOTChallenge, TAO,
+VisDrone Video, COCO OD, and YOLO image classification are implemented output
+formats. Validation is currently **HMIE/Scale only**; non-HMIE formats load and
+write but are not validated by `datamaite validate` yet.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
-| Hugging Face Video Classification | ✅ | — | ✅ |
+| Hugging Face Video Classification | ✅ | — | planned |
 | MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
-| YOLO | planned | planned | planned |
-| COCO | planned | planned | planned |
+| YOLO image classification | ✅ | — | ✅ |
+| COCO object detection | ✅ | — | ✅ |
 
 See [docs/architecture.md](docs/architecture.md) for the loader / writer design
 and how to add a new loader or writer.
+
+## Installation extras
+
+Core install is deliberately lean:
+
+```bash
+pip install datamaite
+```
+
+Core installs only direct runtime dependencies needed for annotation loading,
+validation, conversion dispatch, and MAITE target arrays: `pydantic` and
+`numpy`. Pixel/media decoding is selected by task extras:
+
+| Install | Adds | Enables |
+|---|---|---|
+| `datamaite` | `pydantic`, `numpy` | load/convert IRs, HMIE structure/annotation validation, MAITE target objects |
+| `datamaite[fmv]` | OpenCV + PyAV | FMV integrity checks, flat MP4 probing, video-backed MOT decode/export |
+| `datamaite[od]` | OpenCV | still-image OD pixel decode |
+| `datamaite[ic]` | OpenCV | still-image IC pixel decode |
+| `datamaite[all]` | union of task extras | all task pixel/media paths |
+
+`maite` itself is not a runtime dependency; datamaite datasets conform to MAITE
+protocols structurally. It is installed only for development/conformance tests.
+See [docs/packaging.md](docs/packaging.md) for the dependency contract.
 
 ## Loading datasets (Python)
 
@@ -86,7 +113,7 @@ ds = load_mot(
     dataset_format="hmie",
     annotation_dir="annotations/",
     video_dir="videos/",
-    require_video=True,  # needs the `video` extra
+    require_video=True,  # needs the `fmv` extra
 )
 ```
 
@@ -99,7 +126,7 @@ from datamaite import load_mot
 ds = load_mot(
     "/path/to/mp4-folder",
     dataset_format="flat_mp4",
-)  # requires datamaite[video]
+)  # requires datamaite[fmv]
 
 for seq in ds.iter_sequences():
     print(seq.video_path, seq.video_meta["codec"], seq.num_frames)
@@ -160,7 +187,7 @@ unknown/non-standard IDs default to `class_<id>`. For MOT-style datasets with
 custom labels, pass `class_names={42: "vehicle"}`. Missing IDs, or an empty
 `class_names={}`, still fall back to the built-in names and `class_<id>`.
 To optionally probe the first frame image with OpenCV for metadata, pass
-`probe_images=True` after installing `datamaite[video]`.
+`probe_images=True` after installing `datamaite[fmv]`.
 
 Load an official TAO dataset root (COCO-style `annotations/*.json` plus frame
 files) similarly:
@@ -204,21 +231,36 @@ VisDrone Video uses image sequences with seven-digit, 1-based `.jpg` filenames
 model's 0-based frame index. The loader preserves raw VisDrone category IDs
 (`0` ignored region, `1` pedestrian, ..., `11` others) in `category_id`.
 
-For a full load → verify → convert → consume walkthrough on synthetic data, see
+Load still-image object detection from COCO and still-image classification from
+YOLO/Ultralytics folder layout through task-first entry points:
+
+```python
+from datamaite import load_ic, load_od
+
+od = load_od("/path/to/coco", dataset_format="coco")
+print(od.sample_count, od.num_detections, od.index2label())
+
+# Example IC layout: train/cat/a.jpg, train/dog/b.jpg, val/cat/c.jpg
+ic = load_ic("/path/to/yolo-cls", dataset_format="yolo")
+for sample in ic.iter_samples():
+    print(sample.file_name, sample.split, sample.labels[0].category_name)
+```
+
+Both IC and OD use still-image records with first-class `split` and shared image
+source fields (`path_or_uri`, `image_bytes`, `file_name`, `width`, `height`).
+
+For a full load → verify → export-ready walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
 
 ## MAITE interoperability
 
-A loaded dataset **is** a [MAITE](https://github.com/mit-ll-ai-technology/maite)
-multi-object-tracking dataset — no adapter or on-disk conversion step — so it can
-feed MAITE-compatible models, metrics, and augmentations directly. Install the extra:
-
-```bash
-pip install datamaite[maite]
-```
-
-Video/FMV maps to MAITE's **multi-object-tracking** task (one item per video).
-Index the loaded dataset directly:
+A loaded task dataset is MAITE-compatible by structure — no adapter or on-disk
+conversion step. Video/FMV maps to MAITE's **multi-object-tracking** task (one
+item per video). Still-image object detection maps to MAITE **object_detection**,
+and still-image classification maps to MAITE **image_classification**. Core
+install provides target arrays; pixel decoding needs the matching task extra
+(`datamaite[fmv]`, `datamaite[od]`, or `datamaite[ic]`). Index the loaded
+dataset directly:
 
 ```python
 from datamaite import load_mot
@@ -230,11 +272,11 @@ frame = next(iter(video_stream))                 # VideoFrame: pixels (C,H,W), t
 boxes = target.frame_tracks[0].boxes             # xyxy, shape (N, 4)
 ```
 
-The MAITE surface probes each video's dimensions/time base itself (via PyAV), so the
-quick snippet above needs only the `maite` extra. Loading with `require_video=True`
-(true frame counts up front, which the `empty_frame_policy="all"` view requires)
-additionally uses the OpenCV probe — install both extras for that:
-`pip install datamaite[maite,video]`.
+The MOT MAITE surface probes each video's dimensions/time base itself via PyAV,
+so the quick snippet above needs `datamaite[fmv]`. Loading with
+`require_video=True` (true frame counts up front, which the
+`empty_frame_policy="all"` view requires) additionally uses the OpenCV probe;
+that is also included in `datamaite[fmv]`.
 
 To configure the MOT view, copy the dataset with options (it's not a conversion —
 the dataset is already MAITE):
@@ -247,31 +289,35 @@ Conventions: boxes are converted from `xywh` to MAITE's `xyxy`; ground-truth
 `scores` are `1.0`; frames are decoded with PyAV (inject your own backend via
 `with_mot_options(decoder=...)`); by default only annotated frames are emitted
 (`empty_frame_policy="all"` emits every frame, and needs a probed frame count).
-The `BoxTrackDataset` model is a box-track IR. Tasks other than multi-object
-tracking use separate dataset records (for example `VideoClassificationDataset`)
-and are not exposed through this MAITE MOT surface.
+The `BoxTrackDataset` model is a box-track IR. Still-image tasks use separate
+records (`ObjectDetectionDataset`, `ImageClassificationDataset`) and expose their
+own MAITE surfaces. Indexing a still-image OD or IC dataset decodes images with
+OpenCV (`numpy` ships in the `maite` extra, OpenCV in the `video` extra), so those
+tasks need both: `pip install datamaite[maite,video]`. `VideoClassificationDataset`
+is source-record-only until MAITE grows a video-classification protocol.
 
 ## Writing & converting datasets (Python)
 
 A **writer** serialises a loaded task dataset to an output format on disk;
-`convert` pairs a compatible loader and writer for end-to-end on-disk → on-disk
-conversion. MOT writers consume `BoxTrackDataset`; the Hugging Face Video
-Classification writer consumes `VideoClassificationDataset`.
+`convert` pairs a loader and a writer of the same task for end-to-end on-disk →
+on-disk conversion. MOT, OD, and IC have writer surfaces; video-classification
+datasets have no writer surface yet.
 
 ```python
 from datamaite import load_mot, write, convert
 
-# Write an in-memory dataset to disk
+# Write an in-memory dataset to disk (returns None; pass verbose=True for the file list)
 ds = load_mot("/path/to/dataset")
-files = write(ds, "/path/to/out", output_format="hmie", verbose=True)  # -> list of files written
+write(ds, "/path/to/out", output_format="hmie")
+files = write(ds, "/path/to/out", output_format="hmie", verbose=True)   # -> list of files written
 
-# Or convert on disk → on disk in one call
+# Or convert on disk → on disk in one call (verbose=True to get the file list back)
 convert("/path/to/dataset", "/path/to/out", input_format="hmie", output_format="hmie")
 ```
 
 Write MOTChallenge, TAO, or VisDrone Video with the same API. All three formats
 are image-sequence based: video-backed inputs are decoded to frame images and
-require the `video` extra, while existing image-sequence inputs copy their frame
+require the `fmv` extra, while existing image-sequence inputs copy their frame
 files directly.
 
 ```python
@@ -287,40 +333,33 @@ write(ds, "/path/to/tao-out", output_format="tao", split="train")
 write(ds, "/path/to/visdrone-out", output_format="visdrone_video", variant="mot")
 ```
 
-Write Hugging Face Video Classification by loading the VC records and selecting
-the matching output format:
-
-```python
-from datamaite import load_huggingface_video_classification, write
-
-vc = load_huggingface_video_classification("/path/to/hf-video-dataset")
-write(vc, "/path/to/hf-out", output_format="huggingface_video_classification")
-```
-
 For MOTChallenge, `annotation_source="gt"` (default) writes `gt/gt.txt` with
 class and visibility columns; `annotation_source="det"` writes `det/det.txt`
 with detection scores and optional world coordinates. For VisDrone Video,
 `variant="vid"` writes Object Detection in Videos split roots, `variant="mot"`
 writes Multi-Object Tracking split roots, and `variant="auto"` (default)
-preserves the loaded sequence variant when present. For Hugging Face Video
-Classification, `metadata_format="csv"` (default) writes `metadata.csv`, while
-`metadata_format="jsonl"` writes `metadata.jsonl`.
+preserves the loaded sequence variant when present.
 
-HMIE, Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video
-have round-trip writers:
+IC YOLO classification writes split/class/image directories:
+
+```python
+from datamaite import load_ic, write
+
+ic = load_ic("/path/to/yolo-cls", dataset_format="yolo")
+write(ic, "/path/to/yolo-cls-out", output_format="yolo")
+```
+
+HMIE, MOTChallenge, TAO, and VisDrone Video have round-trip writers:
 `load_mot(..., dataset_format="hmie") → write(output_format="hmie") →
 load_mot(..., dataset_format="hmie")`,
-`load_huggingface_video_classification(...) →
-write(output_format="huggingface_video_classification") →
-load_huggingface_video_classification(...)`,
 `load_mot(..., dataset_format="motchallenge") → write(output_format="motchallenge") →
 load_mot(..., dataset_format="motchallenge")`,
 `load_mot(..., dataset_format="tao") → write(output_format="tao") →
 load_mot(..., dataset_format="tao")`, and
 `load_mot(..., dataset_format="visdrone_video") → write(output_format="visdrone_video") →
-load_mot(..., dataset_format="visdrone_video")` recover the same task content
-represented by their in-memory datasets. Adding a new output format is a
-`Writer` subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
+load_mot(..., dataset_format="visdrone_video")` recover the same box/category/frame content
+represented by `BoxTrackDataset`. Adding a new output format is a `Writer`
+subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
 
 ## CLI Usage
 
@@ -349,7 +388,12 @@ Exit codes: `0` = pass, `1` = warnings only, `2` = errors present.
 
 ## Validation Checks
 
-The validator runs four checks against each dataset:
+Validation is currently implemented only for HMIE/Scale. For any non-HMIE
+`--format`, `datamaite validate` raises `NotImplementedError`; loaders/writers
+for COCO, YOLO IC, MOTChallenge, TAO, VisDrone, and Hugging Face VC do not imply
+on-disk validation support yet.
+
+For HMIE/Scale, the validator runs four checks against each dataset:
 
 | Check | What it verifies |
 |---|---|
@@ -362,7 +406,7 @@ The validator runs four checks against each dataset:
 
 ```bash
 # Install with dev dependencies
-poetry install --with dev --with video
+poetry install --with dev -E all
 
 # Run tests
 poetry run pytest

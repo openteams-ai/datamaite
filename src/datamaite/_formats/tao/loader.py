@@ -114,7 +114,7 @@ class TaoLoader(Loader):
             either ``annotations/test.json`` or the official
             ``annotations/test_without_annotations.json`` when present.
         probe_images
-            When True, use OpenCV (``pip install datamaite[video]``) to read
+            When True, use OpenCV (``pip install datamaite[fmv]``) to read
             one frame image per sequence and fill/override dimensions.
 
         Returns
@@ -620,7 +620,7 @@ def _probe_image(path: Path | None) -> tuple[int, int] | None:
     try:
         import cv2  # type: ignore[import-untyped]
     except ImportError:
-        logger.warning("OpenCV not installed; skipping TAO image probing (install datamaite[video])")
+        logger.warning("OpenCV not installed; skipping TAO image probing (install datamaite[fmv])")
         return None
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:

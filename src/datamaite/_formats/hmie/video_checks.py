@@ -85,7 +85,7 @@ def probe_video(video_path: Path) -> tuple[VideoProperties, list[Finding]]:
     Frame-level integrity checks (stuck/black frames, mid-video decode,
     last-frame decode) are performed here while the capture is already open.
 
-    Requires the `video` extra: pip install datamaite[video]
+    Requires the `fmv` extra: pip install datamaite[fmv]
     """
     findings: list[Finding] = []
 
@@ -97,7 +97,7 @@ def probe_video(video_path: Path) -> tuple[VideoProperties, list[Finding]]:
                 severity=Severity.WARNING,
                 path=video_path,
                 check="video_dependency",
-                message="opencv-python-headless not installed, skipping video checks",
+                message="opencv-python-headless not installed; install datamaite[fmv] to run video checks",
             )
         )
         return VideoProperties(path=video_path, opened=False), findings

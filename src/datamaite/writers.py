@@ -1,89 +1,71 @@
 """Writer architecture: the contract every dataset writer implements.
 
-The output-side mirror of :mod:`datamaite.loaders`. A *writer* takes a
-supported in-memory dataset and serialises it to one on-disk output format; a
-*loader* does the inverse. This module defines:
-
-* :class:`Writer` -- the base class every writer subclasses;
-* :func:`register_writer` -- the extension point that adds an output format;
-* :func:`write` -- the entry point that dispatches across registered formats.
-
-Adding an output format means writing a ``Writer`` subclass and registering
-it; nothing else in the package changes. See ``docs/architecture.md`` ->
-"Adding a new writer".
-
-The common output contract
---------------------------
-Every writer's *input* is the task-appropriate dataset type it declares via
-``dataset_type`` and its *output* is the list of files it created (so callers
-and the conversion layer can act on what was written). The on-disk shape is
-format-specific; the dataset-in / ``list[Path]``-out contract is common to every
-writer.
-
-Conventions every writer follows
----------------------------------
-* **Consume a typed dataset, never a loader or a raw format.** A writer's only
-  inputs are a task dataset (``BoxTrackDataset`` for MOT,
-  ``VideoClassificationDataset`` for VC, etc.) and a destination directory.
-* **Map best-effort; drop with a warning, don't crash.** Data the target
-  format cannot represent (e.g. tracks for a track-less format, unlabeled
-  boxes for a class-required format) is dropped and logged at WARNING.
-  *Destination / IO* failures (unwritable path, full disk) do raise.
-* **Options are keyword-only**, documented per writer. Variant selection for a
-  format with multiple flavours (e.g. MOT16 vs MOT20 column conventions) is a
-  writer option, not a separate :class:`~datamaite._types.DatasetFormat`.
-
-The end-to-end orchestration that pairs a loader and a writer (read format A
-from disk, write format B to disk) is :func:`datamaite.conversion.convert`;
-a writer itself only consumes its declared in-memory task dataset.
+The output-side mirror of :mod:`datamaite.loaders`. A *writer* takes a neutral
+source-preserving dataset of one task and serialises it to one on-disk
+format/variant. Registrations are keyed by ``(Task, DatasetFormat, variant)``
+while dispatch is object-driven: ``write(dataset, output_format=...)`` infers
+``Task`` from ``dataset.task`` and then type-checks the dataset against the
+selected writer's ``consumes`` class. Cross-task conversions therefore raise
+rather than fabricating data.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Generic, TypeVar
 
-from datamaite._types import DatasetFormat
+from datamaite._types import DatasetFormat, Task
 from datamaite.model import BoxTrackDataset, VisionDataset
 
+_DatasetT = TypeVar("_DatasetT", bound=VisionDataset)
 
-class Writer(ABC):
-    """Contract for serialising the neutral model to one output format.
 
-    A writer subclass sets :attr:`format` to the :class:`DatasetFormat` it
-    emits and implements :meth:`write`. Registering it with
-    :func:`register_writer` lets :func:`write` dispatch to it by format.
-    """
+@dataclass(frozen=True)
+class WriterKey:
+    """Registry key for one task/format/layout variant."""
 
-    #: Output format this writer emits. Every concrete subclass sets this.
+    task: Task
+    format: DatasetFormat
+    variant: str = "default"
+
+
+@dataclass(frozen=True)
+class WriterCapabilities:
+    """A writer's declared re-emit contract (see architecture.md)."""
+
+    required_fields: frozenset[str] = frozenset()
+    lossy_without: dict[str, str] = field(default_factory=dict)
+    forbids_dense_remap: bool = False
+    emits_empty_label_files: bool = False
+
+
+class Writer(ABC, Generic[_DatasetT]):
+    """Contract for serialising one task's neutral model to one output format."""
+
     format: ClassVar[DatasetFormat]
-    #: In-memory dataset type this writer consumes. MOT writers inherit the default.
-    dataset_type: ClassVar[type[Any]] = BoxTrackDataset
+    task: ClassVar[Task] = Task.MOT
+    variant: ClassVar[str] = "default"
+    consumes: ClassVar[type] = BoxTrackDataset
+    capabilities: ClassVar[WriterCapabilities] = WriterCapabilities()
 
     @abstractmethod
-    def write(self, dataset: VisionDataset, dest: str | Path, **options: Any) -> list[Path]:
-        """Serialise ``dataset`` under ``dest`` and return the files written.
-
-        Best-effort by contract: data the target format cannot represent is
-        dropped and logged at WARNING, not raised; destination/IO failures do
-        raise. ``options`` are writer-specific keyword arguments. ``dest`` is
-        created if missing.
-        """
+    def write(self, dataset: _DatasetT, dest: str | Path, **options: Any) -> list[Path]:
+        """Serialise ``dataset`` under ``dest`` and return the files written."""
         raise NotImplementedError
 
 
-# Format -> writer-class registry. Populated by register_writer at import time
-# (each format module decorates its Writer subclass). Built-in writers are
-# imported lazily so validation-only imports do not pull writer code into memory.
-_WRITERS: dict[DatasetFormat, type[Writer]] = {}
+_WRITERS: dict[WriterKey, type[Writer[Any]]] = {}
 _BUILTIN_WRITER_MODULES = (
+    "datamaite._formats.coco.writer",
     "datamaite._formats.hmie.writer",
     "datamaite._formats.huggingface_video_classification.writer",
     "datamaite._formats.motchallenge.writer",
     "datamaite._formats.tao.writer",
     "datamaite._formats.visdrone.writer",
+    "datamaite._formats.yolo.classification",
 )
 _BUILTIN_WRITERS_IMPORTED = False
 
@@ -98,44 +80,102 @@ def _ensure_builtin_writers() -> None:
     _BUILTIN_WRITERS_IMPORTED = True
 
 
-def register_writer(writer_cls: type[Writer]) -> type[Writer]:
-    """Register ``writer_cls`` under its :attr:`Writer.format`.
+def _coerce_task(task: Task | str | None) -> Task | None:
+    if task is None or isinstance(task, Task):
+        return task
+    return Task(str(task).lower())
 
-    Intended as a decorator on a :class:`Writer` subclass. Re-registering a
-    format replaces the previous writer (last registration wins). Raises
-    ``TypeError`` if the class does not set ``format`` to a
-    :class:`DatasetFormat`.
-    """
-    if writer_cls.__module__ not in _BUILTIN_WRITER_MODULES:
-        _ensure_builtin_writers()
+
+def _coerce_format(dataset_format: DatasetFormat | str) -> DatasetFormat:
+    return dataset_format if isinstance(dataset_format, DatasetFormat) else DatasetFormat(str(dataset_format).lower())
+
+
+def _key_for(writer_cls: type[Writer[Any]]) -> WriterKey:
     fmt = getattr(writer_cls, "format", None)
     if not isinstance(fmt, DatasetFormat):
         raise TypeError(f"{writer_cls.__name__} must set `format` to a DatasetFormat to be registered")
-    _WRITERS[fmt] = writer_cls
+    task = getattr(writer_cls, "task", Task.MOT)
+    if not isinstance(task, Task):
+        raise TypeError(f"{writer_cls.__name__} must set `task` to a Task to be registered")
+    variant = str(getattr(writer_cls, "variant", "default") or "default")
+    return WriterKey(task=task, format=fmt, variant=variant)
+
+
+def register_writer(writer_cls: type[Writer[Any]]) -> type[Writer[Any]]:
+    """Register ``writer_cls`` under ``(task, format, variant)``.
+
+    Raises ``ValueError`` if a *different* class is already registered under the
+    same key, so a duplicate ``(task, format, variant)`` fails loudly instead of
+    silently shadowing the existing writer. Re-registering the same class (e.g.
+    a module re-import) stays idempotent.
+    """
+    if writer_cls.__module__ not in _BUILTIN_WRITER_MODULES:
+        _ensure_builtin_writers()
+    key = _key_for(writer_cls)
+    existing = _WRITERS.get(key)
+    if existing is not None and existing is not writer_cls:
+        raise ValueError(f"A writer is already registered for {key}: {existing.__name__}")
+    _WRITERS[key] = writer_cls
     return writer_cls
 
 
-def available_output_formats() -> list[DatasetFormat]:
+def available_output_formats(*, task: Task | str | None = None) -> list[DatasetFormat]:
     """Formats that currently have a registered writer, sorted by value."""
     _ensure_builtin_writers()
-    return sorted(_WRITERS, key=lambda f: f.value)
+    resolved_task = _coerce_task(task)
+    formats = {key.format for key in _WRITERS if resolved_task is None or key.task == resolved_task}
+    return sorted(formats, key=lambda f: f.value)
 
 
-def get_writer(output_format: DatasetFormat | str) -> Writer:
-    """Return a writer instance for ``output_format``.
-
-    Accepts a :class:`DatasetFormat` or its string value (case-insensitive).
-    Raises ``ValueError`` for an unknown format string, or when no writer is
-    registered for an otherwise-valid format.
-    """
+def available_writer_keys() -> list[WriterKey]:
+    """Registered writer keys, sorted for diagnostics/tests."""
     _ensure_builtin_writers()
-    fmt = output_format if isinstance(output_format, DatasetFormat) else DatasetFormat(str(output_format).lower())
-    try:
-        writer_cls = _WRITERS[fmt]
-    except KeyError:
+    return sorted(
+        _WRITERS,
+        key=lambda key: (key.task.value, key.format.value, key.variant),
+    )
+
+
+def get_writer(
+    output_format: DatasetFormat | str,
+    *,
+    task: Task | str | None = None,
+    variant: str = "default",
+) -> Writer[Any]:
+    """Return a writer instance for ``output_format``/``task``/``variant``."""
+    _ensure_builtin_writers()
+    fmt = _coerce_format(output_format)
+    resolved_task = _coerce_task(task)
+    resolved_variant = str(variant or "default")
+
+    if resolved_task is not None:
+        key = WriterKey(task=resolved_task, format=fmt, variant=resolved_variant)
+        try:
+            return _WRITERS[key]()
+        except KeyError:
+            if resolved_variant == "default":
+                same_task = [
+                    candidate
+                    for candidate in available_writer_keys()
+                    if candidate.task == resolved_task and candidate.format == fmt
+                ]
+                if len(same_task) == 1:
+                    return _WRITERS[same_task[0]]()
+            known = ", ".join(f"{k.task.value}:{k.format.value}:{k.variant}" for k in available_writer_keys())
+            raise ValueError(f"No writer registered for {key}; available: {known or '(none)'}") from None
+
+    candidates = [
+        key
+        for key in available_writer_keys()
+        if key.format == fmt and (resolved_variant == "default" or key.variant == resolved_variant)
+    ]
+    if len(candidates) == 1:
+        return _WRITERS[candidates[0]]()
+    if not candidates:
         known = ", ".join(f.value for f in available_output_formats()) or "(none)"
-        raise ValueError(f"No writer registered for format {fmt.value!r}; available: {known}") from None
-    return writer_cls()
+        raise ValueError(f"No writer registered for format {fmt.value!r}; available: {known}")
+    choices = ", ".join(f"task={key.task.value!r}, variant={key.variant!r}" for key in candidates)
+    raise ValueError(f"Multiple writers registered for format {fmt.value!r}; specify task/variant ({choices})")
 
 
 def write(
@@ -143,38 +183,35 @@ def write(
     dest: str | Path,
     *,
     output_format: DatasetFormat | str,
+    output_variant: str = "default",
     verbose: bool = False,
     **options: Any,
 ) -> list[Path] | None:
     """Write ``dataset`` to ``dest`` in ``output_format``.
 
-    Parameters
-    ----------
-    dataset
-        The task-appropriate in-memory dataset to serialise.
-    dest
-        Destination directory (created if missing).
-    output_format
-        Which output format to emit, as a :class:`DatasetFormat` or its string
-        value.
-    verbose
-        When ``True``, return the list of files written; when ``False``
-        (default) write for side effects and return ``None``. The full file
-        list can be large (one path per frame image), so it is opt-in to keep
-        interactive/REPL output quiet.
-    **options
-        Forwarded to the selected writer's :meth:`Writer.write`.
+    ``output_variant`` selects the writer registry variant. A plain
+    ``variant=...`` keyword remains a writer option for formats such as
+    VisDrone, preserving the pre-existing API.
 
-    Returns
-    -------
-    list[Path] | None
-        The files written when ``verbose`` is ``True``; otherwise ``None``.
+    ``verbose``: when ``True``, return the list of files written; when ``False``
+    (default) write for side effects and return ``None``. The full file list can
+    be large (one path per frame image), so it is opt-in to keep
+    interactive/REPL output quiet.
     """
-    writer = get_writer(output_format)
-    if not isinstance(dataset, writer.dataset_type):
+    task = getattr(dataset, "task", None)
+    if not isinstance(task, Task):
+        raise TypeError(f"Cannot infer writer task from {type(dataset).__name__}: missing Task-valued `task`")
+    try:
+        writer = get_writer(output_format, task=task, variant=output_variant)
+    except ValueError:
+        # Keep cross-task failures actionable when the requested output format
+        # has a single writer for another task (e.g. MOT dataset -> COCO OD):
+        # select that writer and let the consumes check raise TypeError.
+        writer = get_writer(output_format, variant=output_variant)
+    if not isinstance(dataset, writer.consumes):
         raise TypeError(
-            f"Writer for format {writer.format.value!r} requires {writer.dataset_type.__name__}, "
-            f"got {type(dataset).__name__}"
+            f"{writer.format.value!r} writer consumes {writer.consumes.__name__}; "
+            f"got {type(dataset).__name__} (conversion is task-closed)"
         )
     files = writer.write(dataset, dest, **options)
     return files if verbose else None

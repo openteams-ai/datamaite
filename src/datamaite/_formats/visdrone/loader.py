@@ -159,7 +159,7 @@ class VisDroneVideoLoader(Loader):
             frame rate metadata, so the default is ``0.0`` and durations remain
             unknown. If supplied and frames are countable, duration is computed.
         probe_images
-            When True, use OpenCV (``pip install datamaite[video]``) to read
+            When True, use OpenCV (``pip install datamaite[fmv]``) to read
             the first frame image and fill dimensions. Loading continues with a
             warning if OpenCV is unavailable.
 
@@ -574,7 +574,7 @@ def _probe_images(frame_dir: Path, frame_ext: str, *, enabled: bool) -> _ImagePr
     try:
         import cv2  # type: ignore[import-untyped]
     except ImportError:
-        logger.warning("OpenCV not installed; skipping VisDrone image probing (install datamaite[video])")
+        logger.warning("OpenCV not installed; skipping VisDrone image probing (install datamaite[fmv])")
         return _ImageProbe(frame_count=frame_count)
 
     first = frame_paths[0]

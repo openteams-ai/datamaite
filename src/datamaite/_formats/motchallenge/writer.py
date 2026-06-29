@@ -11,7 +11,7 @@ The writer emits the standard MOTChallenge sequence layout::
 
 MOTChallenge is an image-sequence format. Existing image-sequence inputs copy
 source frames into ``img1``; video-backed inputs are decoded to frame images with
-OpenCV (``datamaite[video]``). Annotation rows are written as either official
+OpenCV (``datamaite[fmv]``). Annotation rows are written as either official
 ``gt.txt`` rows (frame, id, bbox, valid/confidence, class, visibility) or
 ``det.txt`` rows (frame, id, bbox, score, world coordinates), selected by the
 ``annotation_source`` writer option.
@@ -49,7 +49,7 @@ class _FrameOutput:
 
 
 @register_writer
-class MotChallengeWriter(Writer):
+class MotChallengeWriter(Writer[BoxTrackDataset]):
     """Write a :class:`BoxTrackDataset` as a MOTChallenge benchmark root."""
 
     format = DatasetFormat.MOTCHALLENGE
@@ -281,7 +281,7 @@ def _extract_video_frames(  # pragma: no cover - optional OpenCV path covered by
     except ImportError as exc:
         raise ImportError(
             "Writing video-backed sequences to MOTChallenge requires OpenCV. "
-            "Install it with: pip install datamaite[video]"
+            "Install it with: pip install datamaite[fmv]"
         ) from exc
 
     video_path = Path(seq.video_path or "")

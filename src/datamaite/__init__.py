@@ -11,7 +11,16 @@ from datamaite._stats import dataset_stats
 from datamaite._types import DatasetFormat, Finding, Severity, Task, ValidationResult
 from datamaite._version import __version__, __version_tuple__
 from datamaite.conversion import convert
-from datamaite.loaders import Loader, available_formats, get_loader, load, load_mot, register_loader
+from datamaite.image_classification import ImageClassificationDataset, load_ic
+from datamaite.loaders import (
+    Loader,
+    available_formats,
+    available_loader_keys,
+    get_loader,
+    load,
+    load_mot,
+    register_loader,
+)
 from datamaite.model import (
     BoxAnnotation,
     BoxTrackDataset,
@@ -20,11 +29,30 @@ from datamaite.model import (
     VideoSequence,
     VisionDataset,
 )
+from datamaite.object_detection import ObjectDetectionDataset, load_od
+from datamaite.records import (
+    ClassificationLabel,
+    DatasetMetadata,
+    ImageClassificationSample,
+    ImageObjectDetectionSample,
+    ImageRecord,
+    ObjectDetectionAnnotation,
+)
 from datamaite.taxonomy import CategoryEntry, Taxonomy
 from datamaite.validation import validate, validate_annotation, validate_batches
-from datamaite.writers import Writer, available_output_formats, get_writer, register_writer, write
+from datamaite.writers import (
+    Writer,
+    WriterCapabilities,
+    available_output_formats,
+    available_writer_keys,
+    get_writer,
+    register_writer,
+    write,
+)
 
 if TYPE_CHECKING:
+    from datamaite._formats.coco.loader import CocoLoader
+    from datamaite._formats.coco.writer import CocoWriter
     from datamaite._formats.flat_mp4.loader import FlatMp4Loader
     from datamaite._formats.hmie.loader import HmieLoader
     from datamaite._formats.hmie.writer import HmieWriter
@@ -39,6 +67,11 @@ if TYPE_CHECKING:
     from datamaite._formats.tao.writer import TaoWriter
     from datamaite._formats.visdrone.loader import VisDroneVideoLoader
     from datamaite._formats.visdrone.writer import VisDroneVideoWriter
+    from datamaite._formats.yolo.classification import (
+        YoloImageClassificationLoader,
+        YoloImageClassificationWriter,
+        load_yolo_image_classification,
+    )
 
 # Library convention: attach a NullHandler so downstream applications
 # that don't configure logging don't see "No handler found" warnings.
@@ -46,6 +79,8 @@ if TYPE_CHECKING:
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 _LAZY_EXPORTS = {
+    "CocoLoader": ("datamaite._formats.coco.loader", "CocoLoader"),
+    "CocoWriter": ("datamaite._formats.coco.writer", "CocoWriter"),
     "FlatMp4Loader": ("datamaite._formats.flat_mp4.loader", "FlatMp4Loader"),
     "HmieLoader": ("datamaite._formats.hmie.loader", "HmieLoader"),
     "HmieWriter": ("datamaite._formats.hmie.writer", "HmieWriter"),
@@ -63,9 +98,15 @@ _LAZY_EXPORTS = {
     "TaoWriter": ("datamaite._formats.tao.writer", "TaoWriter"),
     "VisDroneVideoLoader": ("datamaite._formats.visdrone.loader", "VisDroneVideoLoader"),
     "VisDroneVideoWriter": ("datamaite._formats.visdrone.writer", "VisDroneVideoWriter"),
+    "YoloImageClassificationLoader": ("datamaite._formats.yolo.classification", "YoloImageClassificationLoader"),
+    "YoloImageClassificationWriter": ("datamaite._formats.yolo.classification", "YoloImageClassificationWriter"),
     "load_huggingface_video_classification": (
         "datamaite._formats.huggingface_video_classification.loader",
         "load_huggingface_video_classification",
+    ),
+    "load_yolo_image_classification": (
+        "datamaite._formats.yolo.classification",
+        "load_yolo_image_classification",
     ),
 }
 
@@ -85,16 +126,26 @@ __all__ = [
     "BoxAnnotation",
     "BoxTrackDataset",
     "CategoryEntry",
+    "ClassificationLabel",
+    "CocoLoader",
+    "CocoWriter",
     "DatasetFormat",
+    "DatasetMetadata",
     "Finding",
     "FlatMp4Loader",
     "HmieLoader",
     "HmieWriter",
     "HuggingFaceVideoClassificationLoader",
     "HuggingFaceVideoClassificationWriter",
+    "ImageClassificationDataset",
+    "ImageClassificationSample",
+    "ImageObjectDetectionSample",
+    "ImageRecord",
     "Loader",
     "MotChallengeLoader",
     "MotChallengeWriter",
+    "ObjectDetectionAnnotation",
+    "ObjectDetectionDataset",
     "Severity",
     "TaoLoader",
     "TaoWriter",
@@ -109,10 +160,15 @@ __all__ = [
     "VisDroneVideoWriter",
     "VisionDataset",
     "Writer",
+    "WriterCapabilities",
+    "YoloImageClassificationLoader",
+    "YoloImageClassificationWriter",
     "__version__",
     "__version_tuple__",
     "available_formats",
+    "available_loader_keys",
     "available_output_formats",
+    "available_writer_keys",
     "convert",
     "dataset_stats",
     "find_batch_roots",
@@ -120,7 +176,10 @@ __all__ = [
     "get_writer",
     "load",
     "load_huggingface_video_classification",
+    "load_ic",
     "load_mot",
+    "load_od",
+    "load_yolo_image_classification",
     "register_loader",
     "register_writer",
     "render_html_report",

@@ -28,11 +28,25 @@ requires-python = ">=3.10,<3.13"
 
 dependencies = [
     "pydantic>=2.0",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
-video = [
+# Task-oriented extras. Core stays lean (pydantic + numpy) and every optional
+# native/media stack is pulled by the task that needs pixels.
+fmv = [
     "opencv-python-headless>=4.8",
+    "av>=11",
+]
+od = [
+    "opencv-python-headless>=4.8",
+]
+ic = [
+    "opencv-python-headless>=4.8",
+]
+all = [
+    "opencv-python-headless>=4.8",
+    "av>=11",
 ]
 # Jupyter kernel for running the docs/tutorial notebooks. Optional so it does
 # not pull the Jupyter stack into a production install.
@@ -58,6 +72,7 @@ dev = [
     "ruff>=0.4",
     "bandit[toml]>=1.7",
     "pyright>=1.1",
+    "maite>=0.9,<0.10",
 ]
 
 [project.scripts]

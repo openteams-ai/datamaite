@@ -21,11 +21,22 @@ import os
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _import_av() -> Any:
+    """Import PyAV with an actionable task-extra hint."""
+    try:
+        import av  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "Video-backed MOT decoding requires PyAV. Install it with: pip install datamaite[fmv]"
+        ) from exc
+    return av
 
 
 @dataclass(frozen=True)
@@ -86,7 +97,7 @@ class _PyAVStream:
         self._selection: set[int] | None = None if source_indices is None else set(source_indices)
 
     def __iter__(self) -> Iterator[DecodedFrame]:
-        import av  # lazy: only needed when frames are actually consumed
+        av = _import_av()
 
         wanted = self._selection
         target = None if wanted is None else len(wanted)
@@ -112,7 +123,7 @@ class PyAVDecoder:
     """Default :class:`Decoder` backed by PyAV (libav)."""
 
     def info(self, video_path: str) -> VideoInfo:
-        import av
+        av = _import_av()
 
         with av.open(video_path) as container:
             stream = container.streams.video[0]
