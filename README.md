@@ -292,9 +292,10 @@ Conventions: boxes are converted from `xywh` to MAITE's `xyxy`; ground-truth
 The `BoxTrackDataset` model is a box-track IR. Still-image tasks use separate
 records (`ObjectDetectionDataset`, `ImageClassificationDataset`) and expose their
 own MAITE surfaces. Indexing a still-image OD or IC dataset decodes images with
-OpenCV (`numpy` ships in the `maite` extra, OpenCV in the `video` extra), so those
-tasks need both: `pip install datamaite[maite,video]`. `VideoClassificationDataset`
-is source-record-only until MAITE grows a video-classification protocol.
+OpenCV, which ships in the task extras (`numpy` is part of the lean core), so
+those tasks need `pip install datamaite[od]` or `datamaite[ic]` (or
+`datamaite[all]`). `VideoClassificationDataset` is source-record-only until MAITE
+grows a video-classification protocol.
 
 ## Writing & converting datasets (Python)
 
