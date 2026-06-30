@@ -1,0 +1,37 @@
+/* Widen the main content area.
+ *
+ * pydata-sphinx-theme constrains width in TWO places, and BOTH must be raised
+ * or the content stays narrow:
+ *
+ *   1. .bd-page-width        caps the whole page row (sidebars + content) at
+ *                            88rem by default. This is the binding constraint:
+ *                            the content can never exceed what this leaves after
+ *                            the left + right sidebars, so raising the article
+ *                            container alone does nothing visible.
+ *   2. .bd-article-container caps the article body itself at 60em.
+ *
+ * See: https://pydata-sphinx-theme.readthedocs.io/en/stable/user_guide/layout.html
+ */
+
+/* 1. Lift the outer page-width cap (default 88rem). */
+.bd-page-width {
+    max-width: 100rem; /* theme default is 88rem */
+}
+
+/* 2. Widen the article body. Matches the theme's own 3-class selector and uses
+ *    !important so it wins regardless of stylesheet/source order. */
+.bd-main .bd-content .bd-article-container {
+    max-width: 100em !important; /* theme default is 60em */
+}
+
+/* 3. Narrow the left navigation sidebar, but keep it responsive.
+ *
+ * The theme sets .bd-sidebar-primary to width:25% capped at max-width:350px.
+ * We use clamp(min, preferred, max): the sidebar stays fluid at 16% of the
+ * viewport, but never narrower than 180px (readable on small screens) nor
+ * wider than 260px (no waste on large monitors). !important beats the theme's
+ * two competing width declarations regardless of order. */
+.bd-sidebar-primary {
+    width: clamp(180px, 16vw, 260px) !important; /* theme default is 25% / max 350px */
+    max-width: 260px !important;                  /* theme default is 350px */
+}
