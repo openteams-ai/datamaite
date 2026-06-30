@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""Generate the standalone HMIE mock dataset tree (for the hmie-mock-data repo).
+"""Generate the standalone HMIE mock dataset tree (for the datamaite-example-datasets repo).
 
 Reuses datamaite's HMIE test factory (``tests/_hmie_factory.py``) to write a
 set of self-contained, **non-CUI** HMIE datasets -- one directory per scenario,
 covering the happy path plus each validation failure mode. The output is what
-gets checked into the separate ``hmie-mock-data`` repo (mp4 via git-LFS, JSON
-plain); this script itself stays in datamaite as the documented regenerator.
+gets checked into the separate ``datamaite-example-datasets`` repo (mp4 via
+git-LFS, JSON plain); this script itself stays in datamaite as the documented
+regenerator.
 
 Usage:
     poetry run python scripts/generate_mock_hmie.py <output_dir>

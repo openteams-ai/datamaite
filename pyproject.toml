@@ -52,6 +52,7 @@ all = [
 # not pull the Jupyter stack into a production install.
 notebook = [
     "ipykernel>=7.2",
+    "jupyterlab",
 ]
 # MAITE interoperability (datamaite.maite). Optional: core `import datamaite`
 # never imports these. ``numpy`` + ``av`` (PyAV) are the real runtime deps --
@@ -87,6 +88,9 @@ docs = [
     "sphinx>=7.0",
     "myst-nb>=1.0",
     "pydata-sphinx-theme>=0.15",
+    "sphinx-design>=0.5",          # grid/card tiles on the landing page
+    "sphinxcontrib-mermaid>=0.9",  # render ```mermaid fences as diagrams
+    "sphinx-autobuild>=2024.0",    # live-reload rebuild for local docs editing
 ]
 
 [project.scripts]

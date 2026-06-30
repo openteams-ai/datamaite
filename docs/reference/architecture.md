@@ -204,14 +204,41 @@ src/datamaite/
             writer.py                YOLO IC/OD writers -> ImageFolder or images/labels roots
             _common.py               Shared YOLO layout/path helpers
 docs/
-    architecture.md                              This file
-    schemas/
-        scale-video-playback-v1.schema.json      JSON Schema for Scale format
+    reference/
+        architecture.md                          This file
+        schemas/
+            scale-video-playback-v1.schema.json  JSON Schema for Scale format
 tests/                       pytest suite (coverage gate 90%)
 ```
 
-For the on-disk dataset layout that `discovery.py` walks, see the
-["Dataset layout on disk" section in the README](../README.md#dataset-layout-on-disk).
+## Dataset layout on disk
+
+The on-disk layout that `discovery.py` walks is snippet-centric. Snippet dirs
+are identified by the presence of a `seq_*/` video container; everything else
+is discovered relative to that.
+
+```
+<batch_dir>/
+    <snippet_name>_<id>_<seq>/           snippet directory
+        <snippet_name>.json              snippet-level metadata (NOT a Scale annotation)
+        scale/                           annotation dir (present in some families)
+            *.json                       Scale Video Playback annotation
+        <labeler>/                       alternative annotation dir (labeler subfolder)
+            *.json
+        seq_mp4/                         video container (always present)
+            *.mp4
+        seq_ts/                          alternative container (some datasets)
+            *.ts
+        mapp_metadata/ | 0601_metadata/  pipeline metadata (ignored)
+            *.json
+    scale/                               batch-level annotations (some families)
+        *.json
+    masks/                               batch-level masks (ignored)
+```
+
+Variations across families are tolerated: `scale/` vs labeler subfolder,
+`seq_mp4/` vs `seq_ts/`, and the differing `*_metadata/` directory names are
+all handled by discovery.
 
 ## Reading order
 
@@ -743,8 +770,10 @@ Mechanics that keep this honest:
 - **MOT is the surface for video box-tracks** (`ds[i]` is one video). Still-image
   object detection is a *separate task* with its own dataset class and MAITE
   surface (see [Task-aware datasets](#task-aware-datasets--ic-od-and-vc)), not a
-  sample type here. Any future MOT→OD per-frame projection must be an explicit,
-  opt-in, lossy operation — not implicit writer dispatch.
+  sample type here. The one planned cross-task bridge is an explicit, opt-in
+  `BoxTrackDataset.as_object_detection()` per-frame projection (drops track ids,
+  lossy) for the "evaluate a still-image detector on video frames" workflow —
+  designed below, not yet implemented.
 - **Two length / iteration views.** `len(ds)` / `ds[i]` / `for x in ds` are
   the MAITE **item** view — one item per *video-bearing* sequence. The
   **record** view is `ds.sequence_count` / `ds.iter_sequences()` /

@@ -30,15 +30,40 @@ variables:
   # Pin Poetry to avoid silent drift.
   POETRY_PIN: "2.4.1"
 
+# Clone the shared example-datasets repo to one canonical location used by every
+# job that needs it (docs build + e2e integration matrix), and export
+# DATAMAITE_DATASETS_ROOT so the tutorial notebooks and e2e tests both resolve
+# datasets the same way. The repo stores media (.mp4/.jpg/...) in git-LFS.
+.clone_example_data: &clone_example_data
+  # Trust the GitLab checkout for build backends that call git to derive package metadata.
+  - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  # Register the LFS smudge/clean filters (global; the apt git-lfs package only
+  # installs the binary, not the git config).
+  - git lfs install
+  # Derive host + namespace instead of hardcoding them (CI_PROJECT_NAMESPACE ==
+  # jatic/orchestration-interoperability); CI_JOB_TOKEN authorizes the cross-repo
+  # clone (allowlisted in the datasets project's job-token permissions).
+  - git clone --depth 1
+      "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_NAMESPACE}/datamaite-example-datasets.git"
+      "${CI_PROJECT_DIR}/example-data"
+  # Pull explicitly so the shallow clone gets real binaries, not LFS pointers.
+  - git -C "${CI_PROJECT_DIR}/example-data" lfs pull
+  # Both the notebooks and the e2e tests read this env var to locate the
+  # datasets. Absolute path so it resolves regardless of execution CWD.
+  - export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
+
 .shared-setup:
   interruptible: true
   image: python:${VERSION}-slim
   timeout: 20m
   before_script:
     # Install OS deps required by our toolchain:
-    #   git       -- pre-commit needs it; slim images don't ship it
+    #   git        -- pre-commit needs it; slim images don't ship it
+    #   git-lfs    -- the example-datasets repo stores media (.mp4/.jpg/...) in
+    #                 git-LFS; without it `git clone` yields pointer files and the
+    #                 tutorial notebooks fail to decode video in the docs build
     #   libatomic1 -- pyright's embedded Node runtime needs it
-    - apt-get update -qq && apt-get install -y -qq git libatomic1
+    - apt-get update -qq && apt-get install -y -qq git git-lfs libatomic1
     - pip install --quiet --upgrade pip
     - pip install --quiet "poetry==${POETRY_PIN}"
     - poetry config virtualenvs.in-project true
@@ -145,6 +170,7 @@ pages:
   variables:
     VERSION: "3.12"
   script:
+    - *clone_example_data
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
     - poetry install --extras docs
@@ -165,6 +191,7 @@ pages-preview:
   variables:
     VERSION: "3.12"
   script:
+    - *clone_example_data
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
     - poetry install --extras docs
@@ -243,19 +270,10 @@ integration:
     VERSION: "3.12"
   allow_failure: false
   script:
-    - apt-get install -y -qq git-lfs
-    - git lfs install
-    # Same group as this project -- derive the namespace instead of hardcoding
-    # it, so the group only lives in one place (CI_PROJECT_NAMESPACE ==
-    # jatic/orchestration-interoperability). git has no relative-repo concept,
-    # so the host + namespace + repo name are still required to form the URL.
+    # Clone the shared example datasets and export DATAMAITE_DATASETS_ROOT.
     # Clones the default branch (main): the multi-format datasets/<format>/
     # layout and the counts this matrix asserts are merged there.
-    - git clone --depth 1
-        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_NAMESPACE}/datamaite-example-datasets.git"
-        "${CI_PROJECT_DIR}/example-data"
-    - git -C "${CI_PROJECT_DIR}/example-data" lfs pull
-    - export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
+    - *clone_example_data
     - poetry install --extras dev --extras maite --extras all
     # -s so the end-of-run matrix summary table is shown in the job log.
     # Scope to tests/e2e (the e2e tier) and the `integration` marker.

@@ -78,9 +78,15 @@ venv.bak/
 # mkdocs documentation
 /site
 /public
+/docs/public
 
 #sphinx build
 jupyter_execute/
+
+# Mock datasets cloned for the tutorial notebooks / docs build (see CI)
+/docs/tutorials/datamaite-example-datasets/
+# Generated outputs from running the tutorial notebooks (reports, converted datasets)
+/docs/tutorials/output/
 
 # mypy
 .mypy_cache/
