@@ -43,7 +43,7 @@ flowchart LR
     subgraph loaders [Loaders]
         LH["<b>load_mot</b><br/>dataset_format='hmie'"]
         LF["<b>load_mot</b><br/>dataset_format='flat_mp4'"]
-        LHF["<b>load_huggingface_video_classification</b>"]
+        LHF["<b>load_vc</b><br/>dataset_format='huggingface_video_classification'"]
         LM["<b>load_mot</b><br/>dataset_format='motchallenge'"]
         LT["<b>load_mot</b><br/>dataset_format='tao'"]
         LV["<b>load_mot</b><br/>dataset_format='visdrone_video'"]
@@ -122,12 +122,13 @@ flowchart LR
 Today, MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 reached through `load_mot(dataset_format=…)`; COCO OD is reached through
 `load_od(dataset_format="coco")`; YOLO image classification is reached through
-`load_ic(dataset_format="yolo")`; Hugging Face Video Classification has its
-source-record helper. The HMIE validation pipeline is the only validator. HMIE,
-MOTChallenge, TAO, VisDrone Video, COCO OD, and YOLO IC writers are implemented.
-Hugging Face Video Classification returns its own `VideoClassificationDataset`
-records and has no MAITE surface yet. See [Loading](#loading--hmie-loader) for
-how MOT loaders build the box-track model,
+`load_ic(dataset_format="yolo")`; Hugging Face Video Classification is reached
+through `load_vc(dataset_format=…)`. The HMIE validation pipeline is the only
+validator. HMIE, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone
+Video, COCO OD, and YOLO IC writers are implemented. Hugging Face Video
+Classification returns its own `VideoClassificationDataset` records and has no
+MAITE surface yet. See [Loading](#loading--hmie-loader) for how MOT loaders
+build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
 surface, and [Writer architecture](#writer-architecture--writerspy) for the
 writer contract.
@@ -525,7 +526,8 @@ flowchart TD
   `task`/`registry_variant` disambiguate multi-task families; `None` enables
   sniffing. A plain `variant=...` keyword remains a loader option for formats
   such as VisDrone. Task-first wrappers pin return types: `load_mot`, `load_od`,
-  and `load_ic`. Per-format helpers remain convenience/internal wrappers.
+  `load_ic`, and `load_vc`. Per-format helpers remain convenience/internal
+  wrappers; `load_huggingface_video_classification(...)` is internal-only.
 
 Loaders and writers are task/format/variant aware. **Validation is not:**
 `validate()` is currently implemented only for HMIE/Scale and raises

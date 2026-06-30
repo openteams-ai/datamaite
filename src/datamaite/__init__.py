@@ -19,6 +19,7 @@ from datamaite.loaders import (
     get_loader,
     load,
     load_mot,
+    load_vc,
     register_loader,
 )
 from datamaite.model import (
@@ -58,7 +59,6 @@ if TYPE_CHECKING:
     from datamaite._formats.hmie.writer import HmieWriter
     from datamaite._formats.huggingface_video_classification.loader import (
         HuggingFaceVideoClassificationLoader,
-        load_huggingface_video_classification,
     )
     from datamaite._formats.huggingface_video_classification.writer import HuggingFaceVideoClassificationWriter
     from datamaite._formats.motchallenge.loader import MotChallengeLoader
@@ -100,10 +100,6 @@ _LAZY_EXPORTS = {
     "VisDroneVideoWriter": ("datamaite._formats.visdrone.writer", "VisDroneVideoWriter"),
     "YoloImageClassificationLoader": ("datamaite._formats.yolo.classification", "YoloImageClassificationLoader"),
     "YoloImageClassificationWriter": ("datamaite._formats.yolo.classification", "YoloImageClassificationWriter"),
-    "load_huggingface_video_classification": (
-        "datamaite._formats.huggingface_video_classification.loader",
-        "load_huggingface_video_classification",
-    ),
     "load_yolo_image_classification": (
         "datamaite._formats.yolo.classification",
         "load_yolo_image_classification",
@@ -175,10 +171,10 @@ __all__ = [
     "get_loader",
     "get_writer",
     "load",
-    "load_huggingface_video_classification",
     "load_ic",
     "load_mot",
     "load_od",
+    "load_vc",
     "load_yolo_image_classification",
     "register_loader",
     "register_writer",

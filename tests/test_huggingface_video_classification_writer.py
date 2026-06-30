@@ -13,8 +13,10 @@ from datamaite import (
     DatasetFormat,
     HuggingFaceVideoClassificationWriter,
     convert,
-    load_huggingface_video_classification,
     write,
+)
+from datamaite._formats.huggingface_video_classification.loader import (
+    load_huggingface_video_classification,
 )
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset, VideoClassificationSample
 from datamaite.writers import available_output_formats, get_writer

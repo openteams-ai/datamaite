@@ -34,16 +34,17 @@ HMIE/Scale dataset on disk, and a **writer** serialises supported datasets out t
 an output format (`convert` pairs a loader and a writer of the same task for
 on-disk → on-disk conversion). HMIE/Scale, flat MP4 video folders, Hugging Face
 Video Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, and YOLO image
-classification are implemented input formats; HMIE/Scale, MOTChallenge, TAO,
-VisDrone Video, COCO OD, and YOLO image classification are implemented output
-formats. Validation is currently **HMIE/Scale only**; non-HMIE formats load and
-write but are not validated by `datamaite validate` yet.
+classification are implemented input formats; HMIE/Scale, Hugging Face Video
+Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, and YOLO image
+classification are implemented output formats. Validation is currently
+**HMIE/Scale only**; non-HMIE formats load and write but are not validated by
+`datamaite validate` yet.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
-| Hugging Face Video Classification | ✅ | — | planned |
+| Hugging Face Video Classification | ✅ | — | ✅ |
 | MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
@@ -145,11 +146,11 @@ folders, optional `train` / `validation` / `test` splits, or `metadata.csv` /
 if parquet cannot be read, the loader warns and falls back to folder discovery.
 
 ```python
-from datamaite import load_huggingface_video_classification
+from datamaite import load_vc
 
 # Example layout: train/dog/clip.mp4, train/cat/clip.mp4, test/dog/clip.mp4
 # Metadata-file layouts use file_name paths relative to the metadata file.
-ds = load_huggingface_video_classification("/path/to/hf-video-dataset")
+ds = load_vc("/path/to/hf-video-dataset")
 
 for sample in ds.iter_samples():
     print(sample.video_path, sample.split, sample.label)
@@ -304,8 +305,8 @@ grows a video-classification protocol.
 
 A **writer** serialises a loaded task dataset to an output format on disk;
 `convert` pairs a loader and a writer of the same task for end-to-end on-disk →
-on-disk conversion. MOT, OD, and IC have writer surfaces; video-classification
-datasets have no writer surface yet.
+on-disk conversion. MOT, VC, OD, and IC have writer surfaces for supported
+output formats.
 
 ```python
 from datamaite import load_mot, write, convert
@@ -337,6 +338,16 @@ write(ds, "/path/to/tao-out", output_format="tao", split="train")
 write(ds, "/path/to/visdrone-out", output_format="visdrone_video", variant="mot")
 ```
 
+Write Hugging Face Video Classification by loading the VC records and selecting
+the matching output format:
+
+```python
+from datamaite import load_vc, write
+
+vc = load_vc("/path/to/hf-video-dataset")
+write(vc, "/path/to/hf-out", output_format="huggingface_video_classification")
+```
+
 For MOTChallenge, `annotation_source="gt"` (default) writes `gt/gt.txt` with
 class and visibility columns; `annotation_source="det"` writes `det/det.txt`
 with detection scores and optional world coordinates. For VisDrone Video,
@@ -353,9 +364,13 @@ ic = load_ic("/path/to/yolo-cls", dataset_format="yolo")
 write(ic, "/path/to/yolo-cls-out", output_format="yolo")
 ```
 
-HMIE, MOTChallenge, TAO, and VisDrone Video have round-trip writers:
+HMIE, Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video
+have round-trip writers:
 `load_mot(..., dataset_format="hmie") → write(output_format="hmie") →
 load_mot(..., dataset_format="hmie")`,
+`load_vc(...) →
+write(output_format="huggingface_video_classification") →
+load_vc(...)`,
 `load_mot(..., dataset_format="motchallenge") → write(output_format="motchallenge") →
 load_mot(..., dataset_format="motchallenge")`,
 `load_mot(..., dataset_format="tao") → write(output_format="tao") →
