@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from datamaite import load
+from datamaite import load, load_vc
 from datamaite._formats.hmie.loader import HmieLoader
 from datamaite._types import DatasetFormat, Task
 from datamaite.loaders import (
@@ -174,3 +174,23 @@ class TestEquivalenceWithLoadMot:
         # simply confirms the option is forwarded without error.
         ds = load(tmp_path, dataset_format="hmie", require_video=True)
         assert isinstance(ds, BoxTrackDataset)
+
+
+class TestLoadVc:
+    """The task-first video-classification entry point.
+
+    ``load_vc`` mirrors ``load_mot``: it delegates to ``load`` but pins the
+    return type to ``VideoClassificationDataset`` and fails loudly if the
+    resolved format produces a different task's dataset.
+    """
+
+    def test_load_vc_raises_on_missing_root(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_vc(tmp_path / "nope")
+
+    def test_load_vc_rejects_non_vc_dataset(self, tmp_path: Path) -> None:
+        # An HMIE root resolves to a BoxTrackDataset (MOT), not a VC dataset:
+        # load_vc must reject it at the call site rather than mistype it.
+        default_happy_dataset(tmp_path)
+        with pytest.raises(TypeError, match="load_vc expected a VideoClassificationDataset"):
+            load_vc(tmp_path, dataset_format="hmie")

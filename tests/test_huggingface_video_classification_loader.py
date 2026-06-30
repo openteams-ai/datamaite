@@ -15,9 +15,12 @@ from datamaite import (
     convert,
     dataset_stats,
     load,
-    load_huggingface_video_classification,
+    load_vc,
 )
 from datamaite._cli import main
+from datamaite._formats.huggingface_video_classification.loader import (
+    load_huggingface_video_classification,
+)
 from datamaite.loaders import available_formats, get_loader
 
 
@@ -40,6 +43,15 @@ class TestHuggingFaceVideoClassificationRegistry:
         _write_video(tmp_path / "cat" / "clip.mp4")
 
         ds = load(tmp_path, dataset_format="huggingface_video_classification")
+
+        assert isinstance(ds, VideoClassificationDataset)
+        assert ds.sample_count == 1
+        assert ds.samples[0].label == "cat"
+
+    def test_load_vc_public_entrypoint_loads_huggingface_video_classification(self, tmp_path: Path) -> None:
+        _write_video(tmp_path / "cat" / "clip.mp4")
+
+        ds = load_vc(tmp_path)
 
         assert isinstance(ds, VideoClassificationDataset)
         assert ds.sample_count == 1

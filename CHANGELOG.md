@@ -7,10 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `datamaite.load_vc(root, dataset_format=…)`: a task-first public entry point
+  for video classification, the analogue of `load_mot`. It pins the return type
+  to `VideoClassificationDataset` and raises `TypeError` if the resolved format
+  produces a different task's dataset. Defaults to
+  `dataset_format="huggingface_video_classification"`.
+
 ### Changed
 
-- `datamaite.load` (and `load_mot`) now fail fast on a bad dataset root: a
-  nonexistent path raises `FileNotFoundError` and a non-directory path raises
+- **Breaking:** `load_huggingface_video_classification` is no longer part of the
+  public `datamaite` API. Use the task-first `load_vc(...)` instead (the
+  format-specific helper lives on internally in
+  `datamaite._formats.huggingface_video_classification.loader`). This makes the
+  public loader surface a consistent rule — generic `load` plus one
+  `load_<task>` per task (`load_mot`, `load_od`, `load_ic`, `load_vc`) —
+  matching how the per-format MOT `load_<format>` helpers were already made
+  internal.
+- `datamaite.load` (and task-first loaders like `load_mot` / `load_vc`) now fail
+  fast on a bad dataset root: a nonexistent path raises `FileNotFoundError` and
+  a non-directory path raises
   `NotADirectoryError`, instead of silently returning an empty dataset. A root
   that exists but yields no loadable items still returns an empty dataset, now
   with a `WARNING` so an empty result (e.g. wrong format or wrong subdirectory)

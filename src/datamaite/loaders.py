@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
 from datamaite._types import DatasetFormat, Task
-from datamaite.model import BoxTrackDataset, VisionDataset
+from datamaite.model import BoxTrackDataset, VideoClassificationDataset, VisionDataset
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +313,34 @@ def load_mot(
     dataset = loader.load(root, **options)
     if not isinstance(dataset, BoxTrackDataset):
         raise TypeError(f"load_mot expected a BoxTrackDataset, got {type(dataset).__name__}")
+    _warn_if_empty(dataset, root, dataset_format)
+    return dataset
+
+
+def load_vc(
+    root: str | Path,
+    *,
+    dataset_format: DatasetFormat | str = DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION,
+    registry_variant: str = "default",
+    **options: Any,
+) -> VideoClassificationDataset:
+    """Load a video-classification dataset (task-first entry point).
+
+    The VC analogue of :func:`load_mot`: pins the return type to
+    :class:`VideoClassificationDataset` and dispatches by wire
+    ``dataset_format`` (Hugging Face VideoFolder today). ``**options`` are
+    forwarded to the format loader (e.g. ``video_extensions``). This is the
+    public VC loader; per-format helpers are internal to
+    ``datamaite._formats.<format>.loader``.
+    """
+    _require_dataset_root(root)
+    try:
+        loader = get_loader(dataset_format, task=Task.VC, variant=registry_variant)
+    except ValueError:
+        loader = get_loader(dataset_format, variant=registry_variant)
+    dataset = loader.load(root, **options)
+    if not isinstance(dataset, VideoClassificationDataset):
+        raise TypeError(f"load_vc expected a VideoClassificationDataset, got {type(dataset).__name__}")
     _warn_if_empty(dataset, root, dataset_format)
     return dataset
 

@@ -42,9 +42,9 @@ def test_public_api() -> None:
         VisDroneVideoWriter,
         VisionDataset,
         WriterCapabilities,
-        load_huggingface_video_classification,
         load_mot,
         load_od,
+        load_vc,
         validate,
         validate_annotation,
     )
@@ -85,22 +85,29 @@ def test_public_api() -> None:
     assert CocoLoader is not None
     assert CocoWriter is not None
     assert WriterCapabilities is not None
-    assert callable(load_huggingface_video_classification)
     assert callable(load_mot)
+    assert callable(load_vc)
     assert callable(validate)
     assert callable(validate_annotation)
 
 
 def test_per_format_load_functions_not_in_public_api() -> None:
-    """The old per-format ``load_*`` functions are replaced by task-first ``load_mot``.
+    """Per-format ``load_*`` functions are replaced by task-first ``load_mot`` / ``load_vc``.
 
     They live on internally (``datamaite._formats.<format>.loader``) but are no
     longer exposed on the top-level ``datamaite`` namespace.
     """
     import datamaite
 
-    for name in ("load_hmie", "load_tao", "load_motchallenge", "load_visdrone_video", "load_flat_mp4"):
-        assert not hasattr(datamaite, name), f"{name} should be removed from the public API (use load_mot)"
+    for name in (
+        "load_hmie",
+        "load_tao",
+        "load_motchallenge",
+        "load_visdrone_video",
+        "load_flat_mp4",
+        "load_huggingface_video_classification",
+    ):
+        assert not hasattr(datamaite, name), f"{name} should be removed from the public API (use load_mot/load_vc)"
 
 
 def test_validation_import_keeps_loader_and_writer_modules_lazy() -> None:
