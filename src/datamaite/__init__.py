@@ -67,11 +67,8 @@ if TYPE_CHECKING:
     from datamaite._formats.tao.writer import TaoWriter
     from datamaite._formats.visdrone.loader import VisDroneVideoLoader
     from datamaite._formats.visdrone.writer import VisDroneVideoWriter
-    from datamaite._formats.yolo.classification import (
-        YoloImageClassificationLoader,
-        YoloImageClassificationWriter,
-        load_yolo_image_classification,
-    )
+    from datamaite._formats.yolo.loader import YoloImageClassificationLoader, YoloObjectDetectionLoader
+    from datamaite._formats.yolo.writer import YoloImageClassificationWriter, YoloObjectDetectionWriter
 
 # Library convention: attach a NullHandler so downstream applications
 # that don't configure logging don't see "No handler found" warnings.
@@ -98,12 +95,10 @@ _LAZY_EXPORTS = {
     "TaoWriter": ("datamaite._formats.tao.writer", "TaoWriter"),
     "VisDroneVideoLoader": ("datamaite._formats.visdrone.loader", "VisDroneVideoLoader"),
     "VisDroneVideoWriter": ("datamaite._formats.visdrone.writer", "VisDroneVideoWriter"),
-    "YoloImageClassificationLoader": ("datamaite._formats.yolo.classification", "YoloImageClassificationLoader"),
-    "YoloImageClassificationWriter": ("datamaite._formats.yolo.classification", "YoloImageClassificationWriter"),
-    "load_yolo_image_classification": (
-        "datamaite._formats.yolo.classification",
-        "load_yolo_image_classification",
-    ),
+    "YoloImageClassificationLoader": ("datamaite._formats.yolo.loader", "YoloImageClassificationLoader"),
+    "YoloImageClassificationWriter": ("datamaite._formats.yolo.writer", "YoloImageClassificationWriter"),
+    "YoloObjectDetectionLoader": ("datamaite._formats.yolo.loader", "YoloObjectDetectionLoader"),
+    "YoloObjectDetectionWriter": ("datamaite._formats.yolo.writer", "YoloObjectDetectionWriter"),
 }
 
 
@@ -159,6 +154,8 @@ __all__ = [
     "WriterCapabilities",
     "YoloImageClassificationLoader",
     "YoloImageClassificationWriter",
+    "YoloObjectDetectionLoader",
+    "YoloObjectDetectionWriter",
     "__version__",
     "__version_tuple__",
     "available_formats",
@@ -175,7 +172,6 @@ __all__ = [
     "load_mot",
     "load_od",
     "load_vc",
-    "load_yolo_image_classification",
     "register_loader",
     "register_writer",
     "render_html_report",

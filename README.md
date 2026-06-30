@@ -33,12 +33,13 @@ source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
 HMIE/Scale dataset on disk, and a **writer** serialises supported datasets out to
 an output format (`convert` pairs a loader and a writer of the same task for
 on-disk → on-disk conversion). HMIE/Scale, flat MP4 video folders, Hugging Face
-Video Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, and YOLO image
-classification are implemented input formats; HMIE/Scale, Hugging Face Video
-Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, and YOLO image
-classification are implemented output formats. Validation is currently
-**HMIE/Scale only**; non-HMIE formats load and write but are not validated by
-`datamaite validate` yet.
+Video Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, YOLO image
+classification, and YOLO object detection are implemented input formats;
+HMIE/Scale, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone
+Video, COCO OD, YOLO image classification, and YOLO object detection are
+implemented output formats. Validation is currently **HMIE/Scale only**;
+non-HMIE formats load and write but are not validated by `datamaite validate`
+yet.
 
 | Format | Load | Validate | Write |
 |---|---|---|---|
@@ -50,6 +51,7 @@ classification are implemented output formats. Validation is currently
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
 | YOLO image classification | ✅ | — | ✅ |
 | COCO object detection | ✅ | — | ✅ |
+| YOLO object detection | ✅ | — | ✅ |
 
 See [docs/architecture.md](docs/architecture.md) for the loader / writer design
 and how to add a new loader or writer.
@@ -235,8 +237,9 @@ VisDrone Video uses image sequences with seven-digit, 1-based `.jpg` filenames
 model's 0-based frame index. The loader preserves raw VisDrone category IDs
 (`0` ignored region, `1` pedestrian, ..., `11` others) in `category_id`.
 
-Load still-image object detection from COCO and still-image classification from
-YOLO/Ultralytics folder layout through task-first entry points:
+Load still-image object detection from COCO or YOLO, and still-image
+classification from YOLO/Ultralytics folder layouts, through task-first entry
+points:
 
 ```python
 from datamaite import load_ic, load_od
@@ -244,7 +247,11 @@ from datamaite import load_ic, load_od
 od = load_od("/path/to/coco", dataset_format="coco")
 print(od.sample_count, od.num_detections, od.index2label())
 
-# Example IC layout: train/cat/a.jpg, train/dog/b.jpg, val/cat/c.jpg
+# Example YOLO OD layout: images/train/a.jpg + labels/train/a.txt + data.yaml
+od_yolo = load_od("/path/to/yolo-det", dataset_format="yolo")
+print(od_yolo.sample_count, od_yolo.num_detections, od_yolo.index2label())
+
+# Example YOLO IC layout: train/cat/a.jpg, train/dog/b.jpg, val/cat/c.jpg
 ic = load_ic("/path/to/yolo-cls", dataset_format="yolo")
 for sample in ic.iter_samples():
     print(sample.file_name, sample.split, sample.labels[0].category_name)
@@ -252,6 +259,10 @@ for sample in ic.iter_samples():
 
 Both IC and OD use still-image records with first-class `split` and shared image
 source fields (`path_or_uri`, `image_bytes`, `file_name`, `width`, `height`).
+Because `yolo` is a shared format family, generic `load(..., dataset_format="yolo")`
+or `convert(..., input_format="yolo", output_format="yolo")` calls should pass
+`task="ic"` or `task="od"`; the task-first `load_ic` / `load_od` helpers set
+that discriminator for you.
 
 For a full load → verify → export-ready walkthrough on synthetic data, see
 [docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
@@ -355,29 +366,26 @@ with detection scores and optional world coordinates. For VisDrone Video,
 writes Multi-Object Tracking split roots, and `variant="auto"` (default)
 preserves the loaded sequence variant when present.
 
-IC YOLO classification writes split/class/image directories:
+YOLO classification writes split/class/image directories; YOLO object detection
+writes `images/<split>` and mirrored `labels/<split>` directories plus
+`data.yaml`:
 
 ```python
-from datamaite import load_ic, write
+from datamaite import load_ic, load_od, write
 
 ic = load_ic("/path/to/yolo-cls", dataset_format="yolo")
 write(ic, "/path/to/yolo-cls-out", output_format="yolo")
+
+od = load_od("/path/to/yolo-det", dataset_format="yolo")
+write(od, "/path/to/yolo-det-out", output_format="yolo")
 ```
 
-HMIE, Hugging Face Video Classification, MOTChallenge, TAO, and VisDrone Video
-have round-trip writers:
-`load_mot(..., dataset_format="hmie") → write(output_format="hmie") →
-load_mot(..., dataset_format="hmie")`,
-`load_vc(...) →
-write(output_format="huggingface_video_classification") →
-load_vc(...)`,
-`load_mot(..., dataset_format="motchallenge") → write(output_format="motchallenge") →
-load_mot(..., dataset_format="motchallenge")`,
-`load_mot(..., dataset_format="tao") → write(output_format="tao") →
-load_mot(..., dataset_format="tao")`, and
-`load_mot(..., dataset_format="visdrone_video") → write(output_format="visdrone_video") →
-load_mot(..., dataset_format="visdrone_video")` recover the same box/category/frame content
-represented by `BoxTrackDataset`. Adding a new output format is a `Writer`
+HMIE, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone Video,
+COCO OD, YOLO OD, and YOLO IC have round-trip writers. The MOT routes recover
+the same box/category/frame content represented by `BoxTrackDataset`; VC/OD/IC
+routes preserve their task records within the constraints of each format (for
+example, YOLO OD stores normalized boxes and class indices, not COCO
+segmentation). Adding a new output format is a `Writer`
 subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
 
 ## CLI Usage
@@ -409,7 +417,7 @@ Exit codes: `0` = pass, `1` = warnings only, `2` = errors present.
 
 Validation is currently implemented only for HMIE/Scale. For any non-HMIE
 `--format`, `datamaite validate` raises `NotImplementedError`; loaders/writers
-for COCO, YOLO IC, MOTChallenge, TAO, VisDrone, and Hugging Face VC do not imply
+for COCO, YOLO IC/OD, MOTChallenge, TAO, VisDrone, and Hugging Face VC do not imply
 on-disk validation support yet.
 
 For HMIE/Scale, the validator runs four checks against each dataset:

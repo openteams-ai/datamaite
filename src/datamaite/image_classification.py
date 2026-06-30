@@ -89,8 +89,11 @@ def load_ic(
     _require_dataset_root(root)
     try:
         loader = get_loader(dataset_format, task=Task.IC, variant=registry_variant)
-    except ValueError:
-        loader = get_loader(dataset_format, variant=registry_variant)
+    except ValueError as task_error:
+        try:
+            loader = get_loader(dataset_format, variant=registry_variant)
+        except ValueError:
+            raise task_error from None
     dataset = loader.load(root, **options)
     if not isinstance(dataset, ImageClassificationDataset):
         raise TypeError(f"load_ic expected an ImageClassificationDataset, got {type(dataset).__name__}")

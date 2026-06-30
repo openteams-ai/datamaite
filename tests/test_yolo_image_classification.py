@@ -21,7 +21,8 @@ from datamaite import (
     load_ic,
     write,
 )
-from datamaite._formats.yolo.classification import YoloImageClassificationLoader, YoloImageClassificationWriter
+from datamaite._formats.yolo.loader import YoloImageClassificationLoader
+from datamaite._formats.yolo.writer import YoloImageClassificationWriter
 from datamaite.loaders import get_loader
 from datamaite.taxonomy import CategoryEntry, Taxonomy
 from datamaite.writers import get_writer
@@ -131,7 +132,7 @@ class TestYoloImageClassificationLoader:
         _write_image(root / "train" / "cat" / "real.jpg", b"cat-real")
         os.symlink(secret, root / "train" / "cat" / "evil.jpg")
 
-        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo.classification"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
             ds = load_ic(root, dataset_format="yolo")
 
         # The symlink pointing outside the dataset root is dropped, not ingested
@@ -192,7 +193,7 @@ class TestYoloImageClassificationWriter:
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy),
         )
 
-        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo.classification"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
             files = write(ds, tmp_path, output_format="yolo", verbose=True)
 
         assert files == [tmp_path / "data.yaml"]
@@ -308,7 +309,7 @@ class TestYoloImageClassificationWriterSkipPaths:
             ImageClassificationSample(image_id="x", image_bytes=b"img", file_name="x.jpg", labels=())
         )
 
-        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo.classification"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
             files = write(ds, tmp_path, output_format="yolo", write_data_yaml=False, verbose=True)
 
         assert files == []
@@ -324,7 +325,7 @@ class TestYoloImageClassificationWriterSkipPaths:
             )
         )
 
-        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo.classification"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
             files = write(ds, dest, output_format="yolo", write_data_yaml=False, verbose=True)
 
         assert files == []
@@ -344,7 +345,7 @@ class TestYoloImageClassificationWriterSkipPaths:
             )
         )
 
-        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo.classification"):
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
             files = write(ds, dest, output_format="yolo", write_data_yaml=False, verbose=True)
 
         assert files == []

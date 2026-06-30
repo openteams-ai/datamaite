@@ -65,7 +65,7 @@ _BUILTIN_WRITER_MODULES = (
     "datamaite._formats.motchallenge.writer",
     "datamaite._formats.tao.writer",
     "datamaite._formats.visdrone.writer",
-    "datamaite._formats.yolo.classification",
+    "datamaite._formats.yolo.writer",
 )
 _BUILTIN_WRITERS_IMPORTED = False
 
@@ -203,11 +203,17 @@ def write(
         raise TypeError(f"Cannot infer writer task from {type(dataset).__name__}: missing Task-valued `task`")
     try:
         writer = get_writer(output_format, task=task, variant=output_variant)
-    except ValueError:
+    except ValueError as task_error:
         # Keep cross-task failures actionable when the requested output format
         # has a single writer for another task (e.g. MOT dataset -> COCO OD):
-        # select that writer and let the consumes check raise TypeError.
-        writer = get_writer(output_format, variant=output_variant)
+        # select that writer and let the consumes check raise TypeError. If the
+        # format is itself multi-task (e.g. YOLO IC + OD), there is no single
+        # cross-task writer to type-check against, so preserve the clearer
+        # "no writer for this task" registry error.
+        try:
+            writer = get_writer(output_format, variant=output_variant)
+        except ValueError:
+            raise task_error from None
     if not isinstance(dataset, writer.consumes):
         raise TypeError(
             f"{writer.format.value!r} writer consumes {writer.consumes.__name__}; "

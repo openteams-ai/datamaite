@@ -101,7 +101,7 @@ def load_od(
     The OD analogue of :func:`datamaite.loaders.load_mot`: pins the return
     type to :class:`ObjectDetectionDataset` (a native MAITE object-detection
     dataset) and dispatches through the shared loader registry by wire
-    ``dataset_format`` (COCO today). Asking for a non-OD format raises
+    ``dataset_format`` (COCO or YOLO today). Asking for a non-OD format raises
     ``TypeError``. ``**options`` are forwarded to the format loader (e.g.
     COCO's ``annotation_file`` / ``images_dir``).
     """
@@ -113,8 +113,11 @@ def load_od(
     _require_dataset_root(root)
     try:
         loader = get_loader(dataset_format, task=Task.OD, variant=registry_variant)
-    except ValueError:
-        loader = get_loader(dataset_format, variant=registry_variant)
+    except ValueError as task_error:
+        try:
+            loader = get_loader(dataset_format, variant=registry_variant)
+        except ValueError:
+            raise task_error from None
     dataset = loader.load(root, **options)
     if not isinstance(dataset, ObjectDetectionDataset):
         raise TypeError(f"load_od expected an ObjectDetectionDataset, got {type(dataset).__name__}")

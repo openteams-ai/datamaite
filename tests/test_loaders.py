@@ -194,3 +194,10 @@ class TestLoadVc:
         default_happy_dataset(tmp_path)
         with pytest.raises(TypeError, match="load_vc expected a VideoClassificationDataset"):
             load_vc(tmp_path, dataset_format="hmie")
+
+    def test_task_first_loaders_preserve_task_error_for_multitask_formats(self, tmp_path: Path) -> None:
+        for helper in (load_mot, load_vc):
+            with pytest.raises(ValueError, match="No loader registered") as exc_info:
+                helper(tmp_path, dataset_format="yolo")
+
+            assert "Multiple loaders registered" not in str(exc_info.value)
