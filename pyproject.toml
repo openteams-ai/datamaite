@@ -118,9 +118,11 @@ exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
 # ``poetry install --extras dev``). [tool.poetry] only carries what [project]
 # cannot express: the version fallback and the src-layout package mapping.
 [tool.poetry]
-# Version is managed by hatch-vcs from git tags; Poetry reads this
-# as a fallback. The actual wheel version comes from _version.py.
-version = "0.2.0"
+# Version is managed by hatch-vcs from git tags; the actual wheel version comes
+# from _version.py. Poetry only reads this as a fallback. Hardcoded to the
+# current release for now; a follow-up MR will wire up / demonstrate the
+# hatch-vcs tag-driven versioning that supersedes this value.
+version = "0.2.1"
 packages = [{ include = "datamaite", from = "src" }]
 
 # ---------------------------------------------------------------------------
