@@ -32,7 +32,7 @@ Sphinx source lives in `docs/`. Output goes to `public/` (git-ignored).
 
 ```bash
 # Install docs dependencies
-poetry install --with docs
+poetry install --extras docs
 
 # Build HTML
 poetry run sphinx-build -b html docs public

@@ -47,11 +47,11 @@ variables:
     - poetry check
   cache:
     # Key the venv cache per job (CI_JOB_NAME), not just per Python version.
-    # Jobs install different dependency groups (lint/typecheck/test use
-    # --with dev; build runs `poetry build` with none), but they previously
+    # Jobs install different dependency extras (lint/typecheck/test use
+    # --extras dev; build runs `poetry build` with none), but they previously
     # shared one key per Python version. Last-writer-wins then let a job
-    # restore a .venv another job had populated without the dev group, so
-    # `poetry install --with dev` no-op'd and `pre-commit` was missing.
+    # restore a .venv another job had populated without the dev extra, so
+    # `poetry install --extras dev` no-op'd and `pre-commit` was missing.
     - key:
         files:
           - poetry.lock
@@ -80,7 +80,7 @@ lint:
   variables:
     VERSION: "3.11"
   script:
-    - poetry install --with dev --no-root
+    - poetry install --extras dev --no-root
     - poetry run pre-commit run --all-files
 
 # ---------------------------------------------------------------------------
@@ -93,8 +93,9 @@ pyright:
   variables:
     VERSION: "3.11"
   script:
-    # Task extras so cv2/av resolve; --with maite for conformance imports.
-    - poetry install --with dev --with maite -E all
+    # Task extras (all) + maite so cv2/numpy/av/maite resolve and pyright
+    # stays at 0 warnings; dev for the toolchain.
+    - poetry install --extras dev --extras maite --extras all
     - poetry run pyright src/
 
 # ---------------------------------------------------------------------------
@@ -144,7 +145,9 @@ pages:
   variables:
     VERSION: "3.12"
   script:
-    - poetry install --with docs
+    # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
+    # deps the tutorial notebooks import when myst-nb executes them.
+    - poetry install --extras docs
     - poetry run sphinx-build -b html docs public
   artifacts:
     paths:
@@ -162,7 +165,9 @@ pages-preview:
   variables:
     VERSION: "3.12"
   script:
-    - poetry install --with docs
+    # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
+    # deps the tutorial notebooks import when myst-nb executes them.
+    - poetry install --extras docs
     - poetry run sphinx-build -b html docs public
   artifacts:
     expose_as: "Documentation Preview"
@@ -185,8 +190,9 @@ pages-preview:
   stage: test
   timeout: 30m
   script:
-    # Task extras add media decoders; --with maite for structural conformance tests.
-    - poetry install --with dev --with maite -E all
+    # all (cv2/av) media decoders + maite extra (maite/numpy/av) so the
+    # datamaite.maite tests run and count toward the 90% coverage gate; dev tooling.
+    - poetry install --extras dev --extras maite --extras all
     - poetry run pytest tests -vvv --cov=datamaite --cov-report term-missing
         --cov-report xml:coverage_report.xml --cov-fail-under=90
   coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
@@ -250,7 +256,7 @@ integration:
         "${CI_PROJECT_DIR}/example-data"
     - git -C "${CI_PROJECT_DIR}/example-data" lfs pull
     - export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
-    - poetry install --with dev --with maite -E all
+    - poetry install --extras dev --extras maite --extras all
     # -s so the end-of-run matrix summary table is shown in the job log.
     # Scope to tests/e2e (the e2e tier) and the `integration` marker.
     - poetry run pytest tests/e2e -m integration -v -s --cov-fail-under=0

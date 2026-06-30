@@ -13,10 +13,12 @@ structure/annotation validation do not pull native media stacks.
 | `pip install datamaite[od]` | core + OpenCV | still-image object-detection pixel decode |
 | `pip install datamaite[ic]` | core + OpenCV | still-image image-classification pixel decode |
 | `pip install datamaite[all]` | union of task extras | all supported media/pixel decode paths |
+| `pip install datamaite[maite]` | core + MAITE + PyAV | optional MAITE package plus MOT-video runtime for interoperability/conformance checks |
 
-`maite` itself is not a runtime dependency. Datamaite datasets conform to MAITE
-protocols structurally; the package is used only by development/conformance
-tests.
+`maite` itself is not a core runtime dependency. Datamaite datasets conform to
+MAITE protocols structurally; the `maite` extra is available for consumers and
+conformance tests that want the MAITE package installed alongside the adapters.
+It includes PyAV because the MOT MAITE view decodes video-backed sequences.
 
 ## Dependency direction
 
@@ -34,16 +36,20 @@ not import `cv2`, `av`, or `maite`.
 
 ## CI contract
 
-CI installs `--with dev -E all` for lint/typecheck/tests: the `dev` group brings
-in test tooling plus `maite` for structural conformance tests, while `all` brings
-in task media decoders. A dedicated packaging smoke check should continue to use
-the base project metadata so `poetry check` and `poetry build` verify the wheel
-without requiring deprecated dependency-named extras.
+CI installs PEP 621 extras instead of Poetry dependency groups. Lint uses
+`--extras dev`; typecheck/tests compose `--extras dev --extras maite --extras all`
+so tooling, MAITE conformance deps, and task media decoders are present. Docs
+jobs install `--extras docs`; that extra lists Sphinx, the notebook kernel, and
+runtime imports directly because Poetry extras cannot include other extras. A
+dedicated packaging smoke check should continue to use the base project metadata
+so `poetry check` and `poetry build` verify the wheel without optional extras.
 
 ## Deprecated extras
 
-The previous dependency-named `video` and `maite` extras were removed before the
-public API stabilized. Use task extras instead:
+The previous dependency-named `video` extra was removed before the public API
+stabilized. Use task extras instead:
 
-- `video` → `fmv`
-- `maite` → usually no extra for targets; `fmv`, `od`, or `ic` when pixels are decoded
+- `video` → `fmv` for video/MOT media, or `all` for every task media stack
+
+The `maite` extra remains as an interoperability/conformance convenience; it is
+not required for core annotation loading or target construction.
