@@ -7,19 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-30
+
 ### Added
 
+- Object-detection and image-classification formats via task-aware registries: a
+  COCO object-detection loader and writer (`load_od(..., dataset_format="coco")`,
+  `write(..., output_format="coco")`) and a YOLO/Ultralytics image-classification
+  loader and writer (`load_ic(..., dataset_format="yolo")`). A single
+  `DatasetFormat` can now back more than one task, dispatched by `(task, format)`.
+- YOLO/Ultralytics object-detection loader and writer
+  (`load_od(..., dataset_format="yolo")`, `write(..., output_format="yolo")`) with
+  standard `images/<split>` + `labels/<split>` and `<split>/images` +
+  `<split>/labels` layouts, `data.yaml` discovery, and `load → write → load`
+  round-tripping (boxes are clipped to the image on write).
 - `datamaite.load_vc(root, dataset_format=…)`: a task-first public entry point
   for video classification, the analogue of `load_mot`. It pins the return type
   to `VideoClassificationDataset` and raises `TypeError` if the resolved format
   produces a different task's dataset. Defaults to
   `dataset_format="huggingface_video_classification"`.
-- YOLO/Ultralytics object-detection loader and writer (`load_od(..., dataset_format="yolo")`,
-  `write(..., output_format="yolo")`) with standard `images/<split>` + `labels/<split>`
-  and `<split>/images` + `<split>/labels` layout support.
+- Hugging Face VideoFolder-style video-classification writer, completing the
+  `load → write` round trip for the `VideoClassificationDataset` model.
 
 ### Changed
 
+- **Breaking:** the package, distribution, and CLI have been renamed from
+  `databridge` to `datamaite`. Update imports (`import datamaite`), the console
+  entry point (`datamaite validate …`), and the dependency name; there is no
+  `databridge` compatibility shim.
 - **Breaking:** `load_huggingface_video_classification` is no longer part of the
   public `datamaite` API. Use the task-first `load_vc(...)` instead (the
   format-specific helper lives on internally in
@@ -45,6 +60,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with ``verbose=True``. The full list is one path per frame image, which
   floods interactive/REPL output; the file list is now opt-in. Side effects
   (the files written) are unchanged.
+- Optional dependencies are declared once via PEP 621
+  `[project.optional-dependencies]` instead of duplicated Poetry dependency
+  groups, so the extras stay in sync across Poetry, uv, and pip.
+
+### Fixed
+
+- Corrected stale optional-dependency references (e.g. `datamaite[video]`) so
+  installs resolve to the current task-oriented extras (`datamaite[fmv]`,
+  `datamaite[all]`, …).
+
+### Documentation
+
+- Added a Sphinx documentation build (`docs/`).
 
 ## [0.2.0] - 2026-06-16
 
