@@ -12,7 +12,7 @@ A writer does the inverse. This module defines the input side:
 
 Registrations are keyed by ``(Task, DatasetFormat, variant)``. The task and
 variant axes matter because a single wire format family can serve multiple tasks
-(e.g. YOLO classification vs future YOLO object detection; Hugging Face video
+(e.g. YOLO classification vs YOLO object detection; Hugging Face video
 classification vs future image classification) without those loaders clobbering
 each other. Adding an input format means writing a ``Loader`` subclass and
 registering it; nothing else in the package changes. See ``docs/architecture.md``
@@ -95,7 +95,7 @@ _BUILTIN_LOADER_MODULES = (
     "datamaite._formats.motchallenge.loader",
     "datamaite._formats.tao.loader",
     "datamaite._formats.visdrone.loader",
-    "datamaite._formats.yolo.classification",
+    "datamaite._formats.yolo.loader",
 )
 _BUILTIN_LOADERS_IMPORTED = False
 
@@ -305,11 +305,16 @@ def load_mot(
     _require_dataset_root(root)
     try:
         loader = get_loader(dataset_format, task=Task.MOT, variant=registry_variant)
-    except ValueError:
+    except ValueError as task_error:
         # Fall back to the format's sole loader so a wrong-task format (e.g. COCO,
         # which is OD) loads and then fails the BoxTrackDataset check below with a
-        # clear "load_mot expected a BoxTrackDataset" message.
-        loader = get_loader(dataset_format, variant=registry_variant)
+        # clear "load_mot expected a BoxTrackDataset" message. If the format is
+        # itself multi-task (e.g. YOLO IC + OD), preserve the clearer task-pinned
+        # registry error instead of replacing it with an ambiguous generic one.
+        try:
+            loader = get_loader(dataset_format, variant=registry_variant)
+        except ValueError:
+            raise task_error from None
     dataset = loader.load(root, **options)
     if not isinstance(dataset, BoxTrackDataset):
         raise TypeError(f"load_mot expected a BoxTrackDataset, got {type(dataset).__name__}")
@@ -336,8 +341,11 @@ def load_vc(
     _require_dataset_root(root)
     try:
         loader = get_loader(dataset_format, task=Task.VC, variant=registry_variant)
-    except ValueError:
-        loader = get_loader(dataset_format, variant=registry_variant)
+    except ValueError as task_error:
+        try:
+            loader = get_loader(dataset_format, variant=registry_variant)
+        except ValueError:
+            raise task_error from None
     dataset = loader.load(root, **options)
     if not isinstance(dataset, VideoClassificationDataset):
         raise TypeError(f"load_vc expected a VideoClassificationDataset, got {type(dataset).__name__}")
@@ -355,13 +363,23 @@ def _detect_format(
     _ensure_builtin_loaders()
     resolved_task = _coerce_task(task)
     requested_variant = str(variant or "default")
+    matches: list[LoaderKey] = []
     for key in available_loader_keys():
         if resolved_task is not None and key.task != resolved_task:
             continue
         if requested_variant != "default" and key.variant != requested_variant:
             continue
         if _LOADERS[key].sniff(root):
-            return key.format, key.task, key.variant
+            matches.append(key)
+    if len(matches) == 1:
+        key = matches[0]
+        return key.format, key.task, key.variant
+    if matches:
+        choices = ", ".join(f"{k.task.value}:{k.format.value}:{k.variant}" for k in matches)
+        raise ValueError(
+            f"Ambiguous autodetect for {root!r}; matched multiple loaders ({choices}). "
+            "Pass dataset_format/task explicitly."
+        )
     known = ", ".join(f"{k.task.value}:{k.format.value}:{k.variant}" for k in available_loader_keys()) or "(none)"
     raise ValueError(
         f"Could not autodetect dataset format for {root!r}; pass dataset_format explicitly (available: {known})"

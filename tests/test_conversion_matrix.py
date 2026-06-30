@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from datamaite import convert
-from datamaite._types import DatasetFormat
+from datamaite._types import DatasetFormat, Task
 from datamaite.loaders import available_formats, load
 from datamaite.model import BoxTrackDataset
 from datamaite.writers import available_output_formats, get_writer
@@ -75,8 +75,8 @@ def _reload_root(dest: Path, output_format: DatasetFormat) -> Path:
 WRITABLE_FORMATS = sorted(
     (
         fmt
-        for fmt in set(available_formats()) & set(available_output_formats())
-        if get_writer(fmt).consumes is BoxTrackDataset
+        for fmt in set(available_formats(task=Task.MOT)) & set(available_output_formats(task=Task.MOT))
+        if get_writer(fmt, task=Task.MOT).consumes is BoxTrackDataset
     ),
     key=lambda fmt: fmt.value,
 )

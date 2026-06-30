@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `VideoClassificationDataset` and raises `TypeError` if the resolved format
   produces a different task's dataset. Defaults to
   `dataset_format="huggingface_video_classification"`.
+- YOLO/Ultralytics object-detection loader and writer (`load_od(..., dataset_format="yolo")`,
+  `write(..., output_format="yolo")`) with standard `images/<split>` + `labels/<split>`
+  and `<split>/images` + `<split>/labels` layout support.
 
 ### Changed
 
@@ -25,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `load_<task>` per task (`load_mot`, `load_od`, `load_ic`, `load_vc`) —
   matching how the per-format MOT `load_<format>` helpers were already made
   internal.
+- **Breaking:** `load_yolo_image_classification` is no longer part of the public
+  `datamaite` API. Use `load_ic(..., dataset_format="yolo")` instead.
 - `datamaite.load` (and task-first loaders like `load_mot` / `load_vc`) now fail
   fast on a bad dataset root: a nonexistent path raises `FileNotFoundError` and
   a non-directory path raises
@@ -32,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that exists but yields no loadable items still returns an empty dataset, now
   with a `WARNING` so an empty result (e.g. wrong format or wrong subdirectory)
   is never silent.
+- `datamaite.load(..., dataset_format=None)` now raises on ambiguous sniff
+  matches instead of picking the first registered loader, so multi-task formats
+  like YOLO cannot be silently autodetected as the wrong task.
 - `datamaite.write` (and `convert`, which forwards to it) now return ``None``
   by default and only return the ``list[Path]`` of files written when called
   with ``verbose=True``. The full list is one path per frame image, which

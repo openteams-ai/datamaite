@@ -9,8 +9,9 @@ JSON with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only validation format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout). On
 the loading side, flat-folder MP4 video, Hugging Face Video Classification,
-MOTChallenge, TAO, VisDrone Video, COCO object detection, and YOLO image
-classification are also implemented loaders. Validation remains HMIE-only even
+MOTChallenge, TAO, VisDrone Video, COCO object detection, YOLO image
+classification, and YOLO object detection are also implemented loaders.
+Validation remains HMIE-only even
 when a non-HMIE format has a loader/writer; adding validation for another format
 is a separate feature.
 
@@ -24,8 +25,8 @@ writers* that serialise it back out to another on-disk format. Hugging Face
 Video Classification is intentionally separate: it returns
 `VideoClassificationDataset` source records because MAITE 0.9.5 has no video
 classification protocol, so it does not masquerade as the MOT surface. COCO OD
-and YOLO image classification are implemented as task siblings, not as fake
-one-frame videos. Solid = implemented today; dashed = planned.
+and YOLO image classification/object detection are implemented as task siblings,
+not as fake one-frame videos. Solid = implemented today; dashed = planned.
 
 ```mermaid
 flowchart LR
@@ -48,7 +49,8 @@ flowchart LR
         LT["<b>load_mot</b><br/>dataset_format='tao'"]
         LV["<b>load_mot</b><br/>dataset_format='visdrone_video'"]
         LC["load_od<br/>dataset_format='coco'"]
-        LY["load_ic<br/>dataset_format='yolo'"]
+        LYOD["load_od<br/>dataset_format='yolo'"]
+        LYIC["load_ic<br/>dataset_format='yolo'"]
     end
 
     HUB[/"<b>model.py</b><br/>BoxTrackDataset<br/>VideoSequence · BoxAnnotation"/]
@@ -84,7 +86,8 @@ flowchart LR
     TAOIN --> LT
     VISIN --> LV
     COCOIN --> LC
-    YOLOIN --> LY
+    YOLOIN --> LYOD
+    YOLOIN --> LYIC
     LH --> HUB
     LF --> HUB
     LHF --> VCHUB
@@ -92,13 +95,15 @@ flowchart LR
     LT --> HUB
     LV --> HUB
     LC --> ODHUB
-    LY --> ICHUB
+    LYOD --> ODHUB
+    LYIC --> ICHUB
     VCHUB --> VCREC
     HUB --> MAITE
     HUB --> TM
     HUB --> TT
     HUB --> TV
     ODHUB --> TC
+    ODHUB --> TY
     ICHUB --> TY
     ODHUB --> MAITEOD
     ICHUB --> MAITEIC
@@ -115,20 +120,20 @@ flowchart LR
     classDef impl fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class HUB,ODHUB,ICHUB,VCHUB hub;
-    class LH,LF,LHF,LM,LT,LV,LC,LY,TM,TT,TV,TY,TC,MAITE,MAITEOD,MAITEIC,VCREC impl;
+    class LH,LF,LHF,LM,LT,LV,LC,LYOD,LYIC,TM,TT,TV,TY,TC,MAITE,MAITEOD,MAITEIC,VCREC impl;
     class MAITEOUT,MP4IN,HFIN,MOTIN,TAOIN,VISIN,COCOIN,YOLOIN,MOTOUT,TAOOUT,VISOUT,YOLOUT,COCOUT impl;
 ```
 
 Today, MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 reached through `load_mot(dataset_format=…)`; COCO OD is reached through
-`load_od(dataset_format="coco")`; YOLO image classification is reached through
-`load_ic(dataset_format="yolo")`; Hugging Face Video Classification is reached
-through `load_vc(dataset_format=…)`. The HMIE validation pipeline is the only
-validator. HMIE, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone
-Video, COCO OD, and YOLO IC writers are implemented. Hugging Face Video
-Classification returns its own `VideoClassificationDataset` records and has no
-MAITE surface yet. See [Loading](#loading--hmie-loader) for how MOT loaders
-build the box-track model,
+`load_od(dataset_format="coco")` or `load_od(dataset_format="yolo")`; YOLO image
+classification is reached through `load_ic(dataset_format="yolo")`; Hugging Face
+Video Classification is reached through `load_vc(dataset_format=…)`. The HMIE
+validation pipeline is the only validator. HMIE, Hugging Face Video
+Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, YOLO OD, and YOLO IC
+writers are implemented. Hugging Face Video Classification returns its own
+`VideoClassificationDataset` records and has no MAITE surface yet. See
+[Loading](#loading--hmie-loader) for how MOT loaders build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
 surface, and [Writer architecture](#writer-architecture--writerspy) for the
 writer contract.
@@ -195,7 +200,9 @@ src/datamaite/
             loader.py                CocoLoader: COCO OD -> ObjectDetectionDataset
             writer.py                CocoWriter: ObjectDetectionDataset -> COCO OD
         yolo/
-            classification.py        YOLO IC folder reader/writer -> ImageClassificationDataset
+            loader.py                YOLO IC/OD readers -> ImageClassificationDataset/ObjectDetectionDataset
+            writer.py                YOLO IC/OD writers -> ImageFolder or images/labels roots
+            _common.py               Shared YOLO layout/path helpers
 docs/
     architecture.md                              This file
     schemas/
@@ -468,7 +475,8 @@ flowchart TD
     TAO["<b>TaoLoader</b><br/>(_formats/tao/loader.py)"]
     VIS["<b>VisDroneVideoLoader</b><br/>(_formats/visdrone/loader.py)"]
     COCO["<b>CocoLoader</b><br/>(_formats/coco/loader.py)"]
-    YOLOIC["<b>YoloImageClassificationLoader</b><br/>(_formats/yolo/classification.py)"]
+    YOLOIC["<b>YoloImageClassificationLoader</b><br/>(_formats/yolo/loader.py)"]
+    YOLOOD["<b>YoloObjectDetectionLoader</b><br/>(_formats/yolo/loader.py)"]
     NEW["Other loaders …<br/>(future)"]
 
     LOAD -->|get_loader| REG
@@ -480,6 +488,7 @@ flowchart TD
     REG --> VIS
     REG --> COCO
     REG --> YOLOIC
+    REG --> YOLOOD
     REG -.-> NEW
     HMIE -->|subclasses| BASE
     FLAT -->|subclasses| BASE
@@ -489,6 +498,7 @@ flowchart TD
     VIS -->|subclasses| BASE
     COCO -->|subclasses| BASE
     YOLOIC -->|subclasses| BASE
+    YOLOOD -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_loader| REG
     FLAT -->|@register_loader| REG
@@ -498,6 +508,7 @@ flowchart TD
     VIS -->|@register_loader| REG
     COCO -->|@register_loader| REG
     YOLOIC -->|@register_loader| REG
+    YOLOOD -->|@register_loader| REG
     NEW -.->|@register_loader| REG
 
     classDef entry fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
@@ -506,7 +517,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class LOAD entry;
     class REG store;
-    class HMIE,FLAT,HF,MOT,TAO,VIS,COCO,YOLOIC impl;
+    class HMIE,FLAT,HF,MOT,TAO,VIS,COCO,YOLOIC,YOLOOD impl;
     class NEW planned;
 ```
 
@@ -519,7 +530,7 @@ flowchart TD
   (default `False`).
 - **`register_loader`.** A decorator that records
   `(Task, DatasetFormat, variant) → loader-class` in the registry. This lets a
-  shared family like YOLO register `Task.IC` today and `Task.OD` later without
+  shared family like YOLO register both `Task.IC` and `Task.OD` without
   clobbering either loader.
 - **`load(root, *, task=…, dataset_format=…, registry_variant=…, **options)`.**
   The generic entry point. `dataset_format` accepts a `DatasetFormat` or string;
@@ -778,7 +789,8 @@ flowchart TD
     TAO["<b>TaoWriter</b><br/>(_formats/tao/writer.py)"]
     VIS["<b>VisDroneVideoWriter</b><br/>(_formats/visdrone/writer.py)"]
     COCO["<b>CocoWriter</b><br/>(_formats/coco/writer.py)"]
-    YOLOIC["<b>YoloImageClassificationWriter</b><br/>(_formats/yolo/classification.py)"]
+    YOLOIC["<b>YoloImageClassificationWriter</b><br/>(_formats/yolo/writer.py)"]
+    YOLOOD["<b>YoloObjectDetectionWriter</b><br/>(_formats/yolo/writer.py)"]
     NEW["Other writers …<br/>(future)"]
 
     CONVERT -->|load → write| WRITE
@@ -789,6 +801,7 @@ flowchart TD
     REG --> VIS
     REG --> COCO
     REG --> YOLOIC
+    REG --> YOLOOD
     REG -.-> NEW
     HMIE -->|subclasses| BASE
     MOT -->|subclasses| BASE
@@ -796,6 +809,7 @@ flowchart TD
     VIS -->|subclasses| BASE
     COCO -->|subclasses| BASE
     YOLOIC -->|subclasses| BASE
+    YOLOOD -->|subclasses| BASE
     NEW -.->|subclasses| BASE
     HMIE -->|@register_writer| REG
     MOT -->|@register_writer| REG
@@ -803,6 +817,7 @@ flowchart TD
     VIS -->|@register_writer| REG
     COCO -->|@register_writer| REG
     YOLOIC -->|@register_writer| REG
+    YOLOOD -->|@register_writer| REG
     NEW -.->|@register_writer| REG
 
     classDef entry fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
@@ -811,7 +826,7 @@ flowchart TD
     classDef planned fill:#f5f5f5,stroke:#9e9e9e,color:#616161;
     class CONVERT,WRITE entry;
     class REG store;
-    class HMIE,MOT,TAO,VIS,COCO,YOLOIC impl;
+    class HMIE,MOT,TAO,VIS,COCO,YOLOIC,YOLOOD impl;
     class NEW planned;
 ```
 
@@ -915,10 +930,10 @@ constraints. The abstraction grows a **task axis** rather than stretching
 
 **Status:** `Task`, `geometry.py`, `taxonomy.py`, `ObjectDetectionDataset`,
 `ImageClassificationDataset`, `VideoClassificationDataset`, and task-aware
-`(Task, Format, variant)` loader/writer registries are implemented. COCO is the
-reference OD reader/writer; YOLO/Ultralytics classification folder layout is the
-reference IC reader/writer. Additional formats should plug into these task
-models rather than inventing task hybrids.
+`(Task, Format, variant)` loader/writer registries are implemented. COCO and
+YOLO/Ultralytics detection are OD reader/writers; YOLO/Ultralytics
+classification folder layout is the reference IC reader/writer. Additional
+formats should plug into these task models rather than inventing task hybrids.
 
 ### Sibling dataset classes (not one polymorphic dataset)
 
@@ -976,7 +991,7 @@ explicit opt-in operation, not implicit writer dispatch.
 ```mermaid
 flowchart LR
     fM["MOT formats:<br/>HMIE · MOTChallenge · TAO · VisDrone-VID · flat-MP4"] <--> IRM(["BoxTrackDataset<br/>· MOT ·"])
-    fO["OD formats:<br/>COCO implemented · YOLO/Pascal-VOC/KITTI future"] <--> IRO(["ObjectDetectionDataset<br/>· OD ·"])
+    fO["OD formats:<br/>COCO · YOLO implemented<br/>Pascal-VOC/KITTI future"] <--> IRO(["ObjectDetectionDataset<br/>· OD ·"])
     fI["IC formats:<br/>YOLO classification implemented · HF/ImageFolder future"] <--> IRI(["ImageClassificationDataset<br/>· IC ·"])
     fV["VC formats:<br/>HF VideoFolder"] --> IRV(["VideoClassificationDataset<br/>· VC ·<br/>no MAITE protocol"])
     IRM -. "explicit lossy bridge only<br/>(not implicit dispatch)" .-> IRO
@@ -1005,14 +1020,14 @@ VisDrone's VID/MOT/DET layouts are otherwise indistinguishable (the current
 load_mot(root, *, dataset_format, registry_variant="default", **format_options) -> BoxTrackDataset
 load_od (root, *, dataset_format, registry_variant="default", **format_options) -> ObjectDetectionDataset
 load_ic (root, *, dataset_format="yolo", registry_variant="default", **format_options) -> ImageClassificationDataset
-# VC currently has a format helper: load_huggingface_video_classification(...)
+load_vc (root, *, dataset_format="huggingface_video_classification", registry_variant="default", **format_options) -> VideoClassificationDataset
 # generic dispatch underneath: load(root, *, task, dataset_format, registry_variant)
 ```
 
 The task lives in the call (pins the return type, disambiguates multi-task formats);
 `variant` selects among same-task layouts. Per-format `load_*` helpers remain internal;
-the top-level public API uses task-first wrappers (`load_mot`, `load_od`, `load_ic`)
-instead of forcing each wire format to own a public function.
+the top-level public API uses task-first wrappers (`load_mot`, `load_od`, `load_ic`,
+`load_vc`) instead of forcing each wire format to own a public function.
 Writers stay object-driven (`write(dataset, format)` infers task from the dataset type).
 
 ### Generalized reader/writer interfaces

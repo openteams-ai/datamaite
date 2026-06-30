@@ -8,7 +8,7 @@ architecture (see [`../architecture.md`](../architecture.md)).
   verify it, and see how it is ready to export.
 - **`validators/hmie.ipynb`** — how to **validate** an HMIE / Scale dataset.
   HMIE is the only validation format implemented today; loaders/writers for
-  COCO, YOLO IC, MOTChallenge, TAO, VisDrone, and Hugging Face VC do not imply
+  COCO, YOLO IC/OD, MOTChallenge, TAO, VisDrone, and Hugging Face VC do not imply
   `datamaite.validate()` support.
 - **`exporters/<format>.ipynb`** — how to **export** the neutral `Dataset` to a
   given output format. One notebook per output format. Added as converters land
@@ -17,8 +17,8 @@ architecture (see [`../architecture.md`](../architecture.md)).
 ## Why this split
 
 datamaite is an N-to-M bridge. *Loaders* live on the **input** side
-(format/task-specific: HMIE, COCO OD, YOLO IC, …); *writers/converters* live on
-the **output** side (MOTChallenge, YOLO IC, COCO OD, …); task-specific neutral
+(format/task-specific: HMIE, COCO OD, YOLO IC/OD, …); *writers/converters* live on
+the **output** side (MOTChallenge, YOLO IC/OD, COCO OD, …); task-specific neutral
 datasets sit between them. Validation is deliberately narrower today:
 
 1. **Input validation** (`validators/hmie.ipynb`) — HMIE-only, on disk: *is the

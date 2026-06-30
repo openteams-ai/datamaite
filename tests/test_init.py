@@ -42,6 +42,10 @@ def test_public_api() -> None:
         VisDroneVideoWriter,
         VisionDataset,
         WriterCapabilities,
+        YoloImageClassificationLoader,
+        YoloImageClassificationWriter,
+        YoloObjectDetectionLoader,
+        YoloObjectDetectionWriter,
         load_mot,
         load_od,
         load_vc,
@@ -85,6 +89,10 @@ def test_public_api() -> None:
     assert CocoLoader is not None
     assert CocoWriter is not None
     assert WriterCapabilities is not None
+    assert YoloImageClassificationLoader is not None
+    assert YoloImageClassificationWriter is not None
+    assert YoloObjectDetectionLoader is not None
+    assert YoloObjectDetectionWriter is not None
     assert callable(load_mot)
     assert callable(load_vc)
     assert callable(validate)
@@ -92,7 +100,7 @@ def test_public_api() -> None:
 
 
 def test_per_format_load_functions_not_in_public_api() -> None:
-    """Per-format ``load_*`` functions are replaced by task-first ``load_mot`` / ``load_vc``.
+    """Per-format ``load_*`` helpers are replaced by task-first loaders.
 
     They live on internally (``datamaite._formats.<format>.loader``) but are no
     longer exposed on the top-level ``datamaite`` namespace.
@@ -106,8 +114,10 @@ def test_per_format_load_functions_not_in_public_api() -> None:
         "load_visdrone_video",
         "load_flat_mp4",
         "load_huggingface_video_classification",
+        "load_yolo_image_classification",
+        "load_yolo_object_detection",
     ):
-        assert not hasattr(datamaite, name), f"{name} should be removed from the public API (use load_mot/load_vc)"
+        assert not hasattr(datamaite, name), f"{name} should be removed from the public API (use load_<task>)"
 
 
 def test_validation_import_keeps_loader_and_writer_modules_lazy() -> None:
