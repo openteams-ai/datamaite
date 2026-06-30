@@ -74,6 +74,20 @@ dev = [
     "pyright>=1.1",
     "maite>=0.9,<0.10",
 ]
+# Docs toolchain plus notebook/runtime deps. myst-nb executes tutorial
+# notebooks during the Sphinx build, so their imports (cv2 / av / maite) and
+# the Jupyter kernel must be present. Poetry extras cannot include other extras,
+# so docs lists those runtime packages directly.
+docs = [
+    "maite>=0.9", # maite
+    "numpy>=1.24",# maite
+    "av>=11",     # maite/fmv/all
+    "ipykernel>=7.2", # notebook
+    "opencv-python-headless>=4.8", # fmv/od/ic/all
+    "sphinx>=7.0",
+    "myst-nb>=1.0",
+    "pydata-sphinx-theme>=0.15",
+]
 
 [project.scripts]
 datamaite = "datamaite._cli:main"
@@ -99,41 +113,15 @@ exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
 # ---------------------------------------------------------------------------
 # Poetry (CI and docs workflow)
 # ---------------------------------------------------------------------------
-# Poetry 2.x reads [project] for name, version, dependencies, and python
-# constraint. The [tool.poetry] section adds dependency groups and source
-# configuration that [project] cannot express.
+# Poetry 2.x reads [project] (PEP 621) for name, version, dependencies, the
+# python constraint, AND optional-dependencies (exposed as Poetry extras, e.g.
+# ``poetry install --extras dev``). [tool.poetry] only carries what [project]
+# cannot express: the version fallback and the src-layout package mapping.
 [tool.poetry]
 # Version is managed by hatch-vcs from git tags; Poetry reads this
 # as a fallback. The actual wheel version comes from _version.py.
 version = "0.2.0"
 packages = [{ include = "datamaite", from = "src" }]
-
-[tool.poetry.group.dev.dependencies]
-pre-commit = ">=3.6"
-pytest = ">=8.0"
-pytest-cov = ">=4.1"
-ruff = ">=0.4"
-bandit = { version = ">=1.7", extras = ["toml"] }
-pyright = ">=1.1"
-
-[tool.poetry.group.video.dependencies]
-opencv-python-headless = ">=4.8"
-
-[tool.poetry.group.maite.dependencies]
-maite = ">=0.9"
-numpy = ">=1.24"
-av = ">=11"
-
-[tool.poetry.group.notebook.dependencies]
-ipykernel = ">=7.2"
-
-[tool.poetry.group.docs]
-include-groups = ["notebook", "video", "maite"]
-
-[tool.poetry.group.docs.dependencies]
-sphinx = ">=7.0"
-myst-nb = ">=1.0"
-pydata-sphinx-theme = ">=0.15"
 
 # ---------------------------------------------------------------------------
 # Ruff

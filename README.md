@@ -8,7 +8,7 @@ A unified framework for dataset loading, conversion, and quality validation.
 # Clone and install
 git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite.git
 cd datamaite
-poetry install --with dev -E all
+poetry install --extras dev --extras all
 
 # Validate a dataset
 datamaite validate /path/to/dataset
@@ -72,9 +72,12 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 | `datamaite[od]` | OpenCV | still-image OD pixel decode |
 | `datamaite[ic]` | OpenCV | still-image IC pixel decode |
 | `datamaite[all]` | union of task extras | all task pixel/media paths |
+| `datamaite[maite]` | MAITE + PyAV | optional MAITE package plus MOT-video runtime for interoperability/conformance checks |
 
-`maite` itself is not a runtime dependency; datamaite datasets conform to MAITE
-protocols structurally. It is installed only for development/conformance tests.
+`maite` itself is not a core runtime dependency; datamaite datasets conform to
+MAITE protocols structurally. The `maite` extra is available for consumers and
+conformance tests that want the MAITE package installed alongside the adapters;
+it includes PyAV because the MOT MAITE view decodes video-backed sequences.
 See [docs/packaging.md](docs/packaging.md) for the dependency contract.
 
 ## Loading datasets (Python)
@@ -407,7 +410,7 @@ For HMIE/Scale, the validator runs four checks against each dataset:
 
 ```bash
 # Install with dev dependencies
-poetry install --with dev -E all
+poetry install --extras dev --extras all
 
 # Run tests
 poetry run pytest

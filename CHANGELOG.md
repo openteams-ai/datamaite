@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing discovery + Scale-schema layers instead of the hard-coded
   notebook walk; supports `annotation_dir` / `video_dir` overrides for
   flat layouts and an opt-in `require_video` mode that reads true frame
-  counts via the `video` extra.
+  counts via the `fmv` or `all` extra.
 - Writer architecture (`datamaite.writers`): a `Writer` base class defines
   the output-side contract (`BoxTrackDataset` → `list[Path]`), `register_writer`
   is the extension point, and `datamaite.write(ds, dest, output_format=…)`
@@ -61,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MOTChallenge loader and writer (`dataset_format="motchallenge"` /
   `MotChallengeWriter`).
 - TAO (Tracking Any Object) loader and writer (`dataset_format="tao"` /
-  `TaoWriter`); video-backed TAO writes need the `datamaite[video]` extra.
+  `TaoWriter`); video-backed TAO writes need the `datamaite[fmv]` or
+  `datamaite[all]` extra.
 - VisDrone video loader and writer (`dataset_format="visdrone"` /
   `VisDroneVideoWriter`).
 - Hugging Face VideoFolder-style video-classification loader
