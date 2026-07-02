@@ -5,12 +5,14 @@
 # backend for locking/installing. hatchling remains the wheel build backend
 # for `pip install` / `uv build` / `pixi run install`.
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "datamaite"
-dynamic = ["version"]
+# Static version: the single source of truth. Bump this on each release.
+# Exposed at runtime via importlib.metadata (see src/datamaite/_version.py).
+version = "0.2.1"
 description = "A unified framework for dataset loading, conversion, and quality validation."
 readme = "README.md"
 license = "Apache-2.0"
@@ -99,16 +101,6 @@ datamaite = "datamaite._cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/datamaite"]
 
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.version.raw-options]
-version_scheme = "guess-next-dev"
-local_scheme = "no-local-version"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/datamaite/_version.py"
-
 [tool.hatch.build.targets.sdist]
 # docs/ excluded so customer-facing tutorial notebooks (and any saved
 # cell outputs) never ship inside a distributed sdist.
@@ -120,13 +112,9 @@ exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
 # Poetry 2.x reads [project] (PEP 621) for name, version, dependencies, the
 # python constraint, AND optional-dependencies (exposed as Poetry extras, e.g.
 # ``poetry install --extras dev``). [tool.poetry] only carries what [project]
-# cannot express: the version fallback and the src-layout package mapping.
+# cannot express: the src-layout package mapping. The version is read from
+# [project].version (the single source of truth).
 [tool.poetry]
-# Version is managed by hatch-vcs from git tags; the actual wheel version comes
-# from _version.py. Poetry only reads this as a fallback. Hardcoded to the
-# current release for now; a follow-up MR will wire up / demonstrate the
-# hatch-vcs tag-driven versioning that supersedes this value.
-version = "0.2.1"
 packages = [{ include = "datamaite", from = "src" }]
 
 # ---------------------------------------------------------------------------
