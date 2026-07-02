@@ -1,10 +1,11 @@
 """Package version.
 
-This is a committed fallback so that editable installs work before any
-build tool has run. At wheel/sdist build time, ``hatch-vcs`` (see
-``[tool.hatch.version]`` in ``pyproject.toml``) overwrites this file
-with the version derived from git tags. Both paths expose
-``__version__`` and ``__version_tuple__``.
+The version string is declared statically in ``[project].version`` in
+``pyproject.toml`` (the single source of truth) and baked into the
+distribution metadata at build time. Here we resolve it at runtime via
+``importlib.metadata`` so ``datamaite.__version__`` always reflects the
+installed package, including editable installs. Exposes ``__version__``
+and ``__version_tuple__``.
 """
 
 from __future__ import annotations
@@ -23,13 +24,7 @@ def _resolve() -> str:
 
 
 def _as_tuple(v: str) -> tuple[int | str, ...]:
-    parts: list[int | str] = []
-    for piece in v.replace("+", ".").split("."):
-        try:
-            parts.append(int(piece))
-        except ValueError:
-            parts.append(piece)
-    return tuple(parts)
+    return tuple(int(piece) if piece.isdecimal() else piece for piece in v.replace("+", ".").split("."))
 
 
 __version__: str = _resolve()

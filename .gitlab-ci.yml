@@ -19,16 +19,21 @@ stages:
   - build
   - test
   - dr-compliance
-  - publish
   - pages
+  - publish-test
+  - publish
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
-  # Full clone history so hatch-vcs can compute the correct devN version.
+  # Full clone history. Version is static (see [project].version); this is
+  # retained for the publish job, which inspects and checks out release tags.
   GIT_DEPTH: "0"
   # Pin Poetry to avoid silent drift.
   POETRY_PIN: "2.4.1"
+  RELEASE_TAG:
+    value: ""
+    description: "Tag to publish to TestPyPI/PyPI from a manually triggered default-branch web pipeline."
 
 # Clone the shared example-datasets repo to one canonical location used by every
 # job that needs it (docs build + e2e integration matrix), and export
@@ -64,6 +69,8 @@ variables:
     #                 tutorial notebooks fail to decode video in the docs build
     #   libatomic1 -- pyright's embedded Node runtime needs it
     - apt-get update -qq && apt-get install -y -qq git git-lfs libatomic1
+    # Trust the GitLab checkout for build backends that call git to derive package metadata.
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - pip install --quiet --upgrade pip
     - pip install --quiet "poetry==${POETRY_PIN}"
     - poetry config virtualenvs.in-project true
@@ -134,33 +141,196 @@ build:
     VERSION: "3.11"
   script:
     - poetry build
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+      python - "$CI_COMMIT_TAG" <<'PY'
+      import sys
+      from pathlib import Path
+      from packaging.utils import parse_sdist_filename, parse_wheel_filename
+      from packaging.version import Version
+
+      expected = Version(sys.argv[1].removeprefix("v"))
+      matched = 0
+      for artifact in Path("dist").iterdir():
+          if artifact.suffix == ".whl":
+              _, version, _, _ = parse_wheel_filename(artifact.name)
+          elif artifact.name.endswith(".tar.gz"):
+              _, version = parse_sdist_filename(artifact.name)
+          else:
+              continue
+          matched += 1
+          if version != expected:
+              raise SystemExit(
+                  f"Built artifact {artifact.name} has version {version}, expected tag version {expected}."
+              )
+
+      if matched == 0:
+          raise SystemExit("No wheel or sdist artifacts were built in dist/.")
+      print(f"Verified {matched} artifact(s) for version {expected}.")
+      PY
+      fi
+    - |
+      status="$(git status --porcelain)"
+      if [ -n "$status" ]; then
+        echo "Build left tracked/unignored worktree changes:"
+        printf '%s\n' "$status"
+        exit 1
+      fi
   artifacts:
     paths:
       - dist/
     expire_in: 1 week
 
-# Publish to GitLab Package Registry.
-# Only on tagged commits, after all tests pass.
-publish:
-  extends: .shared-setup
+# Build and publish the distribution for an existing release tag. PyPI and
+# TestPyPI use API tokens because PyPI/TestPyPI have not yet onboarded
+# gitlab.jatic.net as a trusted self-managed GitLab issuer.
+# Run from CI/CD -> Pipelines -> Run pipeline on the default branch with
+# RELEASE_TAG set, publishing to TestPyPI first and then PyPI.
+.publish-python-package:
   stage: publish
-  needs:
-    - test-py310
-    - test-py311
-    - test-py312
-    - build
-  resource_group: publish
-  timeout: 10m
-  variables:
-    VERSION: "3.11"
+  image: python:3.11-slim
+  retry: 0
+  interruptible: false
+  resource_group: pypi-publish
+  timeout: 20m
+  artifacts:
+    when: always
+    paths:
+      - dist/
+    expire_in: never
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - pip install --quiet --upgrade pip
+    - pip install --quiet "poetry==${POETRY_PIN}" "twine==6.2.0" "check-wheel-contents==0.6.3"
+    - python --version
+    - poetry --version
+    - twine --version
+    - check-wheel-contents --version
   script:
-    - poetry build
-    - pip install --quiet "twine>=6.0"
-    - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token
-      twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
+    - |
+      set -euo pipefail
+
+      if [ -z "${RELEASE_TAG:-}" ]; then
+        echo "RELEASE_TAG must be set in the 'Run pipeline' form (CI/CD -> Pipelines -> Run pipeline)."
+        exit 1
+      fi
+
+      RELEASE_TAG="$(printf '%s' "$RELEASE_TAG" | tr -d '[:space:]')"
+      if ! [[ "$RELEASE_TAG" =~ ^[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.]+)?$ ]]; then
+        echo "RELEASE_TAG '$RELEASE_TAG' must match X.Y.Z with no 'v' prefix."
+        exit 1
+      fi
+
+      if [ "${PYPI_ENVIRONMENT_NAME}" = "TestPyPI" ]; then
+        if [ -z "${TEST_PYPI_API_TOKEN:-}" ]; then
+          echo "TEST_PYPI_API_TOKEN is not available; add a masked/protected TestPyPI API token in GitLab CI/CD variables."
+          exit 1
+        fi
+        export TWINE_USERNAME="__token__"
+        export TWINE_PASSWORD="$TEST_PYPI_API_TOKEN"
+      else
+        if [ -z "${PYPI_API_TOKEN:-}" ]; then
+          echo "PYPI_API_TOKEN is not available; add a masked/protected PyPI API token in GitLab CI/CD variables."
+          exit 1
+        fi
+        export TWINE_USERNAME="__token__"
+        export TWINE_PASSWORD="$PYPI_API_TOKEN"
+      fi
+
+      echo "Publish to ${PYPI_ENVIRONMENT_NAME} triggered by ${GITLAB_USER_LOGIN:-unknown} (${GITLAB_USER_EMAIL:-unknown}) at $(date -u +%FT%TZ)."
+
+      git fetch --no-tags origin "+refs/heads/${CI_DEFAULT_BRANCH}:refs/remotes/origin/${CI_DEFAULT_BRANCH}"
+
+      REMOTE_TAG_OBJECT="$(git ls-remote --tags --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NF {print $1; exit}')"
+      if [ -z "$REMOTE_TAG_OBJECT" ]; then
+        echo "RELEASE_TAG '$RELEASE_TAG' not found on origin."
+        exit 1
+      fi
+
+      if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+        LOCAL_TAG_OBJECT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}")"
+        if [ "$LOCAL_TAG_OBJECT" != "$REMOTE_TAG_OBJECT" ]; then
+          echo "Tag '$RELEASE_TAG' on origin ($REMOTE_TAG_OBJECT) does not match local ($LOCAL_TAG_OBJECT); refusing to publish."
+          exit 1
+        fi
+      else
+        git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+      fi
+
+      TAG_COMMIT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+      echo "Publishing ${RELEASE_TAG} (${TAG_COMMIT}) to ${PYPI_ENVIRONMENT_NAME}."
+
+      if ! git merge-base --is-ancestor "$TAG_COMMIT" "origin/${CI_DEFAULT_BRANCH}"; then
+        echo "RELEASE_TAG ${RELEASE_TAG} (${TAG_COMMIT}) is not on origin/${CI_DEFAULT_BRANCH}."
+        exit 1
+      fi
+
+      rm -rf dist/
+      git checkout --detach "$TAG_COMMIT"
+      poetry build
+      twine check dist/*
+      check-wheel-contents dist/*.whl
+      python - "$RELEASE_TAG" <<'PY'
+      import sys
+      from pathlib import Path
+      from packaging.utils import parse_sdist_filename, parse_wheel_filename
+      from packaging.version import Version
+
+      expected = Version(sys.argv[1])
+      matched = 0
+      for artifact in Path("dist").iterdir():
+          if artifact.suffix == ".whl":
+              _, version, _, _ = parse_wheel_filename(artifact.name)
+          elif artifact.name.endswith(".tar.gz"):
+              _, version = parse_sdist_filename(artifact.name)
+          else:
+              continue
+          matched += 1
+          if version != expected:
+              raise SystemExit(
+                  f"Built artifact {artifact.name} has version {version}, expected tag version {expected}."
+              )
+
+      if matched == 0:
+          raise SystemExit("No wheel or sdist artifacts were built in dist/.")
+      print(f"Verified {matched} artifact(s) for version {expected}.")
+      PY
+      status="$(git status --porcelain)"
+      if [ -n "$status" ]; then
+        echo "Build left tracked/unignored worktree changes:"
+        printf '%s\n' "$status"
+        exit 1
+      fi
+      twine upload --non-interactive --disable-progress-bar --skip-existing dist/*
+
+publish-testpypi:
+  extends: .publish-python-package
+  stage: publish-test
+  environment:
+    name: pypi-test
+    url: https://test.pypi.org/project/datamaite/
+  variables:
+    PYPI_ENVIRONMENT_NAME: "TestPyPI"
+    TWINE_REPOSITORY_URL: "https://test.pypi.org/legacy/"
   rules:
-    - if: $CI_COMMIT_TAG
-      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: false
+    - when: never
+
+publish-pypi:
+  extends: .publish-python-package
+  environment:
+    name: pypi-production
+    url: https://pypi.org/project/datamaite/
+  variables:
+    PYPI_ENVIRONMENT_NAME: "PyPI"
+    TWINE_REPOSITORY_URL: "https://upload.pypi.org/legacy/"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: false
     - when: never
 
 # Builds Sphinx HTML and publishes to GitLab Pages on every push to the default branch.

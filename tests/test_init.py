@@ -151,11 +151,11 @@ print(json.dumps({module: module in sys.modules for module in modules}))
 
 
 def test_version_module_shape() -> None:
-    """The committed _version.py fallback exposes the attrs __init__.py imports.
+    """_version.py exposes the attrs __init__.py imports.
 
-    Regression guard: if someone re-adds src/datamaite/_version.py to
-    .gitignore, `poetry install` + `pytest` on a fresh clone will fail
-    because hatch-vcs doesn't run for editable installs.
+    Regression guard: __init__.py imports __version__ and __version_tuple__
+    from datamaite._version, which resolves them from installed package
+    metadata (see src/datamaite/_version.py).
     """
     from datamaite import _version
 
