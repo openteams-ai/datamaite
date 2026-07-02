@@ -193,6 +193,9 @@ build:
   interruptible: false
   resource_group: pypi-publish
   timeout: 20m
+  # Publish jobs build release artifacts from the checked-out tag and should not
+  # download artifacts from earlier stages; those reports make the worktree dirty.
+  dependencies: []
   artifacts:
     when: always
     paths:
