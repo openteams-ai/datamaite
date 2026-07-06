@@ -180,7 +180,6 @@ addopts = [
     "not real_data and not integration",
 ]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests requiring external resources (opt-in via -m integration; e.g. the example-data conversion matrix, needs DATAMAITE_DATASETS_ROOT)",
     "real_data: marks tests that require real HMIE data on SUNet (opt-in via -m real_data)",
 ]
