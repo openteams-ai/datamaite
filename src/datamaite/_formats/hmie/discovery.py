@@ -27,8 +27,8 @@ is always video metadata).
 from __future__ import annotations
 
 import logging
-import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,7 +101,7 @@ def discover_hmie_pairs(root: Path) -> DiscoveryResult:
     **batch-level ``scale/``** path that *merges* with it (rather than only
     falling back when per-snippet discovery is empty):
 
-    1. Single ``os.walk`` pass to collect JSON and video files.
+    1. Single traversal pass (:func:`_walk`) to collect JSON and video files.
     2. Derive snippet directories from ``seq_*`` video containers.
     3. For each snippet, annotations are JSONs in subdirectories
        (``scale/``, labeler dirs). Snippet-level JSONs are metadata.
@@ -257,8 +257,60 @@ def match_annotation_to_video(annotation_name: str, videos: list[Path]) -> Path 
     return best[0]
 
 
+def _walk(root: Path) -> Iterator[tuple[Path, list[str], list[str]]]:
+    """``os.walk``-style top-down traversal that also works on UPath roots.
+
+    Yields ``(dirpath, dirnames, filenames)`` with ``dirpath`` as a path
+    object, preserving the ``os.walk`` semantics discovery relies on:
+    top-down order, in-place pruning of ``dirnames`` honoured, unreadable
+    directories skipped (``onerror=None`` behaviour), and symlinked
+    directories listed but not descended into (``followlinks=False``).
+    Entries are yielded in sorted order so traversal is deterministic on
+    every backend.
+    """
+    stack: list[Path] = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir(), key=lambda entry: entry.name)
+        except Exception as exc:
+            # Object-store backends surface throttling/auth as non-OSError
+            # exception families; the walk contract is "one bad entry never
+            # kills discovery", so skip this dir rather than abort.
+            logger.debug("Skipping unreadable directory %s: %s", current, type(exc).__name__)
+            continue
+        dirnames: list[str] = []
+        filenames: list[str] = []
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir()
+            except Exception as exc:
+                # Mirror os.walk: a stat failure on one entry means "not a
+                # directory", never an aborted walk. Object stores raise
+                # non-OSError families here too.
+                logger.debug("Treating %s as non-directory after %s", entry, type(exc).__name__)
+                is_dir = False
+            (dirnames if is_dir else filenames).append(entry.name)
+        yield current, dirnames, filenames
+        # Reversed so the LIFO stack visits children in sorted order. The
+        # caller may have pruned dirnames in place while we were suspended
+        # at the yield, so dirnames is re-read here, after the yield.
+        for name in reversed(dirnames):
+            child = current / name
+            try:
+                is_symlink = child.is_symlink()
+            except Exception as exc:
+                # Mirror os.walk: if the symlink check fails, treat the
+                # child as a plain directory and keep walking. Object stores
+                # raise non-OSError families here too.
+                logger.debug("Treating %s as non-symlink after %s", child, type(exc).__name__)
+                is_symlink = False
+            if not is_symlink:
+                stack.append(child)
+
+
 def _collect_files(root: Path) -> tuple[list[Path], dict[Path, list[Path]], set[Path], set[Path]]:
-    """Single os.walk pass collecting annotation files, videos, snippet/scale dirs.
+    """Single traversal pass (:func:`_walk`) collecting annotation files, videos, snippet/scale dirs.
 
     Returns (annotation_files, video_dirs, snippet_dirs, scale_dirs) where:
     - annotation_files: ``.json`` files inside annotation subdirectories
@@ -275,9 +327,7 @@ def _collect_files(root: Path) -> tuple[list[Path], dict[Path, list[Path]], set[
     scale_dirs: set[Path] = set()
     annotation_parent_dirs: set[Path] = set()
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        current = Path(dirpath)
-
+    for current, dirnames, filenames in _walk(root):
         # Prune metadata directories from traversal.
         dirnames[:] = _prune_metadata(dirnames, current)
 
@@ -294,7 +344,7 @@ def _collect_files(root: Path) -> tuple[list[Path], dict[Path, list[Path]], set[
 
 
 def _prune_metadata(dirnames: list[str], current: Path) -> list[str]:
-    """Remove metadata directories from os.walk traversal."""
+    """Remove metadata directories from the traversal."""
     pruned = [d for d in dirnames if _is_metadata_dir(d)]
     if pruned:
         logger.debug("Pruning metadata dirs in %s: %s", current, pruned)

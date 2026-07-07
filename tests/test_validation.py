@@ -360,3 +360,107 @@ class TestValidateBatches:
 
         list(validate_batches(root, check_video_integrity=False))
         assert seen == [False, False]
+
+
+class TestCloudValidation:
+    """Validation over a cloud-style (fsspec memory://) root.
+
+    workers=1 everywhere: the memory filesystem is per-process, so
+    subprocess workers would see an empty store.
+    """
+
+    def test_validate_memory_root_json_only(self, memory_root: Path) -> None:
+        from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
+
+        single_video_dataset(
+            memory_root,
+            [
+                SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True)),
+                SnippetSpec(name="video_001_000002", video=VideoSpec(corrupt=True)),
+            ],
+        )
+        result = validate(str(memory_root), check_video_integrity=False, workers=1)
+        assert result.passed
+        assert result.annotation_count == 2
+
+    def test_validate_memory_root_with_video_integrity(self, memory_root: Path, tmp_path: Path) -> None:
+        pytest.importorskip("cv2")
+        from tests._hmie_factory import SnippetSpec, single_video_dataset
+
+        local_root = tmp_path / "ds"
+        single_video_dataset(local_root, [SnippetSpec(name="video_001_000001")])
+        for p in local_root.rglob("*"):
+            if p.is_file():
+                dest = memory_root / p.relative_to(local_root)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(p.read_bytes())
+
+        result = validate(str(memory_root), workers=1)
+        # End-to-end over the real remote branch: PyAV streams the video
+        # from the in-memory filesystem, then consistency checks run.
+        assert result.passed, result.summary(use_color=False)
+        assert result.annotation_count == 1
+
+    def test_validate_annotation_on_memory_paths(self, memory_root: Path) -> None:
+        from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
+
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        ann = next(iter((memory_root / "video_001_000000" / "video_001_000001" / "labeler_alpha").iterdir()))
+        result = validate_annotation(str(ann), check_video_integrity=False)
+        assert result.passed
+
+    def test_validate_batches_memory_root(self, memory_root: Path) -> None:
+        from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
+
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        pairs = list(validate_batches(str(memory_root), check_video_integrity=False, workers=1))
+        assert len(pairs) == 1
+        batch_path, result = pairs[0]
+        assert result.passed
+        assert str(batch_path).endswith("video_001_000000")
+        assert str(batch_path).startswith("memory://")
+
+    def test_validate_batches_accepts_upath_instance(self, memory_root: Path) -> None:
+        """A UPath root passed directly (not as ``str``) must not misroute into
+        the iterable-of-batches branch -- UPath duck-types Path but is not a
+        subclass of it (universal-pathlib >= 0.3)."""
+        from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
+
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        pairs = list(validate_batches(memory_root, check_video_integrity=False, workers=1))
+        assert len(pairs) == 1
+        batch_path, result = pairs[0]
+        assert result.passed
+        assert str(batch_path).endswith("video_001_000000")
+        assert str(batch_path).startswith("memory://")
+
+    def test_cache_hit_round_trips_cloud_finding_paths(self, memory_root: Path, tmp_path: Path) -> None:
+        from datamaite._cache import ValidationCache
+        from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
+
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        cache = ValidationCache(tmp_path / "cache.db")
+        try:
+            validate(str(memory_root), workers=1, cache=cache)
+            second = validate(str(memory_root), workers=1, cache=cache)
+        finally:
+            cache.close()
+        assert second.cache_hits > 0
+        # The corrupt video produces a video_open ERROR; on the cache-hit pass
+        # its path must round-trip the URL scheme intact (Path() on the
+        # deserialized finding path would mangle memory:// to memory:/).
+        hit_paths = [str(f.path) for f in second.findings if f.check == "video_open"]
+        assert hit_paths
+        assert all(p.startswith("memory://") for p in hit_paths)

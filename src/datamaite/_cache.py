@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from datamaite._types import Finding, Severity
+from datamaite._upath import to_dataset_path
 
 _HASH_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
@@ -35,7 +36,9 @@ def fingerprint_file(path: Path) -> FileFingerprint | None:
     """
     try:
         stat = path.stat()
-    except OSError:
+    except Exception:
+        # A fingerprint failure is a cache miss, not a crash: object-store
+        # backends can raise non-OSError families (throttling/auth) on stat.
         return None
 
     try:
@@ -43,7 +46,9 @@ def fingerprint_file(path: Path) -> FileFingerprint | None:
         with path.open("rb") as f:
             h.update(f.read(_HASH_CHUNK_SIZE))
         return FileFingerprint(hash=h.hexdigest(), size=stat.st_size, mtime=stat.st_mtime)
-    except OSError:
+    except Exception:
+        # A fingerprint failure is a cache miss, not a crash: the read can
+        # fail with non-OSError families on remote filesystems.
         return None
 
 
@@ -299,7 +304,7 @@ def _deserialize_findings(findings_json: str) -> list[Finding]:
     return [
         Finding(
             severity=Severity(f["severity"]),
-            path=Path(f["path"]),
+            path=to_dataset_path(f["path"]),
             check=f["check"],
             message=f["message"],
         )

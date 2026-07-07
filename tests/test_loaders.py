@@ -19,7 +19,7 @@ from datamaite.loaders import (
 )
 from datamaite.model import BoxTrackDataset
 
-from ._hmie_factory import default_happy_dataset
+from ._hmie_factory import SnippetSpec, VideoSpec, default_happy_dataset, single_video_dataset
 
 
 class TestRegistry:
@@ -201,3 +201,48 @@ class TestLoadVc:
                 helper(tmp_path, dataset_format="yolo")
 
             assert "Multiple loaders registered" not in str(exc_info.value)
+
+
+class TestCloudRoots:
+    def test_generic_load_accepts_memory_url(self, memory_root) -> None:
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        ds = load(str(memory_root), dataset_format=DatasetFormat.HMIE)
+        assert isinstance(ds, BoxTrackDataset)
+        assert ds.sequence_count == 1
+
+    def test_generic_load_missing_memory_root_raises(self, memory_root) -> None:
+        with pytest.raises(FileNotFoundError):
+            load(str(memory_root / "nope"), dataset_format=DatasetFormat.HMIE)
+
+    def test_load_mot_rejects_non_hmie_cloud_format(self, memory_root) -> None:
+        # Cloud roots are HMIE-only; a non-HMIE format must fail loudly rather
+        # than crash inside a loader with local-filesystem assumptions.
+        root = memory_root / "x"
+        root.mkdir()
+        with pytest.raises(ValueError, match="HMIE format only"):
+            load_mot(str(root), dataset_format="motchallenge")
+
+    def test_load_mot_hmie_cloud_still_works(self, memory_root) -> None:
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        ds = load_mot(str(memory_root), dataset_format=DatasetFormat.HMIE)
+        assert isinstance(ds, BoxTrackDataset)
+        assert ds.sequence_count == 1
+
+    def test_autodetect_rejects_cloud_root(self, memory_root) -> None:
+        # No format is cloud-sniffable, so autodetect must fail cleanly instead
+        # of letting a loader's sniff() crash on a UPath it can't coerce with
+        # Path(). The UPath-object form is the one that used to raise a raw
+        # TypeError from inside the yolo loader's sniff; the string form is
+        # covered too since it takes a different path through to_dataset_path.
+        root = memory_root / "x"
+        root.mkdir()
+        with pytest.raises(ValueError, match="dataset_format"):
+            load(root, dataset_format=None)
+        with pytest.raises(ValueError, match="dataset_format"):
+            load(str(root), dataset_format=None)

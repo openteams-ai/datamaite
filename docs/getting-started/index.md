@@ -9,6 +9,8 @@ New here? Start with [Installation](installation.md), then work through the
 [Tutorials](../tutorials/index.md) and consult the
 [Reference](../reference/index.md) for the architecture and CLI details.
 
+- [Loading from cloud object storage](cloud-storage.md) — use `s3://` / `gs://` / `az://` URLs as dataset roots.
+
 ## Quick start
 
 After [installing](installation.md), load up a dataset
@@ -46,4 +48,5 @@ single_result.summary()
 :hidden:
 
 installation
+cloud-storage
 ```

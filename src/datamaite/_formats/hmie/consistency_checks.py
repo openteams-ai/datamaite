@@ -33,7 +33,7 @@ def check_video_annotation_consistency(
 
     video_props must come from a prior probe_video() call; this function
     does NOT open the video itself. Single-open per video is enforced at
-    the call site so we don't double the cv2.VideoCapture cost at 60K
+    the call site so we don't double the av.open() container cost at 60K
     scale.
     """
     findings: list[Finding] = []

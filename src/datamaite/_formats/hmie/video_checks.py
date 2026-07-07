@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from datamaite._types import Finding, Severity
+from datamaite._upath import is_remote_path, local_open_target
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class VideoProperties:
-    """Cached video metadata read from a single cv2.VideoCapture open.
+    """Cached video metadata read from a single av.open() container.
 
     Avoids the double-open cost when both integrity and consistency
     checks need the same video. At 60K datasets this saves ~100 min.
@@ -47,32 +50,55 @@ _FLAT_FRAME_STD_THRESHOLD = 1.0
 # not fail an otherwise-valid snippet.
 _FLAT_FRAME_FAIL_RATIO = 0.5
 
-_cv2_silenced = False
+# Block size handed to fsspec when opening a remote video for probing.
+# fsspec's default 5 MiB read-ahead over-fetches badly on the probe's
+# seek-heavy access pattern (measured >100% of file size on ~90 MB clips;
+# see tools/probe_bench/README.md); a 1 MiB block bounds a whole probe to
+# ~13 MB regardless of file size.
+_REMOTE_READ_BLOCK_SIZE = 1 << 20
+
+_av_silenced = False
 
 
-def _silence_cv2_logging(cv2) -> None:  # type: ignore[no-untyped-def]
-    """Set cv2 log level to SILENT once per process. Idempotent.
+def _silence_av_logging(av) -> None:  # type: ignore[no-untyped-def]
+    """Set PyAV/FFmpeg log level to PANIC once per process. Idempotent.
 
-    opencv's libavcodec backend writes decoder warnings directly to
-    stderr, bypassing Python's logging. At 60K pairs this makes the
-    CLI output unreadable. cv2.setLogLevel is process-global so we
-    only need to call it once.
+    FFmpeg writes decoder warnings straight to stderr. At tens of
+    thousands of pairs with any corrupt videos, that makes CLI output
+    unreadable; the findings carry the signal instead.
+
+    ``av.logging.PANIC`` is the highest FFmpeg log-level threshold (only
+    unrecoverable-crash messages pass it), used here purely to suppress
+    decoder warning noise. The setting is process-wide, global FFmpeg/PyAV
+    state, not scoped to this probe -- it also silences log output for any
+    other PyAV consumer running in the same process (e.g. a notebook cell
+    or another library opening containers alongside datamaite).
     """
-    global _cv2_silenced
-    if _cv2_silenced:
+    global _av_silenced
+    if _av_silenced:
         return
-    # Walk the cv2.utils.logging chain defensively: opencv-python exposes
-    # it but some variant builds (headless, custom, older wheels) omit
-    # cv2.utils entirely. Silencing is cosmetic; if the API is missing we
-    # still mark as silenced so we don't keep re-probing on every call.
-    utils = getattr(cv2, "utils", None)
-    logging_mod = getattr(utils, "logging", None) if utils is not None else None
-    if logging_mod is not None:
-        silent = getattr(logging_mod, "LOG_LEVEL_SILENT", None)
-        set_log_level = getattr(logging_mod, "setLogLevel", None)
-        if silent is not None and set_log_level is not None:
-            set_log_level(silent)
-    _cv2_silenced = True
+    logging_mod = getattr(av, "logging", None)
+    set_level = getattr(logging_mod, "set_level", None) if logging_mod is not None else None
+    panic = getattr(logging_mod, "PANIC", None) if logging_mod is not None else None
+    if set_level is not None and panic is not None:
+        set_level(panic)
+    _av_silenced = True
+
+
+def _av_source(video_path: Path) -> Any:
+    """What to hand :func:`av.open` for ``video_path``.
+
+    Local paths open by plain filesystem string. Remote paths open as a
+    seekable fsspec file object with a 1 MiB read-ahead block
+    (``_REMOTE_READ_BLOCK_SIZE``), so PyAV's demuxer fetches only the byte
+    ranges the probe actually reads (container header plus the sampled
+    frames' packets) -- no full-file download, no presigned URLs, and
+    identical behavior on every backend. The caller owns closing a
+    returned file object.
+    """
+    if is_remote_path(video_path):
+        return video_path.open("rb", block_size=_REMOTE_READ_BLOCK_SIZE)  # type: ignore[union-attr]
+    return local_open_target(video_path)
 
 
 def probe_video(video_path: Path) -> tuple[VideoProperties, list[Finding]]:
@@ -85,30 +111,32 @@ def probe_video(video_path: Path) -> tuple[VideoProperties, list[Finding]]:
     Frame-level integrity checks (stuck/black frames, mid-video decode,
     last-frame decode) are performed here while the capture is already open.
 
-    Requires the `fmv` extra: pip install datamaite[fmv]
+    ``video_path`` may be a remote ``UPath`` (``s3://``, ``gs://``,
+    ``az://``): the probe streams the container through a seekable fsspec
+    file object, transferring only the ranges it reads in 1 MiB blocks
+    (``_REMOTE_READ_BLOCK_SIZE``). Findings always report the logical
+    dataset path.
+
+    Requires the ``fmv`` extra: pip install datamaite[fmv]
     """
     findings: list[Finding] = []
 
     try:
-        import cv2  # type: ignore[import-untyped]
+        import av  # type: ignore[import-untyped]
     except ImportError:
         findings.append(
             Finding(
                 severity=Severity.WARNING,
                 path=video_path,
                 check="video_dependency",
-                message="opencv-python-headless not installed; install datamaite[fmv] to run video checks",
+                message="av (PyAV) not installed; install datamaite[fmv] to run video checks",
             )
         )
         return VideoProperties(path=video_path, opened=False), findings
 
-    # Silence opencv's direct-to-stderr decoder warnings. At 60K pairs
-    # with any corrupt videos, stderr becomes unreadable because opencv
-    # writes libavcodec warnings past Python's logging. Set the log level
-    # to SILENT on the first call per process; cv2 stores this globally.
-    _silence_cv2_logging(cv2)
+    _silence_av_logging(av)
 
-    props = _probe_with_capture(cv2, video_path, findings)
+    props = _probe_with_container(av, video_path, findings)
     if not props.opened:
         return props, findings
 
@@ -116,16 +144,36 @@ def probe_video(video_path: Path) -> tuple[VideoProperties, list[Finding]]:
     return props, findings
 
 
-def _probe_with_capture(cv2, video_path: Path, findings: list[Finding]) -> VideoProperties:  # type: ignore[no-untyped-def]
-    """Open the video with cv2.VideoCapture and collect raw properties.
+def _probe_with_container(av, video_path: Path, findings: list[Finding]) -> VideoProperties:  # type: ignore[no-untyped-def]
+    """Open the video with av.open and collect raw properties.
 
-    Returns an un-opened VideoProperties when the capture cannot open
-    or throws while reading metadata. Frame-sample and mid/last-frame
-    integrity checks run here while the capture is still open.
+    Returns an un-opened VideoProperties when the container cannot open or
+    throws while reading metadata. Frame-sample and mid/last-frame
+    integrity checks run here while the container is still open.
     """
-    cap = cv2.VideoCapture(str(video_path))
+    source: Any = None
+    container = None
     try:
-        if not cap.isOpened():
+        source = _av_source(video_path)
+        container = av.open(source)
+    except Exception:
+        # Bad bytes, missing remote object, or transport failure: all
+        # collapse to "cannot open", mirroring the old capture semantics.
+        if source is not None and hasattr(source, "close"):
+            source.close()
+        findings.append(
+            Finding(
+                severity=Severity.ERROR,
+                path=video_path,
+                check="video_open",
+                message="Cannot open video file",
+            )
+        )
+        return VideoProperties(path=video_path, opened=False)
+
+    try:
+        stream = next((s for s in container.streams if s.type == "video"), None)
+        if stream is None:
             findings.append(
                 Finding(
                     severity=Severity.ERROR,
@@ -136,35 +184,37 @@ def _probe_with_capture(cv2, video_path: Path, findings: list[Finding]) -> Video
             )
             return VideoProperties(path=video_path, opened=False)
 
-        try:
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = float(cap.get(cv2.CAP_PROP_FPS))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = float(stream.average_rate) if stream.average_rate else 0.0
+        frame_count = int(stream.frames or 0)
+        if frame_count <= 0 and stream.duration is not None and stream.time_base is not None and fps > 0:
+            # Some containers omit the frame count; derive it from duration.
+            frame_count = int(float(stream.duration * stream.time_base) * fps)
+        width = int(stream.codec_context.width or 0)
+        height = int(stream.codec_context.height or 0)
 
-            ret, first_frame = cap.read()
-            first_frame_decodable = bool(ret and first_frame is not None)
+        first_frame = next(container.decode(stream), None)
+        first_frame_decodable = first_frame is not None
 
-            # Deeper integrity: sample frames across the video and check
-            # mid/last decodability while the capture is still open.
-            _check_frame_samples(cv2, cap, video_path, frame_count, findings)
-            _check_mid_and_last_frame(cv2, cap, video_path, frame_count, findings)
-        except Exception as e:
-            # cv2 can raise on malformed containers, ValueError on NaN ints,
-            # OSError on flaky network FS, etc. Surface it as a finding
-            # instead of letting the worker crash -- a single bad video
-            # must not kill a whole 60K-pair run.
-            findings.append(
-                Finding(
-                    severity=Severity.ERROR,
-                    path=video_path,
-                    check="video_probe_error",
-                    message=f"Error probing video: {type(e).__name__}: {e}",
-                )
+        _check_frame_samples(container, stream, video_path, frame_count, fps, findings)
+        _check_mid_and_last_frame(container, stream, video_path, frame_count, fps, findings)
+    except Exception as e:
+        # PyAV raises on malformed containers, OSError on flaky transports,
+        # etc. Surface it as a finding instead of letting the worker crash
+        # -- a single bad video must not kill a whole 60K-pair run.
+        findings.append(
+            Finding(
+                severity=Severity.ERROR,
+                path=video_path,
+                check="video_probe_error",
+                message=f"Error probing video: {type(e).__name__}: {e}",
             )
-            return VideoProperties(path=video_path, opened=False)
+        )
+        return VideoProperties(path=video_path, opened=False)
     finally:
-        cap.release()
+        with contextlib.suppress(Exception):
+            container.close()
+        if hasattr(source, "close"):
+            source.close()
 
     return VideoProperties(
         path=video_path,
@@ -220,7 +270,32 @@ def _append_metadata_findings(props: VideoProperties, findings: list[Finding]) -
         )
 
 
-def _check_frame_samples(cv2, cap, video_path: Path, frame_count: int, findings: list[Finding]) -> None:  # type: ignore[no-untyped-def]
+def _decode_frame_at(container, stream, frame_index: int, fps: float):  # type: ignore[no-untyped-def]
+    """Seek near ``frame_index`` and decode the next frame, or None.
+
+    PyAV seeks land on the nearest preceding keyframe, not the exact
+    frame index; the first decoded frame after the seek stands in for the
+    requested index. That's inherent to keyframe-based seeking over the
+    same FFmpeg decoder underneath (codec-dependent granularity), which
+    is why the mid/last checks are WARNING-level.
+    """
+    if fps <= 0 or stream.time_base is None:
+        return None
+    try:
+        container.seek(int(frame_index / fps / stream.time_base), stream=stream)
+        return next(container.decode(stream), None)
+    except Exception:
+        return None
+
+
+def _check_frame_samples(
+    container,  # type: ignore[no-untyped-def]
+    stream,  # type: ignore[no-untyped-def]
+    video_path: Path,
+    frame_count: int,
+    fps: float,
+    findings: list[Finding],
+) -> None:
     """Sample frames across the video and flag stuck/black/flat content.
 
     For each sampled frame compute numpy std across all pixels. A very
@@ -248,12 +323,12 @@ def _check_frame_samples(cv2, cap, video_path: Path, frame_count: int, findings:
     flat_count = 0
     sampled_count = 0
     for idx in sample_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if not ret or frame is None:
+        frame = _decode_frame_at(container, stream, idx, fps)
+        if frame is None:
             continue
         sampled_count += 1
-        if float(np.std(frame[::4, ::4])) < _FLAT_FRAME_STD_THRESHOLD:
+        pixels = frame.to_ndarray(format="bgr24")
+        if float(np.std(pixels[::4, ::4])) < _FLAT_FRAME_STD_THRESHOLD:
             flat_count += 1
 
     if sampled_count == 0:
@@ -274,21 +349,28 @@ def _check_frame_samples(cv2, cap, video_path: Path, frame_count: int, findings:
         )
 
 
-def _check_mid_and_last_frame(cv2, cap, video_path: Path, frame_count: int, findings: list[Finding]) -> None:  # type: ignore[no-untyped-def]
+def _check_mid_and_last_frame(
+    container,  # type: ignore[no-untyped-def]
+    stream,  # type: ignore[no-untyped-def]
+    video_path: Path,
+    frame_count: int,
+    fps: float,
+    findings: list[Finding],
+) -> None:
     """Verify that the middle and last frames of the video can be decoded.
 
     Catches mid-video corruption that the first-frame check misses --
     HMIE videos commonly decode frame 0 cleanly and die halfway.
 
-    WARNING, not ERROR: cv2.VideoCapture.set(CAP_PROP_POS_FRAMES) seek
-    semantics are codec- and build-dependent. With H.264 + B-frame
-    reordering, a direct frame-index seek to a non-keyframe can return
-    the nearest preceding keyframe or fail the read entirely, even on
-    a perfectly valid video. Until we have real CDAO data to measure
-    the false-positive rate, these checks are advisory only -- they
-    surface a suspicious video without failing its dataset. The
-    video_first_frame and video_flat_frames checks still fire at
-    ERROR level and catch catastrophic breakage.
+    WARNING, not ERROR: PyAV's keyframe-based seek semantics are codec-
+    and container-dependent. With H.264 + B-frame reordering, a seek to
+    a non-keyframe index lands on the nearest preceding keyframe rather
+    than the exact frame -- the same FFmpeg decoder underneath any
+    seek-based reader behaves this way, it isn't a PyAV shortcut. Until
+    we have real CDAO data to measure the false-positive rate, these
+    checks are advisory only -- they surface a suspicious video without
+    failing its dataset. The video_first_frame and video_flat_frames
+    checks still fire at ERROR level and catch catastrophic breakage.
     """
     if frame_count <= 1:
         return
@@ -296,9 +378,8 @@ def _check_mid_and_last_frame(cv2, cap, video_path: Path, frame_count: int, find
     mid_idx = frame_count // 2
     last_idx = frame_count - 1
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, mid_idx)
-    ret, frame = cap.read()
-    if not ret or frame is None:
+    frame = _decode_frame_at(container, stream, mid_idx, fps)
+    if frame is None:
         findings.append(
             Finding(
                 severity=Severity.WARNING,
@@ -308,9 +389,8 @@ def _check_mid_and_last_frame(cv2, cap, video_path: Path, frame_count: int, find
             )
         )
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, last_idx)
-    ret, frame = cap.read()
-    if not ret or frame is None:
+    frame = _decode_frame_at(container, stream, last_idx, fps)
+    if frame is None:
         findings.append(
             Finding(
                 severity=Severity.WARNING,

@@ -6,7 +6,7 @@
 - ``discovery``: walks the HMIE folder hierarchy and pairs annotations
   with their videos
 - ``annotation_checks``: annotation-file schema and per-track validators
-- ``video_checks``: cv2-based video integrity probe + cached properties
+- ``video_checks``: PyAV-based video integrity probe + cached properties
 - ``consistency_checks``: cross-validation between annotation and video
 - ``categories``: HMIE-specific grouping of findings into the 4
   requirement categories from issue #634 (structure, video, coverage,
