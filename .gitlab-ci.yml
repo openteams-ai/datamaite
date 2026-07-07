@@ -453,6 +453,99 @@ integration:
     - poetry run pytest tests/e2e -m integration -v -s --cov-fail-under=0
 
 # ---------------------------------------------------------------------------
+# E2E: S3 object storage tier, against a real S3-API server (MinIO), not the
+# fsspec memory:// filesystem the coverage-gated unit suite's cloud tests use.
+# This is a separate TIER from the coverage-gated matrix, not a separate
+# stage: the separation is structural (integration marker, --no-cov, only
+# tests/e2e/test_s3_minio.py), so the job shares the `test` stage with the
+# matrix -- like the `integration` job above -- and runs concurrently with
+# it instead of serializing behind it. See tests/README.md for the local run
+# instructions and the two-tier rationale.
+# The job also mirrors the shared example HMIE dataset into the S3 service to
+# assert cloud/local parity on real data (TestExampleDatasetParity).
+# ---------------------------------------------------------------------------
+e2e-s3:
+  extends: .shared-setup
+  stage: test
+  timeout: 30m
+  # Required gate: a real S3-API regression must fail the pipeline, not be
+  # silently tolerated. Mirrors the `integration` job's stance. The default
+  # retry policy (retry.when: runner_system_failure) already re-runs the
+  # docker-machine provisioning flake without masking genuine test failures.
+  allow_failure: false
+  variables:
+    VERSION: "3.12"
+    # Pinned to the last MinIO release under the Apache License 2.0 -- the
+    # project relicensed to AGPLv3 immediately after this tag. License
+    # verified at this tag; do not bump past it. Hoisted to a variable so the
+    # service image and the tests/README.md local-run docker command stay in
+    # sync from one place (keep them in sync when this changes).
+    MINIO_E2E_IMAGE: "minio/minio:RELEASE.2021-04-22T15-44-28Z"
+    MINIO_ROOT_USER: "datamaite-e2e"
+    MINIO_ROOT_PASSWORD: "datamaite-e2e-secret"
+    DATAMAITE_S3_E2E_ENDPOINT: "http://s3:9000"
+    # Throwaway, service-local credentials: intentionally inline and unmasked
+    # because they only authenticate against the ephemeral MinIO service in
+    # this job. NEVER copy this pattern with real credentials -- those belong
+    # in masked/protected CI/CD variables.
+    DATAMAITE_S3_E2E_KEY: "datamaite-e2e"
+    DATAMAITE_S3_E2E_SECRET: "datamaite-e2e-secret"
+    # Stream the MinIO service container's logs into the job trace, so a
+    # service that fails to start is diagnosable from the trace alone.
+    CI_DEBUG_SERVICES: "true"
+  services:
+    # GitLab expands variables in `services:name`, so the pinned image lives in
+    # MINIO_E2E_IMAGE (see the license-pin comment there).
+    - name: "${MINIO_E2E_IMAGE}"
+      alias: "s3"
+      command: ["server", "/data"]
+    # NOTE: this pulls minio/minio anonymously from Docker Hub, which is
+    # subject to Docker Hub's anonymous pull-rate limits. A follow-up could
+    # route it through the GitLab dependency proxy
+    # (${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/minio/minio:...), but that
+    # requires verifying the group has the dependency proxy enabled first --
+    # do NOT switch the image path until that is confirmed.
+  script:
+    - |
+      # Mirrors the .clone_example_data anchor but must NOT fail the job: only
+      # the parity test (TestExampleDatasetParity) needs the example data and
+      # it self-skips when DATAMAITE_DATASETS_ROOT is unset. Script lines share
+      # one shell, so the export below persists to the pytest step.
+      if git config --global --add safe.directory "$CI_PROJECT_DIR" \
+        && git lfs install \
+        && git clone --depth 1 \
+             "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_NAMESPACE}/datamaite-example-datasets.git" \
+             "${CI_PROJECT_DIR}/example-data" \
+        && git -C "${CI_PROJECT_DIR}/example-data" lfs pull; then
+        export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
+        echo "Example datasets cloned; parity test will run."
+      else
+        echo "NOTICE: example-data clone/lfs pull failed; TestExampleDatasetParity self-skips."
+      fi
+    # aws (s3fs) for the storage_options plumbing under test, fmv (opencv/av)
+    # for the factory-built mp4s and video probing; dev for the toolchain.
+    - poetry install --extras dev --extras aws --extras fmv
+    # The slim image has no curl, so poll the MinIO health endpoint from
+    # Python (~30 x 2s) and fail loudly if the service never comes up.
+    - |
+      poetry run python -c '
+      import os, sys, time, urllib.request
+      url = os.environ["DATAMAITE_S3_E2E_ENDPOINT"].rstrip("/") + "/minio/health/live"
+      for attempt in range(30):
+          try:
+              with urllib.request.urlopen(url, timeout=2) as resp:
+                  if resp.status == 200:
+                      print("MinIO ready after %d attempt(s)" % attempt)
+                      break
+          except Exception as exc:
+              print("waiting for MinIO (%d/30): %s" % (attempt + 1, type(exc).__name__))
+          time.sleep(2)
+      else:
+          sys.exit("MinIO service at %s never became ready" % url)
+      '
+    - poetry run pytest tests/e2e/test_s3_minio.py -m integration --no-cov -q
+
+# ---------------------------------------------------------------------------
 # DR Compliance (JATIC program requirement)
 #
 # allow_failure: true -- dr-compliance scans can produce false positives
