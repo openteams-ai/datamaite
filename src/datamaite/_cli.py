@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from datamaite._types import DatasetFormat
+from datamaite._upath import to_dataset_path
 
 if TYPE_CHECKING:
     from datamaite._cache import ValidationCache
@@ -29,7 +30,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     val_parser = sub.add_parser("validate", help="Validate a dataset.")
-    val_parser.add_argument("path", type=Path, help="Path to the dataset root.")
+    val_parser.add_argument(
+        "path", type=to_dataset_path, help="Path or cloud URL (s3://, gs://, az://) of the dataset root."
+    )
     val_parser.add_argument(
         "--format",
         default=DatasetFormat.HMIE.value,
@@ -94,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     stats_parser = sub.add_parser("stats", help="Summarize a dataset's duration/frame/box distributions.")
-    stats_parser.add_argument("path", type=Path, help="Path to the dataset root.")
+    stats_parser.add_argument(
+        "path", type=to_dataset_path, help="Path or cloud URL (s3://, gs://, az://) of the dataset root."
+    )
     stats_parser.add_argument(
         "--format",
         default=DatasetFormat.HMIE.value,
@@ -104,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     stats_parser.add_argument(
         "--require-video",
         action="store_true",
-        help="Probe each video for true frame counts (slower; needs the `video` extra).",
+        help="Probe each video for true frame counts (slower; needs the `fmv` extra).",
     )
     stats_parser.add_argument(
         "--json",

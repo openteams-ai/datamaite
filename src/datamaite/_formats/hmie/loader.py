@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ from datamaite._formats.hmie.discovery import (
 from datamaite._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
 from datamaite._formats.hmie.schema import ScaleAnnotation
 from datamaite._types import DatasetFormat
+from datamaite._upath import to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence, category_name_from_uri
 
@@ -85,6 +87,7 @@ class HmieLoader(Loader):
         annotation_dir: str | Path | None = None,
         video_dir: str | Path | None = None,
         require_video: bool = False,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> BoxTrackDataset:
         """Read an HMIE/Scale dataset under ``root`` into a :class:`BoxTrackDataset`.
@@ -107,10 +110,15 @@ class HmieLoader(Loader):
             paths are used as-is.
         require_video
             When True, each sequence's video must exist and open: the loader
-            probes it (via the ``video`` extra), sets ``num_frames`` from the
+            probes it (via the ``fmv`` extra), sets ``num_frames`` from the
             true frame count, and *skips* snippets whose video is missing or
             unreadable (logged as a warning). When False (default), videos are
             not opened and ``num_frames`` is derived from the annotation.
+        storage_options
+            fsspec filesystem/credential options for cloud roots (``s3://``,
+            ``gs://``, ``az://``), e.g. ``{"anon": True}`` or provider keys.
+            Ignored for local paths. The matching backend extra must be
+            installed (``datamaite[aws]`` / ``[gcs]`` / ``[azure]``).
 
         Returns
         -------
@@ -118,7 +126,7 @@ class HmieLoader(Loader):
             Loaded sequences and the dataset-wide category map. Empty when no
             annotation/video pairs are found.
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
 
         if annotation_dir is not None or video_dir is not None:
             # Relative override paths anchor to ``root`` (not the caller's CWD),
@@ -150,6 +158,7 @@ def load_hmie(
     annotation_dir: str | Path | None = None,
     video_dir: str | Path | None = None,
     require_video: bool = False,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> BoxTrackDataset:
     """Load an HMIE/Scale dataset from disk into the neutral model.
 
@@ -157,7 +166,13 @@ def load_hmie(
     ``datamaite.load(root, dataset_format=DatasetFormat.HMIE, ...)``). See
     :meth:`HmieLoader.load` for the parameter and return semantics.
     """
-    return HmieLoader().load(root, annotation_dir=annotation_dir, video_dir=video_dir, require_video=require_video)
+    return HmieLoader().load(
+        root,
+        annotation_dir=annotation_dir,
+        video_dir=video_dir,
+        require_video=require_video,
+        storage_options=storage_options,
+    )
 
 
 def _pairs_from_dirs(annotation_dir: Path, video_dir: Path | None) -> list[SnippetPair]:
@@ -437,7 +452,10 @@ def _file_size(video_path: Path | None) -> int | None:
         return None
     try:
         return video_path.stat().st_size
-    except OSError:
+    except Exception:
+        # Best-effort by contract: object-store backends can raise non-OSError
+        # families (throttling/auth) for a stat, and a missing size must not
+        # abort the load.
         return None
 
 

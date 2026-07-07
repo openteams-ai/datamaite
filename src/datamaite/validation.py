@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 import os
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, cast
 
 from datamaite._cache import ValidationCache
 from datamaite._formats.hmie.annotation_checks import check_annotation_schema
@@ -21,6 +22,7 @@ from datamaite._formats.hmie.consistency_checks import check_video_annotation_co
 from datamaite._formats.hmie.discovery import DiscoveryResult, SnippetPair, discover_hmie_pairs
 from datamaite._formats.hmie.video_checks import probe_video
 from datamaite._types import DatasetFormat, Finding, Severity, ValidationResult
+from datamaite._upath import to_dataset_path
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ def validate(
     progress_callback: Callable[[], None] | None = None,
     status_callback: Callable[[str], None] | None = None,
     cache: ValidationCache | None = None,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> ValidationResult:
     """Validate an HMIE/Scale dataset at the given path.
 
@@ -59,6 +62,9 @@ def validate(
         finding. Use to bound memory when validating very large datasets.
         The ``finding_counts`` Counter on the result always reflects the
         true per-check total, even when findings are capped.
+    storage_options
+        fsspec filesystem/credential options applied when ``path`` is a
+        cloud URL (``s3://``, ``gs://``, ``az://``). Ignored for local paths.
 
     Returns
     -------
@@ -66,7 +72,7 @@ def validate(
         Contains pass/fail status, findings (possibly capped),
         finding_counts (always complete), and label histogram.
     """
-    path = Path(path)
+    path = to_dataset_path(path, storage_options)
     if isinstance(dataset_format, str):
         dataset_format = DatasetFormat(dataset_format.lower())
 
@@ -90,19 +96,25 @@ def validate_annotation(
     *,
     dataset_format: DatasetFormat | str = DatasetFormat.HMIE,
     check_video_integrity: bool = True,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> ValidationResult:
     """Validate a single annotation file and optionally its paired video.
 
     This is the lower-level entry point for validating individual files
     rather than discovering datasets in a directory tree.
 
-    Parameters mirror :func:`validate` where applicable (same
-    ``check_video_integrity`` kwarg name for consistency) and accept an
-    explicit ``dataset_format`` so non-HMIE formats can be added without
-    hardcoding the result tag.
+    Parameters
+    ----------
+    annotation_path, video_path, dataset_format, check_video_integrity
+        Mirror :func:`validate` where applicable (same ``check_video_integrity``
+        kwarg name for consistency); ``dataset_format`` is explicit here so
+        non-HMIE formats can be added without hardcoding the result tag.
+    storage_options
+        fsspec filesystem/credential options applied when either path is a
+        cloud URL (``s3://``, ``gs://``, ``az://``). Ignored for local paths.
     """
-    annotation_path = Path(annotation_path)
-    video_path = Path(video_path) if video_path is not None else None
+    annotation_path = to_dataset_path(annotation_path, storage_options)
+    video_path = to_dataset_path(video_path, storage_options) if video_path is not None else None
     if isinstance(dataset_format, str):
         dataset_format = DatasetFormat(dataset_format.lower())
 
@@ -143,6 +155,7 @@ def validate_batches(
     progress_callback: Callable[[], None] | None = None,
     status_callback: Callable[[str], None] | None = None,
     cache: ValidationCache | None = None,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> Iterator[tuple[Path, ValidationResult]]:
     """Validate multiple batches, yielding ``(batch_path, result)`` pairs.
 
@@ -153,8 +166,9 @@ def validate_batches(
         under via :func:`find_batch_roots`, or an iterable of batch paths
         the caller has already discovered.
     dataset_format, check_video_integrity, workers, max_findings_per_check,
-    progress_callback, status_callback, cache
-        Forwarded to :func:`validate` for every batch.
+    progress_callback, status_callback, cache, storage_options
+        Forwarded to :func:`validate` for every batch. ``storage_options``
+        is also applied when coercing ``root`` itself for discovery.
 
     Yields
     ------
@@ -180,10 +194,14 @@ def validate_batches(
     batch. This mirrors the ``worker_crash`` pattern used inside
     :func:`validate` for per-pair failures.
     """
-    if isinstance(root, (str, Path)):
+    # UPath duck-types pathlib.Path but is not a subclass (universal-pathlib
+    # >= 0.3), so an isinstance check alone would misroute remote roots into
+    # the iterable-of-batches branch. hasattr(root, "is_dir") also defeats
+    # pyright's narrowing here, so the path-like branch is cast explicitly.
+    if isinstance(root, (str, Path)) or hasattr(root, "is_dir"):
         from datamaite._formats.hmie.discovery import find_batch_roots
 
-        batch_paths: list[Path] = find_batch_roots(Path(root))
+        batch_paths: list[Path] = find_batch_roots(to_dataset_path(cast(Path, root), storage_options))
         if not batch_paths:
             msg = f"No batches found under {root}"
             raise ValueError(msg)
@@ -204,6 +222,7 @@ def validate_batches(
                 progress_callback=progress_callback,
                 status_callback=status_callback,
                 cache=cache,
+                storage_options=storage_options,
             )
         except Exception as exc:
             result = _build_validate_crash_result(batch, dataset_format, exc)

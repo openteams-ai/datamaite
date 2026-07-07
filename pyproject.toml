@@ -31,6 +31,11 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "pydantic>=2.0",
     "numpy>=1.24",
+    # 2024.5.0 is universal-pathlib 0.3.8's own declared floor (verified via
+    # importlib.metadata.requires("universal_pathlib")); pinning below that
+    # lets pip resolve an fsspec too old for the UPath surface we depend on.
+    "fsspec>=2024.5.0",
+    "universal-pathlib>=0.3.8",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +54,23 @@ ic = [
 all = [
     "opencv-python-headless>=4.8",
     "av>=11",
+]
+# Cloud object-storage backends for loading datasets from s3:// / gs:// / az://
+# URLs. Core ships fsspec + universal-pathlib; each provider's filesystem is
+# opt-in, mirroring checkmaite's extras.
+aws = [
+    "s3fs>=2023.1.0",
+]
+gcs = [
+    "gcsfs>=2023.1.0",
+]
+azure = [
+    "adlfs>=2023.1.0",
+]
+cloud = [
+    "s3fs>=2023.1.0",
+    "gcsfs>=2023.1.0",
+    "adlfs>=2023.1.0",
 ]
 # Jupyter kernel for running the docs/tutorial notebooks. Optional so it does
 # not pull the Jupyter stack into a production install.
@@ -102,9 +124,12 @@ datamaite = "datamaite._cli:main"
 packages = ["src/datamaite"]
 
 [tool.hatch.build.targets.sdist]
-# docs/ excluded so customer-facing tutorial notebooks (and any saved
-# cell outputs) never ship inside a distributed sdist.
-exclude = [".venv", ".uv-cache", ".beads", ".pytest_cache", "artifacts", "docs"]
+# Allowlist, not denylist: an sdist built from a working checkout must ship
+# only the package and its tests, never whatever untracked local files
+# happen to sit in the tree (docs notebooks, developer tools/ scripts,
+# scratch data). pyproject.toml, README.md, and the license are always
+# included by the build backend.
+only-include = ["src", "tests"]
 
 # ---------------------------------------------------------------------------
 # Poetry (CI and docs workflow)
@@ -207,5 +232,5 @@ reportMissingTypeStubs = false
 # Bandit
 # ---------------------------------------------------------------------------
 [tool.bandit]
-targets = ["src"]
+targets = ["src", "tools"]
 exclude_dirs = ["tests"]

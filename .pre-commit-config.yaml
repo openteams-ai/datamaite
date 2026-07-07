@@ -34,7 +34,7 @@ repos:
     rev: "1.7.10"
     hooks:
       - id: bandit
-        args: ["-c", "pyproject.toml", "-r", "src/"]
+        args: ["-c", "pyproject.toml", "-r", "src/", "tools/"]
         additional_dependencies: ["bandit[toml]"]
 
   # -----------------------------------------------------------------------

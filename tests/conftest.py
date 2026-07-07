@@ -58,3 +58,28 @@ def single_snippet_hmie(tmp_path: Path, valid_annotation: Path) -> Path:
     (snippet / "seq_mp4").mkdir()
     (snippet / "seq_mp4" / "dataset_000001.mp4").write_bytes(b"fake mp4")
     return root
+
+
+@pytest.fixture
+def memory_root():
+    """A clean UPath root on fsspec's in-memory filesystem.
+
+    The memory filesystem is a process-global singleton, so it is cleared
+    before and after each test. ``store`` holds the files and ``pseudo_dirs``
+    the directory entries -- clearing only the store leaks directories into
+    later tests (order-dependent discovery flakes). Tests exercising
+    validation against it must pass ``workers=1``: subprocess workers get
+    their own empty store.
+    """
+    import fsspec
+    from upath import UPath
+
+    fs = fsspec.filesystem("memory")
+
+    def _wipe() -> None:
+        fs.store.clear()
+        fs.pseudo_dirs[:] = [""]
+
+    _wipe()
+    yield UPath("memory://hmie-cloud-test")
+    _wipe()

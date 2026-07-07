@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from datamaite._formats.hmie.discovery import discover_hmie_pairs
+from datamaite._formats.hmie.discovery import _walk, discover_hmie_pairs, find_batch_roots
+from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
 
 
 @pytest.fixture
@@ -538,3 +539,92 @@ class TestMatchAnnotationAmbiguity:
         match = match_annotation_to_video("CDAO_clip_a.mp4_h.json", videos)
         assert match is not None
         assert match.name == "clip_a.mp4"
+
+
+class TestMemoryFilesystemDiscovery:
+    """Discovery over a cloud-style (fsspec memory://) root."""
+
+    def test_discovers_pairs_on_memory_root(self, memory_root):
+        single_video_dataset(
+            memory_root,
+            [
+                SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True)),
+                SnippetSpec(name="video_001_000002", video=VideoSpec(corrupt=True)),
+            ],
+        )
+        result = discover_hmie_pairs(memory_root)
+        assert result.errors == []
+        assert len(result.pairs) == 2
+        assert all(pair.video_path is not None for pair in result.pairs)
+        assert all(str(pair.annotation_path).startswith("memory://") for pair in result.pairs)
+
+    def test_metadata_dirs_pruned_on_memory_root(self, memory_root):
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        junk_dir = memory_root / "video_001_000000" / "video_001_000001" / "mapp_metadata"
+        junk_dir.mkdir(parents=True, exist_ok=True)
+        (junk_dir / "pipeline.json").write_text("{}")
+        result = discover_hmie_pairs(memory_root)
+        assert len(result.pairs) == 1
+
+    def test_find_batch_roots_on_memory_root(self, memory_root):
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        # single_video_dataset nests snippets under a full-length-video dir
+        # (memory_root/video_001_000000/<snippet>/seq_mp4/), so the batch dir
+        # -- the level directly containing snippet dirs -- is that full-video
+        # dir, not memory_root itself.
+        assert find_batch_roots(memory_root) == [memory_root / "video_001_000000"]
+
+
+def test_walk_skips_entries_that_fail_stat(tmp_path: Path) -> None:
+    """A stat failure on one entry must not abort the walk (os.walk parity)."""
+    (tmp_path / "good_dir").mkdir()
+    (tmp_path / "good.json").write_text("{}")
+
+    class _BrokenEntry:
+        name = "broken"
+
+        def is_dir(self) -> bool:
+            raise OSError("stat failed")
+
+    class _FlakyRoot:
+        name = "root"
+
+        def iterdir(self) -> list[object]:
+            return [_BrokenEntry(), *sorted(tmp_path.iterdir(), key=lambda p: p.name)]
+
+    _dirpath, dirnames, filenames = next(_walk(_FlakyRoot()))  # type: ignore[arg-type]
+    assert dirnames == ["good_dir"]
+    # The unstat-able entry is classified as a file (never a dir), matching
+    # os.walk's onerror=None behaviour, and the healthy entries survive.
+    assert "broken" in filenames
+    assert "good.json" in filenames
+
+
+def test_walk_survives_non_oserror_entry_failure(tmp_path: Path) -> None:
+    """Object stores surface throttling/auth as non-OSError families; a bad
+    entry must still not abort the walk (broadened from OSError to Exception)."""
+    (tmp_path / "good_dir").mkdir()
+    (tmp_path / "good.json").write_text("{}")
+
+    class _BrokenEntry:
+        name = "broken"
+
+        def is_dir(self) -> bool:
+            raise RuntimeError("simulated backend throttling")
+
+    class _FlakyRoot:
+        name = "root"
+
+        def iterdir(self) -> list[object]:
+            return [_BrokenEntry(), *sorted(tmp_path.iterdir(), key=lambda p: p.name)]
+
+    _dirpath, dirnames, filenames = next(_walk(_FlakyRoot()))  # type: ignore[arg-type]
+    assert dirnames == ["good_dir"]
+    assert "broken" in filenames
+    assert "good.json" in filenames

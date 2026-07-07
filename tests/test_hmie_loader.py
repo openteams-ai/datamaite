@@ -647,6 +647,19 @@ class TestDatasetContainer:
         assert ds.num_boxes == sum(len(s.boxes) for s in ds.sequences)
 
 
+class TestCloudRoots:
+    def test_load_hmie_from_memory_url(self, memory_root) -> None:
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=FactoryVideoSpec(corrupt=True))],
+        )
+        ds = load_hmie(str(memory_root))
+        assert len(ds.sequences) == 1
+        assert ds.sequences[0].video_path is not None
+        assert ds.sequences[0].video_path.startswith("memory://")
+        assert ds.sequences[0].boxes, "annotation boxes should load from the remote JSON"
+
+
 def _one_box_annotation(frames: list[dict[str, Any]], *, afr: float = 5.0, fps: float = 30.0) -> dict[str, Any]:
     return {
         "task_id": "t",

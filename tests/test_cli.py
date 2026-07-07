@@ -224,6 +224,28 @@ class TestCLI:
         rc = main(["validate", str(single_snippet_hmie), "--skip-video-check", "--max-findings-per-check", "5"])
         assert rc == 0
 
+    def test_cli_validate_memory_url(self, memory_root, capsys) -> None:
+        """CLI accepts cloud URLs (memory:// filesystem) for validation."""
+        from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset
+
+        single_video_dataset(
+            memory_root,
+            [SnippetSpec(name="video_001_000001", video=VideoSpec(corrupt=True))],
+        )
+        rc = main(
+            [
+                "-q",
+                "validate",
+                str(memory_root),
+                "--skip-video-check",
+                "--workers",
+                "1",
+                "--no-cache",
+            ]
+        )
+        assert rc == 0
+        assert "PASS" in capsys.readouterr().out
+
 
 class TestMultiBatchCLI:
     def test_multi_batch_discovery(self, multi_batch_hmie: Path) -> None:

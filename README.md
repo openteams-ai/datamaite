@@ -76,12 +76,35 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 | `datamaite[ic]` | OpenCV | still-image IC pixel decode |
 | `datamaite[all]` | union of task extras | all task pixel/media paths |
 | `datamaite[maite]` | MAITE + PyAV | optional MAITE package plus MOT-video runtime for interoperability/conformance checks |
+| `datamaite[aws]` | `s3fs` | load/validate HMIE from `s3://` roots |
+| `datamaite[gcs]` | `gcsfs` | load/validate HMIE from `gs://` roots |
+| `datamaite[azure]` | `adlfs` | load/validate HMIE from `az://` roots |
+| `datamaite[cloud]` | `s3fs` + `gcsfs` + `adlfs` | all three cloud backends |
 
 `maite` itself is not a core runtime dependency; datamaite datasets conform to
 MAITE protocols structurally. The `maite` extra is available for consumers and
 conformance tests that want the MAITE package installed alongside the adapters;
 it includes PyAV because the MOT MAITE view decodes video-backed sequences.
 See [docs/packaging.md](docs/packaging.md) for the dependency contract.
+
+### Cloud object storage
+
+Dataset roots can be cloud URLs — `s3://`, `gs://`, or `az://` — with the
+matching extra installed (`datamaite[aws]`, `[gcs]`, `[azure]`, or
+`[cloud]` for all three). Cloud roots are supported for **HMIE only**;
+other format loaders raise a clear error on a cloud URL. Video integrity
+checks over cloud data additionally need the `fmv` extra (e.g.
+`datamaite[aws,fmv]`) — without it, video checks are skipped with a
+`video_dependency` warning:
+
+```python
+import datamaite
+
+result = datamaite.validate("s3://my-bucket/datasets/batch-a")
+```
+
+See the cloud storage guide in the docs for credentials and how video
+integrity checks work remotely.
 
 ## Loading datasets (Python)
 

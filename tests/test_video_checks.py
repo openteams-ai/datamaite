@@ -11,6 +11,7 @@ from datamaite._formats.hmie.consistency_checks import check_video_annotation_co
 from datamaite._formats.hmie.schema import ScaleAnnotation
 from datamaite._formats.hmie.video_checks import probe_video
 from datamaite._types import Severity
+from tests._hmie_factory import VideoSpec, make_video
 from tests._scale_factory import default_frame, one_track_annotation
 
 
@@ -60,56 +61,46 @@ class TestMidAndLastFrameFailure:
 
     Real HMIE videos commonly open cleanly and decode frame 0 but fail
     halfway through or at the tail. Synthetic mp4v videos with every
-    frame as an I-frame cannot reproduce this behavior, so we inject
-    a fake VideoCapture that fails ``read()`` after a configurable
-    number of successful calls.
+    frame as an I-frame cannot reproduce this behavior, so we patch
+    ``_decode_frame_at`` (the shared seek-and-decode helper) to fail
+    after a configurable number of successful calls.
     """
 
-    def _install_failing_capture(self, monkeypatch, fail_after_n_reads: int) -> None:
-        """Patch cv2.VideoCapture so read() fails after N successful calls.
+    def _install_failing_decode(self, monkeypatch, succeed_calls: int) -> None:
+        """Patch ``_decode_frame_at`` so only the first ``succeed_calls`` calls succeed.
 
-        The first ``fail_after_n_reads`` calls succeed (returning the real
-        frame), subsequent calls return ``(False, None)``. ``get()`` and
-        ``set()`` and ``isOpened()`` pass through unchanged.
+        Successful calls delegate to the real implementation (so sample,
+        mid, and last frames are genuinely decoded from the container);
+        calls beyond ``succeed_calls`` return ``None``, simulating a
+        seek/decode failure. ``_decode_frame_at`` is called once per
+        sampled index plus once each for the mid and last frame, so this
+        controls exactly how far into that sequence decoding "fails".
         """
-        import cv2
+        import datamaite._formats.hmie.video_checks as vc
 
-        real_capture_cls = cv2.VideoCapture
+        real_decode_frame_at = vc._decode_frame_at
+        call_count = 0
 
-        class FakeCapture:
-            def __init__(self, path: str) -> None:
-                self._inner = real_capture_cls(path)
-                self._reads = 0
+        def fake_decode_frame_at(container, stream, frame_index, fps):  # type: ignore[no-untyped-def]
+            nonlocal call_count
+            call_count += 1
+            if call_count > succeed_calls:
+                return None
+            return real_decode_frame_at(container, stream, frame_index, fps)
 
-            def isOpened(self) -> bool:  # noqa: N802
-                return bool(self._inner.isOpened())
-
-            def get(self, prop: int) -> float:
-                return float(self._inner.get(prop))
-
-            def set(self, prop: int, value: float) -> bool:
-                return bool(self._inner.set(prop, value))
-
-            def read(self):  # type: ignore[no-untyped-def]
-                if self._reads >= fail_after_n_reads:
-                    return (False, None)
-                self._reads += 1
-                return self._inner.read()
-
-            def release(self) -> None:
-                self._inner.release()
-
-        monkeypatch.setattr(cv2, "VideoCapture", FakeCapture)
+        monkeypatch.setattr(vc, "_decode_frame_at", fake_decode_frame_at)
 
     def test_mid_frame_decode_failure(self, synthetic_video: Path, monkeypatch) -> None:
-        """First-frame read succeeds; mid-frame seek+read fails -> video_mid_frame WARNING.
+        """First-frame decode succeeds; every sampled/mid/last decode fails.
+
+        -> video_mid_frame and video_last_frame WARNING.
 
         Note: video_mid_frame / video_last_frame are WARNING (not ERROR) because
-        cv2 seek semantics on H.264 B-frame pyramids can produce false positives
-        even on valid videos. The check is advisory until real CDAO data is
-        profiled.
+        PyAV's keyframe-based seek semantics on H.264 B-frame pyramids can produce
+        false positives even on valid videos. The check is advisory until real
+        CDAO data is profiled.
         """
-        self._install_failing_capture(monkeypatch, fail_after_n_reads=1)
+        self._install_failing_decode(monkeypatch, succeed_calls=0)
         _props, findings = probe_video(synthetic_video)
         warning_checks = {f.check for f in findings if f.severity == Severity.WARNING}
         # Both mid and last should be flagged as WARNING
@@ -121,66 +112,67 @@ class TestMidAndLastFrameFailure:
         assert "video_last_frame" not in error_checks
 
     def test_last_frame_decode_failure_only(self, synthetic_video: Path, monkeypatch) -> None:
-        """First-frame + samples + mid-frame succeed; last-frame alone fails.
+        """Samples + mid-frame succeed; last-frame alone fails.
 
-        Exercises the video_last_frame branch in isolation. To do this,
-        allow the first-frame read (1) + 10 sample reads + 1 mid read
-        = 12 successes, then fail the 13th (last-frame read).
+        Exercises the video_last_frame branch in isolation. ``_decode_frame_at``
+        is called once per the 10 sampled indices plus once for the mid frame
+        (11 calls); allow those to succeed, then fail the 12th (last-frame) call.
         """
-        self._install_failing_capture(monkeypatch, fail_after_n_reads=12)
+        self._install_failing_decode(monkeypatch, succeed_calls=11)
         _props, findings = probe_video(synthetic_video)
         warning_checks = {f.check for f in findings if f.severity == Severity.WARNING}
         assert "video_last_frame" in warning_checks
         assert "video_mid_frame" not in warning_checks
 
     def test_no_sample_reads_succeed(self, synthetic_video: Path, monkeypatch) -> None:
-        """If EVERY sample read fails, _check_frame_samples early-returns
+        """If EVERY sample decode fails, _check_frame_samples early-returns
         via sampled_count==0 without flagging flat-frames."""
-        # Allow the first-frame read (1), everything after fails.
-        self._install_failing_capture(monkeypatch, fail_after_n_reads=1)
+        self._install_failing_decode(monkeypatch, succeed_calls=0)
         _props, findings = probe_video(synthetic_video)
         # video_flat_frames should NOT appear -- sampled_count was 0
         assert not any(f.check == "video_flat_frames" for f in findings)
 
     def test_exception_during_probe_becomes_finding(self, synthetic_video: Path, monkeypatch) -> None:
-        """If cv2 raises during metadata/read, we must NOT crash the worker.
+        """If PyAV raises during metadata/decode, we must NOT crash the worker.
 
         Previously the locals frame_count/fps/width/height/first_frame_decodable
         were assigned inside the try block and read after the finally. An
-        unexpected exception from cv2.get() or cv2.read() would leave those
-        locals unbound, and the function would NameError after releasing the
-        capture -- crashing the worker process and (in parallel mode)
+        unexpected exception from container decoding would leave those
+        locals unbound, and the function would NameError after closing the
+        container -- crashing the worker process and (in parallel mode)
         terminating the whole validation run.
 
-        The fix wraps the cap.get/cap.read block in try/except and emits a
-        video_probe_error ERROR finding. This test installs a capture whose
-        .read() raises RuntimeError to prove the new error path.
+        The fix wraps the metadata/decode block in try/except and emits a
+        video_probe_error ERROR finding. This test wraps the real container's
+        ``decode()`` so it raises RuntimeError to prove the new error path.
         """
-        import cv2
+        pytest.importorskip("av")
+        import av
 
-        real_capture_cls = cv2.VideoCapture
+        real_open = av.open
 
-        class RaisingCapture:
-            def __init__(self, path: str) -> None:
-                self._inner = real_capture_cls(path)
+        class RaisingContainer:
+            def __init__(self, real_container) -> None:  # type: ignore[no-untyped-def]
+                self._real = real_container
 
-            def isOpened(self) -> bool:  # noqa: N802
-                return bool(self._inner.isOpened())
+            @property
+            def streams(self):  # type: ignore[no-untyped-def]
+                return self._real.streams
 
-            def get(self, prop: int) -> float:
-                return float(self._inner.get(prop))
-
-            def set(self, prop: int, value: float) -> bool:
-                return bool(self._inner.set(prop, value))
-
-            def read(self):  # type: ignore[no-untyped-def]
+            def decode(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
                 msg = "simulated codec crash"
                 raise RuntimeError(msg)
 
-            def release(self) -> None:
-                self._inner.release()
+            def seek(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                return self._real.seek(*args, **kwargs)
 
-        monkeypatch.setattr(cv2, "VideoCapture", RaisingCapture)
+            def close(self) -> None:
+                self._real.close()
+
+        def fake_open(source, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return RaisingContainer(real_open(source, *args, **kwargs))
+
+        monkeypatch.setattr(av, "open", fake_open)
 
         # Must not raise
         props, findings = probe_video(synthetic_video)
@@ -260,36 +252,37 @@ class TestProbeVideo:
 
     def test_single_open_per_probe(self, synthetic_video: Path, monkeypatch) -> None:
         """probe_video should open the video exactly once."""
-        import cv2
+        pytest.importorskip("av")
+        import av
 
-        original_cls = cv2.VideoCapture
+        real_open = av.open
         call_count = 0
 
-        def counting_capture(*args, **kwargs):  # type: ignore[no-untyped-def]
+        def counting_open(*args, **kwargs):  # type: ignore[no-untyped-def]
             nonlocal call_count
             call_count += 1
-            return original_cls(*args, **kwargs)
+            return real_open(*args, **kwargs)
 
-        monkeypatch.setattr(cv2, "VideoCapture", counting_capture)
+        monkeypatch.setattr(av, "open", counting_open)
         probe_video(synthetic_video)
         assert call_count == 1
 
 
-class TestSilenceCv2Logging:
-    def test_tolerates_cv2_without_utils_logging(self) -> None:
-        """Variant cv2 builds (headless / custom / older) may omit cv2.utils.logging."""
+class TestSilenceAvLogging:
+    def test_tolerates_av_without_logging(self) -> None:
+        """Variant PyAV builds may omit the av.logging submodule."""
         import datamaite._formats.hmie.video_checks as vc
 
-        class FakeCV2:  # no .utils at all
+        class FakeAV:  # no .logging at all
             pass
 
         # Reset the module-level silenced flag so the call actually runs.
-        vc._cv2_silenced = False
+        vc._av_silenced = False
         try:
-            vc._silence_cv2_logging(FakeCV2)  # type: ignore[arg-type]
-            assert vc._cv2_silenced is True
+            vc._silence_av_logging(FakeAV)  # type: ignore[arg-type]
+            assert vc._av_silenced is True
         finally:
-            vc._cv2_silenced = False
+            vc._av_silenced = False
 
 
 class TestCheckVideoAnnotationConsistency:
@@ -471,3 +464,80 @@ class TestCheckVideoAnnotationConsistency:
         ann = ScaleAnnotation.model_validate(data)
         findings = self._consistency(synthetic_video, ann)
         assert any(f.check == "consistency_bbox_bounds" for f in findings)
+
+
+class TestRemoteProbeStreaming:
+    """probe_video over a cloud-style (fsspec memory://) root.
+
+    memory:// exercises the real remote branch: _av_source returns a
+    seekable fsspec file object and PyAV streams from it directly.
+    """
+
+    def test_probe_memory_video_streams(self, memory_root, tmp_path):
+        pytest.importorskip("av")
+        local = tmp_path / "video_001.mp4"
+        make_video(local, VideoSpec())
+        remote = memory_root / "seq_mp4" / "video_001.mp4"
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        remote.write_bytes(local.read_bytes())
+
+        props, findings = probe_video(remote)
+        assert props.opened
+        assert props.frame_count > 0
+        assert props.fps > 0
+        assert props.width > 0
+        assert props.height > 0
+        assert props.path == remote
+        assert all(str(f.path) == str(remote) for f in findings)
+
+    def test_probe_memory_matches_local_probe(self, memory_root, tmp_path):
+        """Streaming and local probing agree on the same bytes."""
+        pytest.importorskip("av")
+        local = tmp_path / "video_001.mp4"
+        make_video(local, VideoSpec(num_frames=40, fps=20.0))
+        remote = memory_root / "video_001.mp4"
+        remote.write_bytes(local.read_bytes())
+
+        local_props, _ = probe_video(local)
+        remote_props, _ = probe_video(remote)
+        assert remote_props.opened
+        assert local_props.opened
+        assert remote_props.frame_count == local_props.frame_count
+        assert remote_props.fps == local_props.fps
+        assert (remote_props.width, remote_props.height) == (local_props.width, local_props.height)
+        assert remote_props.first_frame_decodable == local_props.first_frame_decodable
+
+    def test_probe_corrupt_remote_video_reports_logical_path(self, memory_root):
+        pytest.importorskip("av")
+        remote = memory_root / "seq_mp4" / "video_001.mp4"
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        remote.write_bytes(b"this is not a video file")
+
+        props, findings = probe_video(remote)
+        assert not props.opened
+        assert any(f.check == "video_open" for f in findings)
+        assert all(str(f.path) == str(remote) for f in findings)
+
+    def test_probe_missing_remote_video_is_open_error(self, memory_root):
+        pytest.importorskip("av")
+        props, findings = probe_video(memory_root / "seq_mp4" / "absent.mp4")
+        assert not props.opened
+        assert any(f.check == "video_open" for f in findings)
+
+
+def test_probe_video_reports_missing_av(monkeypatch):
+    """Without the fmv extra, probing degrades to a WARNING finding."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "av":
+            raise ImportError("No module named 'av'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    props, findings = probe_video(Path("/data/video_001.mp4"))
+    assert not props.opened
+    assert [f.check for f in findings] == ["video_dependency"]
+    assert findings[0].severity == Severity.WARNING

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import is_remote_path, to_dataset_path
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset, VisionDataset
 
 logger = logging.getLogger(__name__)
@@ -237,19 +238,47 @@ def load(
     about *data* (skip unparseable items, warn, return empty), but a bad root
     fails loudly here rather than silently yielding an empty dataset.
     """
-    _require_dataset_root(root)
+    _require_dataset_root(root, options.get("storage_options"))
     if dataset_format is None:
         resolved_format, resolved_task, resolved_variant = _detect_format(root, task=task, variant=registry_variant)
     else:
         resolved_format, resolved_task, resolved_variant = dataset_format, task, registry_variant
+    _reject_remote_non_hmie(root, resolved_format, options.get("storage_options"))
     dataset = get_loader(resolved_format, task=resolved_task, variant=resolved_variant).load(root, **options)
     _warn_if_empty(dataset, root, resolved_format)
     return dataset
 
 
-def _require_dataset_root(root: str | Path) -> None:
-    """Raise if ``root`` is not an existing directory (a caller error)."""
-    path = Path(root)
+def _reject_remote_non_hmie(
+    root: str | Path,
+    dataset_format: DatasetFormat | str,
+    storage_options: Any = None,
+) -> None:
+    """Cloud roots are supported for the HMIE format only.
+
+    Every fsspec backend uses the same code path, but only HMIE loading has
+    been exercised end-to-end against object storage; other format loaders
+    have local-filesystem assumptions we have not validated remotely, so a
+    remote root with a non-HMIE format fails loudly here rather than in some
+    backend-specific way deep inside the loader.
+    """
+    if not is_remote_path(to_dataset_path(root, storage_options)):
+        return
+    fmt = _coerce_format(dataset_format)
+    if fmt is not DatasetFormat.HMIE:
+        raise ValueError(
+            f"cloud dataset roots are currently supported for the HMIE format only; "
+            f"got format={fmt.value} for root={root!r}"
+        )
+
+
+def _require_dataset_root(root: str | Path, storage_options: Any = None) -> None:
+    """Raise if ``root`` is not an existing directory (a caller error).
+
+    ``root`` may be a cloud URL; ``storage_options`` (when the caller's
+    options carry one) is applied so private buckets are checkable.
+    """
+    path = to_dataset_path(root, storage_options)
     if not path.exists():
         raise FileNotFoundError(f"dataset root does not exist: {path}")
     if not path.is_dir():
@@ -302,7 +331,8 @@ def load_mot(
     (e.g. HMIE's ``require_video``). This is the public MOT loader; per-format
     helpers are internal to ``datamaite._formats.<format>.loader``.
     """
-    _require_dataset_root(root)
+    _require_dataset_root(root, options.get("storage_options"))
+    _reject_remote_non_hmie(root, dataset_format, options.get("storage_options"))
     try:
         loader = get_loader(dataset_format, task=Task.MOT, variant=registry_variant)
     except ValueError as task_error:
@@ -338,7 +368,8 @@ def load_vc(
     public VC loader; per-format helpers are internal to
     ``datamaite._formats.<format>.loader``.
     """
-    _require_dataset_root(root)
+    _require_dataset_root(root, options.get("storage_options"))
+    _reject_remote_non_hmie(root, dataset_format, options.get("storage_options"))
     try:
         loader = get_loader(dataset_format, task=Task.VC, variant=registry_variant)
     except ValueError as task_error:
@@ -360,6 +391,11 @@ def _detect_format(
     variant: str = "default",
 ) -> tuple[DatasetFormat, Task, str]:
     """Pick a format by asking each registered loader to sniff ``root``."""
+    if is_remote_path(to_dataset_path(root)):
+        raise ValueError(
+            f"Could not autodetect dataset format for {root!r}: autodetect is not supported for cloud "
+            "roots; pass dataset_format explicitly"
+        )
     _ensure_builtin_loaders()
     resolved_task = _coerce_task(task)
     requested_variant = str(variant or "default")
