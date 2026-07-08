@@ -147,7 +147,7 @@ class TestTaskAwareRegistry:
     def test_yolo_ic_loader_key_is_registered(self) -> None:
         key = LoaderKey(task=Task.IC, format=DatasetFormat.YOLO, variant="default")
         assert key in available_loader_keys()
-        assert available_formats(task=Task.IC) == [DatasetFormat.YOLO]
+        assert DatasetFormat.YOLO in available_formats(task=Task.IC)
         assert get_loader("yolo", task=Task.IC).task is Task.IC
 
 

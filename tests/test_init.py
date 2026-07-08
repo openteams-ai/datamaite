@@ -172,3 +172,12 @@ def test_version_tuple_parsing() -> None:
     assert _as_tuple("0.1.0") == (0, 1, 0)
     assert _as_tuple("0.1.dev59") == (0, 1, "dev59")
     assert _as_tuple("0.0.0+unknown") == (0, 0, 0, "unknown")
+
+
+def test_visdrone_static_enum_and_exports() -> None:
+    import datamaite
+    from datamaite._types import DatasetFormat
+
+    assert DatasetFormat.VISDRONE.value == "visdrone"
+    assert datamaite.VisDroneObjectDetectionLoader.__name__ == "VisDroneObjectDetectionLoader"
+    assert datamaite.VisDroneImageClassificationLoader.__name__ == "VisDroneImageClassificationLoader"

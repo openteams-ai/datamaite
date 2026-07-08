@@ -96,6 +96,7 @@ _BUILTIN_LOADER_MODULES = (
     "datamaite._formats.motchallenge.loader",
     "datamaite._formats.tao.loader",
     "datamaite._formats.visdrone.loader",
+    "datamaite._formats.visdrone.static_loader",
     "datamaite._formats.yolo.loader",
 )
 _BUILTIN_LOADERS_IMPORTED = False

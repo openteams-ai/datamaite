@@ -34,6 +34,34 @@ def _ds() -> ObjectDetectionDataset:
     )
 
 
+class TestRegionKeywordOnly:
+    """`ImageRecord.region` is keyword-only so positional construction is stable.
+
+    A base-class field would otherwise slot ahead of the subclass `detections`
+    field, silently binding a detection tuple into `region`.
+    """
+
+    def test_positional_construction_binds_detections_not_region(self) -> None:
+        det = ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1)
+        # Positional order: image_id, path_or_uri, image_bytes, file_name, width,
+        # height, split, metadata, detections — region is NOT in this sequence.
+        sample = ImageObjectDetectionSample(7, None, None, "a.jpg", 640, 480, "train", {}, (det,))
+        assert sample.detections == (det,)
+        assert sample.split == "train"
+        assert sample.region is None
+
+    def test_region_is_keyword_only(self) -> None:
+        det = ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1)
+        with pytest.raises(TypeError):
+            # A tenth positional arg has no field to bind to now that region is
+            # keyword-only; this must raise rather than absorb it into region.
+            ImageObjectDetectionSample(7, None, None, "a.jpg", 640, 480, "train", {}, (det,), (0.0, 0.0, 1.0, 1.0))
+
+    def test_region_accepted_as_keyword(self) -> None:
+        sample = ImageObjectDetectionSample(image_id=7, region=(0.0, 0.0, 1.0, 1.0))
+        assert sample.region == (0.0, 0.0, 1.0, 1.0)
+
+
 class TestModel:
     def test_len_and_counts(self) -> None:
         ds = _ds()

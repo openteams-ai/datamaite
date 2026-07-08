@@ -38,6 +38,15 @@ class ImageRecord:
     height: int | None = None
     split: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)  # per-image writer-consumed passthrough
+    # Optional crop rectangle (canonical xywh). When set, MAITE decoding returns
+    # this sub-region of the image (e.g. VisDrone IC object crops); None = full image.
+    #
+    # Keyword-only: a base-class field otherwise slots ahead of subclass fields
+    # (``labels``/``detections``) in positional constructors, so an existing
+    # positional call would bind its label/detection tuple into ``region``.
+    # ``kw_only=True`` places it after the subclass fields, preserving the
+    # positional signatures that predate this field.
+    region: BBox | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)

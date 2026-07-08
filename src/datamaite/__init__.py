@@ -66,6 +66,10 @@ if TYPE_CHECKING:
     from datamaite._formats.tao.loader import TaoLoader
     from datamaite._formats.tao.writer import TaoWriter
     from datamaite._formats.visdrone.loader import VisDroneVideoLoader
+    from datamaite._formats.visdrone.static_loader import (
+        VisDroneImageClassificationLoader,
+        VisDroneObjectDetectionLoader,
+    )
     from datamaite._formats.visdrone.writer import VisDroneVideoWriter
     from datamaite._formats.yolo.loader import YoloImageClassificationLoader, YoloObjectDetectionLoader
     from datamaite._formats.yolo.writer import YoloImageClassificationWriter, YoloObjectDetectionWriter
@@ -93,6 +97,14 @@ _LAZY_EXPORTS = {
     "MotChallengeWriter": ("datamaite._formats.motchallenge.writer", "MotChallengeWriter"),
     "TaoLoader": ("datamaite._formats.tao.loader", "TaoLoader"),
     "TaoWriter": ("datamaite._formats.tao.writer", "TaoWriter"),
+    "VisDroneObjectDetectionLoader": (
+        "datamaite._formats.visdrone.static_loader",
+        "VisDroneObjectDetectionLoader",
+    ),
+    "VisDroneImageClassificationLoader": (
+        "datamaite._formats.visdrone.static_loader",
+        "VisDroneImageClassificationLoader",
+    ),
     "VisDroneVideoLoader": ("datamaite._formats.visdrone.loader", "VisDroneVideoLoader"),
     "VisDroneVideoWriter": ("datamaite._formats.visdrone.writer", "VisDroneVideoWriter"),
     "YoloImageClassificationLoader": ("datamaite._formats.yolo.loader", "YoloImageClassificationLoader"),
@@ -147,6 +159,8 @@ __all__ = [
     "VideoClassificationDataset",
     "VideoClassificationSample",
     "VideoSequence",
+    "VisDroneImageClassificationLoader",
+    "VisDroneObjectDetectionLoader",
     "VisDroneVideoLoader",
     "VisDroneVideoWriter",
     "VisionDataset",

@@ -81,8 +81,9 @@ def load_ic(
 ) -> ImageClassificationDataset:
     """Load a still-image classification dataset (task-first entry point).
 
-    Currently the concrete IC reader is YOLO/Ultralytics classification
-    folder layout. Additional IC formats should return this same dataset model.
+    Concrete IC readers include the YOLO/Ultralytics classification folder
+    layout and VisDrone still images (object crops derived from the DET
+    annotations). Additional IC formats should return this same dataset model.
     """
     from datamaite.loaders import _require_dataset_root, _warn_if_empty, get_loader
 
