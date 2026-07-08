@@ -194,6 +194,17 @@ def _write_ic_sample(
     used_targets: set[Path],
 ) -> Path | None:
     """Write one IC sample to ``<dest>/<split>/<class>/<file>``; return the path."""
+    if getattr(sample, "region", None) is not None:
+        # This writer copies the whole source image; it cannot crop. A sample with
+        # a crop region (e.g. a VisDrone-derived object crop) would be emitted as
+        # its full source image under a class label it does not depict, silently
+        # producing an incorrect dataset. Skip it loudly instead.
+        logger.warning(
+            "Skipping YOLO IC sample %r: it carries a crop region this image-copying writer "
+            "cannot represent; emitting the full source image would mislabel it",
+            sample.image_id,
+        )
+        return None
     label = _single_label(sample)
     if label is None:
         logger.warning("Skipping YOLO IC sample %r with no labels", sample.image_id)

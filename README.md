@@ -33,11 +33,11 @@ source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
 HMIE/Scale dataset on disk, and a **writer** serialises supported datasets out to
 an output format (`convert` pairs a loader and a writer of the same task for
 on-disk → on-disk conversion). HMIE/Scale, flat MP4 video folders, Hugging Face
-Video Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, YOLO image
-classification, and YOLO object detection are implemented input formats;
-HMIE/Scale, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone
-Video, COCO OD, YOLO image classification, and YOLO object detection are
-implemented output formats. Validation is currently **HMIE/Scale only**;
+Video Classification, MOTChallenge, TAO, VisDrone Video, VisDrone still images,
+COCO OD, YOLO image classification, and YOLO object detection are implemented
+input formats; HMIE/Scale, Hugging Face Video Classification, MOTChallenge,
+TAO, VisDrone Video, COCO OD, YOLO image classification, and YOLO object
+detection are implemented output formats. Validation is currently **HMIE/Scale only**;
 non-HMIE formats load and write but are not validated by `datamaite validate`
 yet.
 
@@ -49,6 +49,8 @@ yet.
 | MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
+| VisDrone still images (OD) | ✅ | — | — |
+| VisDrone still images (IC, object crops) | ✅ | — | — |
 | YOLO image classification | ✅ | — | ✅ |
 | COCO object detection | ✅ | — | ✅ |
 | YOLO object detection | ✅ | — | ✅ |
@@ -280,6 +282,29 @@ for sample in ic.iter_samples():
     print(sample.file_name, sample.split, sample.labels[0].category_name)
 ```
 
+Load VisDrone's still-image DET layout (`images/` + `annotations/`) the same way:
+
+```python
+from datamaite import load_od, load_ic
+
+# Object detection: one sample per image, VisDrone's DET classes.
+od = load_od("/path/to/VisDrone2019-DET-train", dataset_format="visdrone")
+
+# Image classification: one sample per labeled object (crop labeled by category).
+# "ignored regions" (class 0) are excluded by default.
+ic = load_ic("/path/to/VisDrone2019-DET-train", dataset_format="visdrone")
+ic_with_ignored = load_ic(
+    "/path/to/VisDrone2019-DET-train",
+    dataset_format="visdrone",
+    include_ignored_regions=True,
+)
+```
+
+VisDrone ships no standard image-classification format; datamaite derives IC
+samples from the DET annotations as object crops. **Limitation:** writing a
+VisDrone-derived IC dataset through an image-copying IC writer would emit full
+images, not crops — see the follow-up issue before round-tripping IC crops.
+
 Both IC and OD use still-image records with first-class `split` and shared image
 source fields (`path_or_uri`, `image_bytes`, `file_name`, `width`, `height`).
 Because `yolo` is a shared format family, generic `load(..., dataset_format="yolo")`
@@ -440,8 +465,8 @@ Exit codes: `0` = pass, `1` = warnings only, `2` = errors present.
 
 Validation is currently implemented only for HMIE/Scale. For any non-HMIE
 `--format`, `datamaite validate` raises `NotImplementedError`; loaders/writers
-for COCO, YOLO IC/OD, MOTChallenge, TAO, VisDrone, and Hugging Face VC do not imply
-on-disk validation support yet.
+for COCO, YOLO IC/OD, MOTChallenge, TAO, VisDrone (video and still images), and
+Hugging Face VC do not imply on-disk validation support yet.
 
 For HMIE/Scale, the validator runs four checks against each dataset:
 

@@ -73,8 +73,14 @@ def build_ic_item(
     meta: dict[str, Any] = {"id": sample.image_id}
     if sample.split is not None:
         meta["split"] = sample.split
-    height = sample.height if sample.height is not None else int(image.shape[1])
-    width = sample.width if sample.width is not None else int(image.shape[2])
+    if getattr(sample, "region", None) is not None:
+        # A region crop is clamped to image bounds at decode time, so its true size
+        # is known only from the decoded array -- the stored dims are the nominal
+        # (possibly over-edge) box size and would disagree for edge-straddling crops.
+        height, width = int(image.shape[1]), int(image.shape[2])
+    else:
+        height = sample.height if sample.height is not None else int(image.shape[1])
+        width = sample.width if sample.width is not None else int(image.shape[2])
     meta["height"] = height
     meta["width"] = width
     return image, _target(sample, taxonomy), meta

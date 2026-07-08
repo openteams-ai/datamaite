@@ -316,6 +316,29 @@ class TestYoloImageClassificationWriterSkipPaths:
         assert "no labels" in caplog.text
         assert not (tmp_path / "train").exists()
 
+    def test_region_bearing_crop_sample_is_skipped(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # A VisDrone-derived IC crop carries a `region`; this image-copying writer
+        # cannot crop, so emitting the full source image would mislabel it. It must
+        # skip loudly rather than write an incorrect dataset.
+        dest = tmp_path / "out"
+        label = ClassificationLabel(category_id=0, category_name="cat")
+        ds = _one_sample_dataset(
+            ImageClassificationSample(
+                image_id="crop#1",
+                image_bytes=b"img",
+                file_name="crop.jpg",
+                labels=(label,),
+                region=(10.0, 20.0, 30.0, 40.0),
+            )
+        )
+
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
+            files = write(ds, dest, output_format="yolo", write_data_yaml=False, verbose=True)
+
+        assert files == []
+        assert "crop region" in caplog.text
+        assert not (dest / "train" / "cat").exists()
+
     def test_unsafe_split_is_skipped_no_escape(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         dest = tmp_path / "out"
         label = ClassificationLabel(category_id=0, category_name="cat")

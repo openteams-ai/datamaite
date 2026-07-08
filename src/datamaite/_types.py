@@ -204,6 +204,7 @@ class DatasetFormat(enum.Enum):
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"
+    VISDRONE = "visdrone"
     VISDRONE_VIDEO = "visdrone_video"
     YOLO = "yolo"
 
