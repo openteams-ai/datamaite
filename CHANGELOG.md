@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falling back from generic `category_id` values to their fixed class
   tables, and accept an explicit `class_map=` option; categories missing
   from `class_map` are dropped with an aggregated warning (#55).
+- Python 3.13 support (`requires-python = ">=3.10,<3.14"`), tested in CI
+  alongside 3.10/3.11/3.12.
 
 ### Changed
 

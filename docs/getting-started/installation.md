@@ -2,7 +2,7 @@
 
 `datamaite` ships as one package with task-oriented extras. The core install is
 kept deliberately small so annotation loading, conversion dispatch, and HMIE
-structure/annotation validation do not pull in native media stacks. `datamaite` supports Python 3.10–3.12.
+structure/annotation validation do not pull in native media stacks. `datamaite` supports Python 3.10–3.13.
 
 ## From source with Poetry
 

@@ -138,7 +138,7 @@ build:
   stage: build
   needs: []
   variables:
-    VERSION: "3.11"
+    VERSION: "3.13"
   script:
     - poetry build
     - |
@@ -188,7 +188,7 @@ build:
 # RELEASE_TAG set, publishing to TestPyPI first and then PyPI.
 .publish-python-package:
   stage: publish
-  image: python:3.11-slim
+  image: python:3.13-slim
   retry: 0
   interruptible: false
   resource_group: pypi-publish
@@ -383,7 +383,7 @@ pages-preview:
     - when: never
 
 # ---------------------------------------------------------------------------
-# Test matrix (Python 3.10, 3.11, 3.12)
+# Test matrix (Python 3.10, 3.11, 3.12, 3.13)
 # ---------------------------------------------------------------------------
 .test-base:
   extends: .shared-setup
@@ -420,6 +420,11 @@ test-py312:
   extends: .test-base
   variables:
     VERSION: "3.12"
+
+test-py313:
+  extends: .test-base
+  variables:
+    VERSION: "3.13"
 
 # ---------------------------------------------------------------------------
 # Integration (e2e): cross-format conversion matrix against the shared example-data
