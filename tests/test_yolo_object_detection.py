@@ -371,7 +371,9 @@ class TestYoloObjectDetectionWriter:
             ),
         )
 
-        files = write(ds, tmp_path, output_format="yolo", include_images=False, write_data_yaml=False, verbose=True)
+        files = write(
+            ds, tmp_path, output_format="yolo", include_images=False, write_data_yaml=False, mode="append", verbose=True
+        )
 
         assert files == [tmp_path / "labels" / "train" / "x.txt"]
         assert (tmp_path / "images" / "train" / "x.png").read_bytes() == b"existing"
@@ -462,7 +464,7 @@ class TestYoloObjectDetectionWriter:
             ),
         )
 
-        with pytest.raises(ValueError, match="precision must be at least 1"):
+        with pytest.raises(ValueError, match="precision must be"):
             write(ds, tmp_path, output_format="yolo", precision=0)
 
     def test_unknown_source_id_is_not_treated_as_dense_position(

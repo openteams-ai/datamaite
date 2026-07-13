@@ -205,7 +205,7 @@ class TestHmieWriter:
         from dataclasses import replace
 
         smaller = replace(ds, sequences=ds.sequences[:1])
-        write(smaller, out, output_format="hmie")
+        write(smaller, out, output_format="hmie", mode="replace")
         assert load_hmie(out).sequence_count == 1
 
     def test_non_mp4_video_preserves_container(self, tmp_path: Path) -> None:

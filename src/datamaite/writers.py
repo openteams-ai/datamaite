@@ -11,13 +11,14 @@ rather than fabricating data.
 
 from __future__ import annotations
 
+import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
 
-from datamaite._types import DatasetFormat, Task
+from datamaite._types import DatasetFormat, Task, WriteMode
 from datamaite.model import BoxTrackDataset, VisionDataset
 
 _DatasetT = TypeVar("_DatasetT", bound=VisionDataset)
@@ -56,6 +57,16 @@ class Writer(ABC, Generic[_DatasetT]):
         """Serialise ``dataset`` under ``dest`` and return the files written."""
         raise NotImplementedError
 
+    def validate_options(self, **options: Any) -> None:  # noqa: ARG002 - options is part of the hook contract; default ignores it
+        """Validate writer ``options`` before the destination policy runs.
+
+        Called by :func:`write` BEFORE ``_prepare_destination`` so an invalid
+        option raises without a ``mode="replace"`` clear having already deleted
+        the destination. Default: no-op; writers whose options can raise should
+        override this.
+        """
+        return
+
 
 _WRITERS: dict[WriterKey, type[Writer[Any]]] = {}
 _BUILTIN_WRITER_MODULES = (
@@ -88,6 +99,99 @@ def _coerce_task(task: Task | str | None) -> Task | None:
 
 def _coerce_format(dataset_format: DatasetFormat | str) -> DatasetFormat:
     return dataset_format if isinstance(dataset_format, DatasetFormat) else DatasetFormat(str(dataset_format).lower())
+
+
+_VALID_WRITE_MODES = ("error", "replace", "append")
+
+
+def _validate_mode(mode: WriteMode | str) -> str:
+    """Normalize ``mode`` to its lowercase string value.
+
+    Accepts both :class:`~datamaite._types.WriteMode` members and plain
+    strings (case-insensitive) so existing ``mode == "append"``-style
+    comparisons downstream keep working regardless of which form a caller
+    passes.
+    """
+    normalized = str(mode.value if isinstance(mode, WriteMode) else mode).strip().lower()
+    if normalized not in _VALID_WRITE_MODES:
+        raise ValueError(f"mode must be one of {sorted(_VALID_WRITE_MODES)!r}; got {mode!r}")
+    return normalized
+
+
+def _check_destination(dest: Path, mode: str) -> None:
+    """Validate the destination policy without touching anything on disk.
+
+    This is the non-destructive half of :func:`_prepare_destination`: it raises
+    the same errors (``NotADirectoryError`` for a non-directory ``dest``,
+    ``FileExistsError`` for a non-empty ``dest`` under ``mode="error"``,
+    ``ValueError`` for a ``mode="replace"`` destination that resolves to the
+    filesystem root, or that contains (or equals) the current working
+    directory or the home directory, or that is itself a symlink) but never
+    deletes anything. It exists so callers such as :func:`datamaite.
+    conversion.convert` can enforce the guardrail *before* paying the cost of
+    loading the source dataset, without risking a deletion ahead of a load
+    that might fail.
+    """
+    if dest.exists() and not dest.is_dir():
+        raise NotADirectoryError(f"Destination {dest} exists and is not a directory")
+    if not dest.is_dir():
+        return
+    # For mode="replace" the safety checks (protected paths + symlink alias)
+    # must run BEFORE the empty-directory short-circuit below: an *empty*
+    # symlinked destination is still an alias we refuse to write/clear through,
+    # and refusing the fs root / cwd / home must not depend on the dir being
+    # non-empty.
+    if mode == "replace":
+        resolved = dest.resolve()
+        cwd = Path.cwd().resolve()
+        home = Path.home().resolve()
+        # Refuse the filesystem root, and any directory that CONTAINS the cwd or
+        # the user's home (clearing it would wipe the working dir, a home dir, or
+        # a multi-user root like /Users or /home). is_relative_to covers equality
+        # too, so this also catches dest == cwd / dest == home.
+        if resolved == Path(resolved.anchor) or cwd.is_relative_to(resolved) or home.is_relative_to(resolved):
+            raise ValueError(
+                f"Refusing to replace the contents of {dest} (resolves to {resolved}); it is the "
+                "filesystem root or contains the current working directory or home directory"
+            )
+        if dest.is_symlink():
+            raise ValueError(f"Refusing to replace through a symlinked destination: {dest}")
+    entries = list(dest.iterdir())
+    if not entries:
+        return
+    if mode == "append":
+        return
+    if mode == "error":
+        raise FileExistsError(
+            f"Destination {dest} already exists and is not empty. "
+            "Pass mode='replace' to clear it first, or mode='append' to write into it "
+            "(append may leave stale files that a reload of the destination would pick up)."
+        )
+
+
+def _prepare_destination(dest: Path, mode: str) -> None:
+    """Enforce the destination policy before any writer touches ``dest``.
+
+    ``error`` refuses a non-empty destination directory, ``replace`` deletes
+    its contents (never ``dest`` itself), and ``append`` writes into whatever
+    is there. Replace refuses destinations that resolve to the filesystem
+    root, the home directory, or the current working directory.
+
+    Validation runs first via :func:`_check_destination` (see that function's
+    docstring for why it is split out), then, for ``mode="replace"``, the
+    actual clearing happens here.
+    """
+    _check_destination(dest, mode)
+    if not dest.is_dir():
+        return
+    entries = list(dest.iterdir())
+    if not entries or mode != "replace":
+        return
+    for entry in entries:
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
 
 
 def _key_for(writer_cls: type[Writer[Any]]) -> WriterKey:
@@ -142,7 +246,13 @@ def get_writer(
     task: Task | str | None = None,
     variant: str = "default",
 ) -> Writer[Any]:
-    """Return a writer instance for ``output_format``/``task``/``variant``."""
+    """Return a writer instance for ``output_format``/``task``/``variant``.
+
+    Calling the returned :class:`Writer` instance's ``.write()`` directly
+    bypasses the destination policy (``mode``) enforced by the module-level
+    :func:`write`/:func:`datamaite.conversion.convert`; use those functions
+    instead when the destination policy should apply.
+    """
     _ensure_builtin_writers()
     fmt = _coerce_format(output_format)
     resolved_task = _coerce_task(task)
@@ -178,12 +288,80 @@ def get_writer(
     raise ValueError(f"Multiple writers registered for format {fmt.value!r}; specify task/variant ({choices})")
 
 
+def _present_attrs(obj: Any, attrs: tuple[str, ...]) -> list[str]:
+    """Truthy values of ``attrs`` on ``obj`` (missing/empty attrs skipped)."""
+    return [value for attr in attrs if (value := getattr(obj, attr, None))]
+
+
+def _sequence_media_paths(sequence: Any) -> list[str]:
+    """Media/annotation paths a MOT ``VideoSequence`` references."""
+    paths = _present_attrs(sequence, ("video_path", "frame_dir", "annotation_path"))
+    paths.extend(frame_file for frame_file in (getattr(sequence, "frame_files", ()) or ()) if frame_file)
+    return paths
+
+
+def _sample_media_paths(sample: Any) -> list[str]:
+    """Media/annotation paths an image/video sample record references."""
+    return _present_attrs(sample, ("path_or_uri", "video_path", "metadata_path"))
+
+
+def _resolve_quietly(value: str) -> Path | None:
+    try:
+        return Path(value).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def _dataset_source_paths(dataset: VisionDataset) -> list[Path]:
+    """Resolved local paths a dataset's lazy media/annotations point at.
+
+    Writers read these *after* ``_prepare_destination`` runs, so a
+    ``mode="replace"`` clear of a destination that contains any of them would
+    delete the writer's own inputs mid-write. Collected by duck-typing across
+    the task models -- MOT ``VideoSequence`` media/frames/annotations and
+    image/video sample ``path_or_uri`` / ``video_path`` / ``metadata_path`` --
+    so new dataset types are covered as long as they reuse those field names.
+    Byte-backed records (no path) contribute nothing and are safe.
+    """
+    raw: list[str] = []
+    sequences = getattr(dataset, "sequences", None)
+    samples = getattr(dataset, "samples", None)
+    if sequences is not None:
+        for seq in sequences:
+            raw.extend(_sequence_media_paths(seq))
+    elif samples is not None:
+        for sample in samples:
+            raw.extend(_sample_media_paths(sample))
+    return [resolved for resolved in (_resolve_quietly(value) for value in raw) if resolved is not None]
+
+
+def _reject_source_under_destination(dataset: VisionDataset, dest: Path) -> None:
+    """Refuse a replace-mode write whose dest contains the dataset's own inputs.
+
+    ``write()`` clears the destination before the writer reads the dataset's
+    lazy media, so if any referenced path lives inside (or equals) ``dest`` the
+    clear destroys the writer's inputs -- e.g. ``write(load(p), p,
+    mode="replace")`` round-tripping a loaded dataset onto its own directory.
+    Enforced here (not only in :func:`datamaite.conversion.convert`) so the
+    module-level ``write()`` API is protected too.
+    """
+    dest_resolved = dest.resolve()
+    for source in _dataset_source_paths(dataset):
+        if source == dest_resolved or source.is_relative_to(dest_resolved):
+            raise ValueError(
+                f"Refusing to replace {dest} (resolves to {dest_resolved}): the dataset's "
+                f"media/annotations live inside it (e.g. {source}); clearing it would destroy "
+                "the writer's own inputs mid-write. Write to a different directory."
+            )
+
+
 def write(
     dataset: VisionDataset,
     dest: str | Path,
     *,
     output_format: DatasetFormat | str,
     output_variant: str = "default",
+    mode: WriteMode | str = WriteMode.ERROR,
     verbose: bool = False,
     **options: Any,
 ) -> list[Path] | None:
@@ -193,11 +371,27 @@ def write(
     ``variant=...`` keyword remains a writer option for formats such as
     VisDrone, preserving the pre-existing API.
 
+    ``mode`` controls the destination policy. Accepts either a
+    :class:`~datamaite._types.WriteMode` member or the equivalent string.
+    ``"error"`` (default) raises ``FileExistsError`` when ``dest`` exists and
+    is not empty; ``"replace"`` deletes the contents of ``dest`` *before* this
+    call writes anything (refusing the filesystem root and any destination
+    that contains or equals the home directory or the current working
+    directory, and refusing a ``dest`` that is itself a symlink) -- so if the
+    write fails or produces an empty dataset, ``dest`` is left emptied rather
+    than restored; ``"append"`` writes into the existing destination, which
+    may leave stale files behind that a reload of the destination would pick
+    up. Calling a ``Writer`` instance's ``.write()`` directly bypasses this
+    policy. Writer-option validation (e.g. an invalid ``class_map`` or
+    ``split``) runs before the destination is touched, so an invalid option
+    raises without a ``mode="replace"`` clear having already deleted ``dest``.
+
     ``verbose``: when ``True``, return the list of files written; when ``False``
     (default) write for side effects and return ``None``. The full file list can
     be large (one path per frame image), so it is opt-in to keep
     interactive/REPL output quiet.
     """
+    resolved_mode = _validate_mode(mode)
     task = getattr(dataset, "task", None)
     if not isinstance(task, Task):
         raise TypeError(f"Cannot infer writer task from {type(dataset).__name__}: missing Task-valued `task`")
@@ -219,5 +413,13 @@ def write(
             f"{writer.format.value!r} writer consumes {writer.consumes.__name__}; "
             f"got {type(dataset).__name__} (conversion is task-closed)"
         )
+    # Validate writer options BEFORE the destination policy runs: a
+    # mode="replace" clear must never happen ahead of an option error (#55
+    # Fix A1). Direct Writer.write() calls still re-validate inline (cheap),
+    # which also covers callers who bypass this module-level write().
+    writer.validate_options(**options)
+    if resolved_mode == "replace":
+        _reject_source_under_destination(dataset, Path(dest))
+    _prepare_destination(Path(dest), resolved_mode)
     files = writer.write(dataset, dest, **options)
     return files if verbose else None

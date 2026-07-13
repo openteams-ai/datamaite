@@ -119,6 +119,21 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         emits_empty_label_files=True,
     )
 
+    def validate_options(self, **options: Any) -> None:
+        """Validate options that can raise, before write()'s destination policy runs (#55 Fix A1).
+
+        Mirrors the inline ``precision`` check in ``write()``, but only for
+        options that are present, so a ``mode="replace"`` clear never happens
+        ahead of an option error. ``write()`` re-validates inline, which also
+        covers direct ``Writer.write()`` calls. (``default_split`` is validated
+        per-sample inside ``write()`` and only skips offending samples, so it
+        cannot raise from ``write()`` and is not pre-checked here.)
+        """
+        if "precision" in options:
+            precision = options["precision"]
+            if isinstance(precision, bool) or not isinstance(precision, int) or precision < 1:
+                raise ValueError(f"precision must be a non-boolean integer >= 1, got {precision!r}")
+
     def write(
         self,
         dataset: ObjectDetectionDataset,
@@ -140,8 +155,8 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         omitted by default for training-label compatibility; pass
         ``include_scores=True`` to emit prediction-style six-column labels.
         """
-        if precision < 1:
-            raise ValueError(f"precision must be at least 1, got {precision}")
+        if isinstance(precision, bool) or not isinstance(precision, int) or precision < 1:
+            raise ValueError(f"precision must be a non-boolean integer >= 1, got {precision!r}")
         dest_path = Path(dest)
         dest_path.mkdir(parents=True, exist_ok=True)
         projection = _LabelProjection.from_dataset(dataset)

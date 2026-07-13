@@ -204,6 +204,20 @@ class TaoWriter(Writer[BoxTrackDataset]):
 
     format = DatasetFormat.TAO
 
+    def validate_options(self, **options: Any) -> None:
+        """Validate options that can raise, before write()'s destination policy runs (#55 Fix A1).
+
+        Mirrors the inline ``split`` / ``image_extension`` checks in
+        ``write()``, but only for options that are present, so a
+        ``mode="replace"`` clear never happens ahead of an option error.
+        ``write()`` re-validates inline, which also covers direct
+        ``Writer.write()`` calls.
+        """
+        if "split" in options:
+            _validate_split(options["split"], field="split")
+        if "image_extension" in options:
+            _validate_image_extension(options["image_extension"])
+
     def write(
         self,
         dataset: BoxTrackDataset,

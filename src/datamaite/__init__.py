@@ -8,7 +8,7 @@ from datamaite._cache import ValidationCache
 from datamaite._formats.hmie.discovery import find_batch_roots
 from datamaite._report import render_html_report, render_html_report_multi
 from datamaite._stats import dataset_stats
-from datamaite._types import DatasetFormat, Finding, Severity, Task, ValidationResult
+from datamaite._types import DatasetFormat, Finding, Severity, Task, ValidationResult, WriteMode
 from datamaite._version import __version__, __version_tuple__
 from datamaite.conversion import convert
 from datamaite.image_classification import ImageClassificationDataset, load_ic
@@ -164,6 +164,7 @@ __all__ = [
     "VisDroneVideoLoader",
     "VisDroneVideoWriter",
     "VisionDataset",
+    "WriteMode",
     "Writer",
     "WriterCapabilities",
     "YoloImageClassificationLoader",

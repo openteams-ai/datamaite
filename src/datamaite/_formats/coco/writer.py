@@ -69,6 +69,19 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
         lossy_without={"score": "ground-truth COCO JSON has no score field"},
     )
 
+    def validate_options(self, **options: Any) -> None:
+        """Validate options that can raise, before write()'s destination policy runs (#55 Fix A1).
+
+        Mirrors the inline ``annotation_file_name`` check in ``write()``, but
+        only for options that are present, so a ``mode="replace"`` clear never
+        happens ahead of an option error. ``write()`` re-validates inline,
+        which also covers direct ``Writer.write()`` calls.
+        """
+        if "annotation_file_name" in options:
+            name = options["annotation_file_name"]
+            if not name or name in (".", "..") or Path(name).name != name:
+                raise ValueError(f"annotation_file_name must be a bare file name, got {name!r}")
+
     def write(
         self,
         dataset: ObjectDetectionDataset,
@@ -92,7 +105,11 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
             COCO JSON references files by name and stays loadable without
             them -- with a warning per missing source.
         """
-        if Path(annotation_file_name).name != annotation_file_name or not annotation_file_name:
+        if (
+            not annotation_file_name
+            or annotation_file_name in (".", "..")
+            or Path(annotation_file_name).name != annotation_file_name
+        ):
             raise ValueError(f"annotation_file_name must be a bare file name, got {annotation_file_name!r}")
         dest = Path(dest)
         ann_dir = dest / "annotations"

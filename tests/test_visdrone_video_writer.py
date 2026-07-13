@@ -272,6 +272,252 @@ class TestVisDroneVideoWriterHappyPath:
         assert (root / "same-name-1" / "0000001.jpg").read_bytes() == b"second"
 
 
+def _classed_box(
+    *,
+    category_id: int = 4,
+    category_name: str | None = "car",
+    attributes: dict | None = None,
+    track_id: int = 1,
+) -> BoxAnnotation:
+    return BoxAnnotation(
+        track_uuid=f"track-{track_id}",
+        track_id=track_id,
+        category_id=category_id,
+        category_uri=f"src/{category_name or category_id}",
+        category_name=category_name,
+        bbox=(1.0, 2.0, 3.0, 4.0),
+        attributes=attributes or {},
+        frame_index=0,
+        timestamp=None,
+    )
+
+
+def _one_frame_dataset(tmp_path: Path, boxes: list[BoxAnnotation]) -> BoxTrackDataset:
+    frame = tmp_path / "frame.jpg"
+    frame.write_bytes(b"frame")
+    seq = VideoSequence(
+        video_id=0,
+        video_path=None,
+        fps=0.0,
+        num_frames=1,
+        duration=None,
+        annotation_path="unused",
+        frame_files=(str(frame),),
+        video_meta={"sequence_name": "clip"},
+        boxes=boxes,
+        num_frames_exact=True,
+    )
+    return BoxTrackDataset(sequences=(seq,), categories={})
+
+
+_VISDRONE_WRITER_LOGGER = "datamaite._formats.visdrone.writer"
+
+
+def _annotation_categories(out: Path) -> list[str]:
+    ann = out / "VisDrone2019-VID-train" / "annotations" / "clip.txt"
+    return [row.split(",")[7] for row in ann.read_text(encoding="utf-8").splitlines()]
+
+
+class TestVisDroneFixedTaxonomy:
+    def test_generic_fallback_warns_once_aggregated(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box(track_id=1), _classed_box(track_id=2)])
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video")
+        fallback = [r for r in caplog.records if "class_map" in r.getMessage()]
+        assert len(fallback) == 1
+        assert "2 annotation(s)" in fallback[0].getMessage()
+        assert _annotation_categories(tmp_path / "out") == ["4", "4"]
+
+    def test_visdrone_category_id_attribute_stays_quiet(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box(attributes={"visdrone_category_id": 5})])
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video")
+        assert not [r for r in caplog.records if "class_map" in r.getMessage()]
+        assert _annotation_categories(tmp_path / "out") == ["5"]
+
+    def test_class_map_maps_by_name_and_allows_zero(self, tmp_path: Path) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box(attributes={"visdrone_category_id": 5})])
+        write(ds, tmp_path / "out", output_format="visdrone_video", class_map={"car": 0})
+        assert _annotation_categories(tmp_path / "out") == ["0"]
+
+    def test_class_map_unmapped_boxes_are_dropped_with_one_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ds = _one_frame_dataset(
+            tmp_path,
+            [_classed_box(track_id=1), _classed_box(track_id=2, category_name="tricycle", category_id=8)],
+        )
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video", class_map={"car": 4})
+        assert _annotation_categories(tmp_path / "out") == ["4"]
+        dropped = [r for r in caplog.records if "not present in class_map" in r.getMessage()]
+        assert len(dropped) == 1
+        assert "tricycle" in dropped[0].getMessage()
+
+    def test_invalid_class_map_raises_before_writing(self, tmp_path: Path) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box()])
+        out = tmp_path / "out"
+        with pytest.raises(ValueError, match="class ids must be >= 0"):
+            write(ds, out, output_format="visdrone_video", class_map={"car": -1})
+        # The dest is never touched: validate_options() raises before write()'s
+        # own mkdir/destination-policy handling runs (#55 B10).
+        assert not out.exists()
+
+    def test_empty_class_map_drops_everything(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box(attributes={"visdrone_category_id": 5})])
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video", class_map={})
+        ann = tmp_path / "out" / "VisDrone2019-VID-train" / "annotations" / "clip.txt"
+        assert ann.read_text(encoding="utf-8") == ""
+        assert any("not present in class_map" in r.getMessage() for r in caplog.records)
+
+    def test_name_present_but_unmatched_falls_through_to_id_key(self, tmp_path: Path) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box(category_id=4, category_name="unmatched")])
+        write(ds, tmp_path / "out", output_format="visdrone_video", class_map={4: 9})
+        assert _annotation_categories(tmp_path / "out") == ["9"]
+
+
+class TestVisDroneFixedTaxonomyDetSource:
+    """#55 B9: VisDrone applies the resolver to det too, unlike MOT."""
+
+    def test_class_map_maps_by_name_and_drops_unmapped_under_det(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ds = _one_frame_dataset(
+            tmp_path,
+            [_classed_box(track_id=1), _classed_box(track_id=2, category_name="tricycle", category_id=8)],
+        )
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(
+                ds,
+                tmp_path / "out",
+                output_format="visdrone_video",
+                annotation_source="det",
+                class_map={"car": 4},
+            )
+        assert _annotation_categories(tmp_path / "out") == ["4"]
+        dropped = [r for r in caplog.records if "not present in class_map" in r.getMessage()]
+        assert len(dropped) == 1
+        assert "tricycle" in dropped[0].getMessage()
+
+    def test_generic_fallback_warns_under_det(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        ds = _one_frame_dataset(tmp_path, [_classed_box(track_id=1), _classed_box(track_id=2)])
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video", annotation_source="det")
+        fallback = [r for r in caplog.records if "class_map" in r.getMessage()]
+        assert len(fallback) == 1
+        assert _annotation_categories(tmp_path / "out") == ["4", "4"]
+
+
+class TestVisDroneIgnoredRegionExemption:
+    """#55 B3: the category-0 ignored-region exemption must not apply to a
+    generic-fallback zero (a category that merely happens to be 0, not a
+    deliberately-assigned ignored-region marker)."""
+
+    def test_generic_fallback_zero_category_is_not_exempted(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        box = BoxAnnotation(
+            track_uuid="t",
+            track_id=0,
+            category_id=0,
+            category_uri="src/unlabeled",
+            category_name=None,
+            bbox=(1.0, 2.0, 3.0, 4.0),
+            attributes={"visdrone_target_id": 0, "visdrone_score": 1},
+            frame_index=0,
+            timestamp=None,
+        )
+        ds = _one_frame_dataset(tmp_path, [box])
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video")
+        ann = tmp_path / "out" / "VisDrone2019-VID-train" / "annotations" / "clip.txt"
+        assert ann.read_text(encoding="utf-8") == ""
+        assert "target id is not positive" in caplog.text
+
+    def test_attribute_zero_category_is_exempted_as_ignored_region(self, tmp_path: Path) -> None:
+        box = BoxAnnotation(
+            track_uuid="t",
+            track_id=0,
+            category_id=0,
+            category_uri="src/ignored",
+            category_name=None,
+            bbox=(1.0, 2.0, 3.0, 4.0),
+            attributes={"visdrone_category_id": 0, "visdrone_target_id": 0, "visdrone_score": 1},
+            frame_index=0,
+            timestamp=None,
+        )
+        ds = _one_frame_dataset(tmp_path, [box])
+        write(ds, tmp_path / "out", output_format="visdrone_video")
+        ann = tmp_path / "out" / "VisDrone2019-VID-train" / "annotations" / "clip.txt"
+        assert ann.read_text(encoding="utf-8").strip() != ""
+        assert ann.read_text(encoding="utf-8").splitlines()[0].split(",")[7] == "0"
+
+
+class TestVisDroneWriterEmitsWarningsDespiteMidWriteFailure:
+    """#55 B2: aggregated warnings must still surface even if a later
+    sequence raises mid-write (earlier sequences' output is already on disk)."""
+
+    def test_emit_warnings_runs_even_if_a_later_sequence_raises(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import datamaite._formats.visdrone.writer as visdrone_writer_module
+
+        first_frame = tmp_path / "first.jpg"
+        second_frame = tmp_path / "second.jpg"
+        first_frame.write_bytes(b"first")
+        second_frame.write_bytes(b"second")
+        seqs = (
+            VideoSequence(
+                video_id=0,
+                video_path=None,
+                fps=0.0,
+                num_frames=1,
+                duration=None,
+                annotation_path="unused",
+                frame_files=(str(first_frame),),
+                video_meta={"sequence_name": "clip-a"},
+                boxes=[_classed_box(track_id=1)],  # no visdrone_category_id -> generic fallback
+                num_frames_exact=True,
+            ),
+            VideoSequence(
+                video_id=1,
+                video_path=None,
+                fps=0.0,
+                num_frames=1,
+                duration=None,
+                annotation_path="unused",
+                frame_files=(str(second_frame),),
+                video_meta={"sequence_name": "clip-b"},
+                boxes=[],
+                num_frames_exact=True,
+            ),
+        )
+        ds = BoxTrackDataset(sequences=seqs, categories={})
+
+        calls = {"n": 0}
+        original_annotation_rows = visdrone_writer_module._annotation_rows
+
+        def _raise_on_second_call(*args: object, **kwargs: object):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("boom mid-write")
+            return original_annotation_rows(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(visdrone_writer_module, "_annotation_rows", _raise_on_second_call)
+
+        with (
+            caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER),
+            pytest.raises(RuntimeError, match="boom mid-write"),
+        ):
+            write(ds, tmp_path / "out", output_format="visdrone_video")
+
+        fallback = [r for r in caplog.records if "class_map" in r.getMessage()]
+        assert len(fallback) == 1
+        # The first sequence's output is already on disk despite the raise.
+        assert (tmp_path / "out" / "VisDrone2019-VID-train" / "sequences" / "clip-a").is_dir()
+
+
 class TestVisDroneVideoWriterMalformedInputs:
     def test_missing_frame_drops_annotation(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         frame = tmp_path / "frame.jpg"

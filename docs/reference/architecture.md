@@ -865,13 +865,17 @@ flowchart TD
 - **`register_writer`.** A decorator that records
   `(Task, DatasetFormat, variant) → writer-class` in the registry. This is the
   extension point — adding a writer touches no dispatch code.
-- **`write(dataset, dest, *, output_format, output_variant=..., **options)`.**
+- **`write(dataset, dest, *, output_format, output_variant=..., mode=..., **options)`.**
   The public entry point; infers task from `dataset.task`, resolves the writer,
   and type-checks the dataset against `Writer.consumes`. A plain `variant=...`
-  keyword remains a writer option for formats such as VisDrone.
-- **`convert(src, dest, *, input_format, output_format, task=..., input_variant=..., output_variant=...)`**
+  keyword remains a writer option for formats such as VisDrone. `mode` accepts
+  either a `WriteMode` member or the equivalent string (see Destination policy).
+- **`convert(src, dest, *, input_format, output_format, task=..., input_variant=..., output_variant=..., mode=...)`**
   (`conversion.py`). End-to-end: `write(load(src, ...), dest, ...)`. It is
   task-closed; cross-task requests raise instead of fabricating data.
+  Conversion is **same-task by default**: `convert` never changes task.
+  Task-changing projections (e.g. MOT → video classification, #53) are
+  separate, explicitly named transforms — not `convert` options.
 
 ### Writer conventions
 
@@ -881,6 +885,28 @@ flowchart TD
   cannot represent is dropped and logged at WARNING; destination/IO failures raise.
 - **Keyword-only options.** Format variants (e.g. MOT16 vs MOT20 columns) are a
   writer option, not a separate `DatasetFormat`.
+- **Destination policy.** `write()`/`convert()` accept
+  `mode="error" | "replace" | "append"` (as a `WriteMode` member or the
+  equivalent case-insensitive string) and enforce it centrally before the
+  writer runs. The default `error` refuses a non-empty destination;
+  `replace` clears the destination's contents first (refusing the filesystem
+  root, home directory, and current working directory), so a reload of the
+  destination sees only the new dataset; `append` writes into the existing
+  destination and may leave stale reloadable files behind — it is the
+  explicit opt-in for merge-like layouts. Calling a `Writer` instance's
+  `.write()` directly bypasses the policy.
+- **Fixed-taxonomy class mapping.** Writers whose format has a fixed class
+  table (MOTChallenge, VisDrone) declare `WriterCapabilities(forbids_dense_remap=True)`
+  and resolve each box's class as: explicit `class_map` option (keys:
+  `category_name` first, then `category_id`; unmapped categories are dropped)
+  → target-specific source attribute (`mot_class_id`, `visdrone_category_id`)
+  → generic `category_id`. The generic fallback, any class-map drops, and any
+  `class_map` name key that conflates more than one distinct source
+  `category_id` onto a single target are each reported as one aggregated
+  WARNING per write, so cross-taxonomy conversions are loud instead of
+  silently reinterpreting ids. (VisDrone's category 0 "ignored region"
+  exemption applies only when the 0 came from a real source, not the generic
+  fallback.)
 
 ### Reference writers: HMIE, MOTChallenge, TAO, and VisDrone Video (round-trip proof)
 

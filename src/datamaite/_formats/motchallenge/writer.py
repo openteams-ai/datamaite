@@ -20,16 +20,18 @@ OpenCV (``datamaite[fmv]``). Annotation rows are written as either official
 from __future__ import annotations
 
 import logging
-import math
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+from datamaite._formats._coerce import coerce_finite_float, coerce_int
+from datamaite._formats._fixed_taxonomy import ClassIdResolver, validate_class_map
 from datamaite._types import DatasetFormat
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
-from datamaite.writers import Writer, register_writer
+from datamaite.writers import Writer, WriterCapabilities, register_writer
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,23 @@ class MotChallengeWriter(Writer[BoxTrackDataset]):
     """Write a :class:`BoxTrackDataset` as a MOTChallenge benchmark root."""
 
     format = DatasetFormat.MOTCHALLENGE
+    capabilities: ClassVar[WriterCapabilities] = WriterCapabilities(forbids_dense_remap=True)
+
+    def validate_options(self, **options: Any) -> None:
+        """Validate options that can raise, before ``write()``'s destination policy runs (#55 Fix A1).
+
+        Only validates options that are present so absent options never
+        duplicate ``write()``'s own defaults; ``write()`` re-validates inline
+        (cheap) after normalizing values, which also covers callers invoking
+        this writer's ``.write()`` directly.
+        """
+        if "split" in options:
+            _validate_split(options["split"], field="split")
+        if "annotation_source" in options:
+            _validate_source(options["annotation_source"])
+        if "image_extension" in options:
+            _validate_image_extension(options["image_extension"])
+        validate_class_map(options.get("class_map"), minimum=1, format_label="MOTChallenge")
 
     def write(
         self,
@@ -63,6 +82,7 @@ class MotChallengeWriter(Writer[BoxTrackDataset]):
         preserve_splits: bool = True,
         annotation_source: str = "gt",
         image_extension: str = ".jpg",
+        class_map: Mapping[str | int, int] | None = None,
         **_options: Any,
     ) -> list[Path]:
         """Serialise ``dataset`` under ``dest`` as MOTChallenge and return files written.
@@ -84,6 +104,20 @@ class MotChallengeWriter(Writer[BoxTrackDataset]):
             Extension used for output frame images. Image-sequence inputs copy
             bytes into the selected extension; video-backed inputs are encoded
             through OpenCV using this extension.
+        class_map
+            Optional explicit mapping from source categories to MOTChallenge
+            class ids for GT output. Keys are ``category_name`` strings
+            (matched first) or ``category_id`` ints; values must be positive.
+            A ``category_name`` key is assumed to identify a single source
+            category; if the same name is seen with more than one distinct
+            source ``category_id``, they are all silently collapsed onto that
+            key's target id, and one aggregated WARNING flags the ambiguity.
+            When provided it overrides both the ``mot_class_id`` attribute and
+            the generic ``category_id`` fallback; boxes whose category is not
+            in the map are dropped and reported in one aggregated warning.
+            Without it, boxes lacking ``mot_class_id`` fall back to the
+            generic ``category_id`` with one aggregated warning per write.
+            ``det`` output has no class column and ignores ``class_map``.
 
         Notes
         -----
@@ -95,6 +129,13 @@ class MotChallengeWriter(Writer[BoxTrackDataset]):
         fallback_split = _validate_split(split, field="split")
         source = _validate_source(annotation_source)
         extension = _validate_image_extension(image_extension)
+        resolver = ClassIdResolver(
+            format_label="MOTChallenge",
+            attribute="mot_class_id",
+            class_map=validate_class_map(class_map, minimum=1, format_label="MOTChallenge"),
+            logger=logger,
+            minimum=1,
+        )
         dest = Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -102,38 +143,46 @@ class MotChallengeWriter(Writer[BoxTrackDataset]):
         written_seen: set[Path] = set()
         used_names: dict[str, set[str]] = {}
 
-        for seq in dataset.sequences:
-            seq_split = _split_for_sequence(seq, fallback=fallback_split, preserve_splits=preserve_splits)
-            sequence_name = _unique_sequence_name(seq, used_names.setdefault(seq_split, set()))
-            seq_dir = dest / seq_split / sequence_name
-            image_dir = seq_dir / "img1"
-            image_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            for seq in dataset.sequences:
+                seq_split = _split_for_sequence(seq, fallback=fallback_split, preserve_splits=preserve_splits)
+                sequence_name = _unique_sequence_name(seq, used_names.setdefault(seq_split, set()))
+                seq_dir = dest / seq_split / sequence_name
+                image_dir = seq_dir / "img1"
+                image_dir.mkdir(parents=True, exist_ok=True)
 
-            frame_outputs = _materialize_frames(
-                seq,
-                image_dir=image_dir,
-                sequence_name=sequence_name,
-                image_extension=extension,
-                written=written,
-                written_seen=written_seen,
-            )
-            if not frame_outputs:
-                logger.warning(
-                    "Skipping MOTChallenge sequence %s because no source frames could be written", sequence_name
+                frame_outputs = _materialize_frames(
+                    seq,
+                    image_dir=image_dir,
+                    sequence_name=sequence_name,
+                    image_extension=extension,
+                    written=written,
+                    written_seen=written_seen,
                 )
-                continue
+                if not frame_outputs:
+                    logger.warning(
+                        "Skipping MOTChallenge sequence %s because no source frames could be written", sequence_name
+                    )
+                    continue
 
-            rows = _annotation_rows(seq, frame_outputs, source=source, sequence_name=sequence_name)
-            ann_path = seq_dir / source / f"{source}.txt"
-            ann_path.parent.mkdir(parents=True, exist_ok=True)
-            text = "".join(f"{','.join(_format_field(value) for value in row)}\n" for row in rows)
-            ann_path.write_text(text, encoding="utf-8")
-            _append_written(written, written_seen, ann_path)
+                rows = _annotation_rows(
+                    seq, frame_outputs, source=source, sequence_name=sequence_name, resolver=resolver
+                )
+                ann_path = seq_dir / source / f"{source}.txt"
+                ann_path.parent.mkdir(parents=True, exist_ok=True)
+                text = "".join(f"{','.join(_format_field(value) for value in row)}\n" for row in rows)
+                ann_path.write_text(text, encoding="utf-8")
+                _append_written(written, written_seen, ann_path)
 
-            seqinfo_path = seq_dir / "seqinfo.ini"
-            seqinfo_path.write_text(_seqinfo_text(seq, sequence_name, frame_outputs, extension), encoding="utf-8")
-            _append_written(written, written_seen, seqinfo_path)
-
+                seqinfo_path = seq_dir / "seqinfo.ini"
+                seqinfo_path.write_text(_seqinfo_text(seq, sequence_name, frame_outputs, extension), encoding="utf-8")
+                _append_written(written, written_seen, seqinfo_path)
+        finally:
+            # Emit aggregated warnings even if a later sequence raises mid-write
+            # (#55 B2): earlier sequences' output is already on disk, so the
+            # resolver's fallback/unmapped/ambiguity tallies for them should
+            # still surface rather than being silently lost.
+            resolver.emit_warnings()
         return written
 
 
@@ -338,10 +387,11 @@ def _annotation_rows(
     *,
     source: str,
     sequence_name: str,
+    resolver: ClassIdResolver,
 ) -> list[list[float | int]]:
     rows: list[list[float | int]] = []
     for box in sorted(seq.boxes, key=lambda item: (item.frame_index, item.track_id, item.track_uuid)):
-        row = _row_for_box(box, frame_outputs, source=source, sequence_name=sequence_name)
+        row = _row_for_box(box, frame_outputs, source=source, sequence_name=sequence_name, resolver=resolver)
         if row is not None:
             rows.append(row)
     return rows
@@ -353,6 +403,7 @@ def _row_for_box(
     *,
     source: str,
     sequence_name: str,
+    resolver: ClassIdResolver,
 ) -> list[float | int] | None:
     if box.frame_index not in frame_outputs:
         logger.warning(
@@ -381,7 +432,7 @@ def _row_for_box(
 
     left, top, width, height = bbox
     if source == "det":
-        detection_id = _first_int(_coerce_int(box.attributes.get("mot_track_id")), _coerce_int(box.track_id))
+        detection_id = _first_int(coerce_int(box.attributes.get("mot_track_id")), coerce_int(box.track_id))
         if detection_id is None:
             detection_id = -1
         return [
@@ -392,16 +443,16 @@ def _row_for_box(
             width,
             height,
             _first_float(
-                _coerce_finite_float(box.attributes.get("score")),
-                _coerce_finite_float(box.attributes.get("confidence")),
+                coerce_finite_float(box.attributes.get("score")),
+                coerce_finite_float(box.attributes.get("confidence")),
                 1.0,
             ),
-            _first_float(_coerce_finite_float(box.attributes.get("world_x")), -1.0),
-            _first_float(_coerce_finite_float(box.attributes.get("world_y")), -1.0),
-            _first_float(_coerce_finite_float(box.attributes.get("world_z")), -1.0),
+            _first_float(coerce_finite_float(box.attributes.get("world_x")), -1.0),
+            _first_float(coerce_finite_float(box.attributes.get("world_y")), -1.0),
+            _first_float(coerce_finite_float(box.attributes.get("world_z")), -1.0),
         ]
 
-    track_id = _first_int(_coerce_int(box.attributes.get("mot_track_id")), _coerce_int(box.track_id))
+    track_id = _first_int(coerce_int(box.attributes.get("mot_track_id")), coerce_int(box.track_id))
     if track_id is None or track_id <= 0:
         logger.warning(
             "Dropping MOTChallenge GT annotation for sequence %s frame %s because track id is not positive",
@@ -409,8 +460,11 @@ def _row_for_box(
             box.frame_index,
         )
         return None
-    class_id = _first_int(_coerce_int(box.attributes.get("mot_class_id")), _coerce_int(box.category_id))
-    if class_id is None or class_id <= 0:
+    resolved = resolver.resolve(box)
+    if resolved.class_id is None:
+        return None  # unmapped under class_map; the aggregated warning reports it
+    class_id = resolved.class_id
+    if class_id <= 0:
         logger.warning(
             "Dropping MOTChallenge GT annotation for sequence %s frame %s because class id is not positive",
             sequence_name,
@@ -424,9 +478,9 @@ def _row_for_box(
         top,
         width,
         height,
-        _first_float(_coerce_finite_float(box.attributes.get("confidence")), 1.0),
+        _first_float(coerce_finite_float(box.attributes.get("confidence")), 1.0),
         class_id,
-        _first_float(_coerce_finite_float(box.attributes.get("visibility")), 1.0),
+        _first_float(coerce_finite_float(box.attributes.get("visibility")), 1.0),
     ]
 
 
@@ -495,7 +549,7 @@ def _bbox_tuple(bbox: object) -> tuple[float, float, float, float] | None:
         return None
     values: list[float] = []
     for value in bbox:
-        parsed = _coerce_finite_float(value)
+        parsed = coerce_finite_float(value)
         if parsed is None:
             return None
         values.append(parsed)
@@ -518,31 +572,14 @@ def _first_float(*values: float | None) -> float:
     return 0.0
 
 
-def _coerce_int(value: object) -> int | None:
-    number = _coerce_finite_float(value)
-    if number is None or not number.is_integer():
-        return None
-    return int(number)
-
-
 def _coerce_positive_int(value: object) -> int | None:
-    parsed = _coerce_int(value)
+    parsed = coerce_int(value)
     return parsed if parsed is not None and parsed > 0 else None
 
 
 def _coerce_positive_float(value: object) -> float | None:
-    parsed = _coerce_finite_float(value)
+    parsed = coerce_finite_float(value)
     return parsed if parsed is not None and parsed > 0 else None
-
-
-def _coerce_finite_float(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _format_field(value: float | int) -> str:

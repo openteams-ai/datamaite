@@ -32,7 +32,11 @@ source-preserving in-memory dataset (`BoxTrackDataset` for MOT/video box tracks;
 `VideoClassificationDataset` for video-level labels), a **validator** checks an
 HMIE/Scale dataset on disk, and a **writer** serialises supported datasets out to
 an output format (`convert` pairs a loader and a writer of the same task for
-on-disk → on-disk conversion). HMIE/Scale, flat MP4 video folders, Hugging Face
+on-disk → on-disk conversion; writers refuse a non-empty destination unless
+you pass `mode="replace"`/`"append"`, and the fixed-taxonomy writers warn on
+generic-id reinterpretation — see
+[Writing & converting datasets](#writing--converting-datasets-python)).
+HMIE/Scale, flat MP4 video folders, Hugging Face
 Video Classification, MOTChallenge, TAO, VisDrone Video, VisDrone still images,
 COCO OD, YOLO image classification, and YOLO object detection are implemented
 input formats; HMIE/Scale, Hugging Face Video Classification, MOTChallenge,
@@ -363,9 +367,14 @@ grows a video-classification protocol.
 ## Writing & converting datasets (Python)
 
 A **writer** serialises a loaded task dataset to an output format on disk;
-`convert` pairs a loader and a writer of the same task for end-to-end on-disk →
-on-disk conversion. MOT, VC, OD, and IC have writer surfaces for supported
-output formats.
+`convert` pairs a loader and a writer of the **same task** for end-to-end
+on-disk → on-disk conversion (task-changing transforms are separate, explicit
+APIs). MOT, VC, OD, and IC have writer surfaces for supported output formats.
+Both `write` and `convert` refuse a non-empty destination by default — pass
+`mode="replace"` to clear it first or `mode="append"` to write into it — and
+the fixed-taxonomy writers (MOTChallenge, VisDrone) warn loudly, once per
+write, when generic category ids are reinterpreted against their class
+tables; pass `class_map=` to map source categories explicitly instead.
 
 ```python
 from datamaite import load_mot, write, convert
@@ -373,10 +382,12 @@ from datamaite import load_mot, write, convert
 # Write an in-memory dataset to disk (returns None; pass verbose=True for the file list)
 ds = load_mot("/path/to/dataset")
 write(ds, "/path/to/out", output_format="hmie")
-files = write(ds, "/path/to/out", output_format="hmie", verbose=True)   # -> list of files written
+# Re-writing the same destination needs mode="replace" (the default "error"
+# refuses a non-empty destination -- see the destination-policy note above).
+files = write(ds, "/path/to/out", output_format="hmie", mode="replace", verbose=True)   # -> list of files written
 
 # Or convert on disk → on disk in one call (verbose=True to get the file list back)
-convert("/path/to/dataset", "/path/to/out", input_format="hmie", output_format="hmie")
+convert("/path/to/dataset", "/path/to/out2", input_format="hmie", output_format="hmie")
 ```
 
 Write MOTChallenge, TAO, or VisDrone Video with the same API. All three formats

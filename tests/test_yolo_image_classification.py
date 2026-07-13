@@ -391,7 +391,7 @@ class TestYoloImageClassificationWriterSkipPaths:
             ImageClassificationSample(image_id="x", image_bytes=b"real", file_name="x.jpg", labels=(label,))
         )
 
-        write(ds, dest, output_format="yolo", write_data_yaml=False, verbose=True)
+        write(ds, dest, output_format="yolo", write_data_yaml=False, mode="append", verbose=True)
 
         assert not outside.exists()  # nothing written through the symlink
         assert planted.is_symlink()  # the planted symlink is left untouched

@@ -11,9 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from datamaite._types import DatasetFormat, Task
+from datamaite._types import DatasetFormat, Task, WriteMode
 from datamaite.loaders import load
-from datamaite.writers import write
+from datamaite.writers import _check_destination, _validate_mode, write
 
 
 def convert(
@@ -25,6 +25,7 @@ def convert(
     task: Task | str | None = None,
     input_variant: str = "default",
     output_variant: str = "default",
+    mode: WriteMode | str = WriteMode.ERROR,
     read_options: dict[str, Any] | None = None,
     load_options: dict[str, Any] | None = None,
     write_options: dict[str, Any] | None = None,
@@ -46,13 +47,27 @@ def convert(
         ``task="ic"`` with ``input_format="yolo"``).
     input_variant, output_variant
         Registry variants within a task/format pair.
+    mode
+        Destination policy. Accepts a :class:`~datamaite._types.WriteMode`
+        member or the equivalent string. ``"error"`` (default) raises ``FileExistsError``
+        if destination is non-empty; ``"replace"`` clears the destination
+        before anything is written (refusing destinations that resolve to
+        the filesystem root, the home directory, or the current working
+        directory); ``"append"`` writes into the existing destination, which
+        may leave stale files behind that a reload of the destination would
+        pick up. The destination policy is validated before ``src`` is
+        loaded, so an invalid ``mode`` or a rejected ``dest`` raises before
+        paying the cost of loading a large source dataset; the actual
+        deletion for ``mode="replace"`` still happens only after a
+        successful load, inside the writer.
     read_options
         Backwards-compatible loader options dict.
     load_options
         Alias for ``read_options``. Supplying both is an error.
     write_options, **writer_options
         Writer options as a dict and/or direct keyword arguments. Direct keyword
-        options preserve the pre-existing public API.
+        options preserve the pre-existing public API. Passing ``mode`` in these
+        dicts raises ``ValueError``.
     verbose
         When ``True``, return the list of files written; when ``False`` (default)
         run for side effects and return ``None`` (the file list can be one path
@@ -60,6 +75,31 @@ def convert(
     """
     loader_options = _merge_loader_options(read_options=read_options, load_options=load_options)
     merged_writer_options = _merge_writer_options(write_options=write_options, writer_options=writer_options)
+    if "mode" in merged_writer_options:
+        raise ValueError("pass mode as a top-level convert() argument, not a writer option")
+    resolved_mode = _validate_mode(mode)
+    # Enforce the destination guardrail before loading `src`: a mistaken
+    # convert(big_src, non_empty_dest) should fail fast rather than paying the
+    # full load cost first. This check is non-destructive (no deletion) -- the
+    # actual clearing for mode="replace" happens later, inside write(), only
+    # after `src` has loaded successfully. That ordering matters: if we deleted
+    # here and the load then failed, dest would be wiped for nothing.
+    _check_destination(Path(dest), resolved_mode)
+    if resolved_mode == "replace":
+        src_resolved = Path(src).resolve()
+        dest_resolved = Path(dest).resolve()
+        # A mode="replace" clear of dest happens after the source loads but
+        # before the writer reads the source's (lazy) media files. If dest is
+        # the source, or an ancestor of it, that clear destroys the source
+        # mid-conversion. resolve() collapses symlinks so an aliased dest is
+        # caught too. (A dest *inside* src is safe: clearing a subdir does not
+        # remove the source's own files.)
+        if src_resolved.is_relative_to(dest_resolved):
+            raise ValueError(
+                f"Refusing to convert with mode='replace': the destination {dest} "
+                f"(resolves to {dest_resolved}) is the source dataset or contains it "
+                f"(source resolves to {src_resolved}); clearing it would destroy the source."
+            )
     dataset = load(
         src,
         dataset_format=input_format,
@@ -72,6 +112,7 @@ def convert(
         dest,
         output_format=output_format,
         output_variant=output_variant,
+        mode=mode,
         verbose=verbose,
         **merged_writer_options,
     )

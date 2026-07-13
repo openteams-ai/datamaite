@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MOTChallenge/VisDrone writers warn (aggregated, once per write) when
+  falling back from generic `category_id` values to their fixed class
+  tables, and accept an explicit `class_map=` option; categories missing
+  from `class_map` are dropped with an aggregated warning (#55).
+
+### Changed
+
+- **Breaking:** `write()`/`convert()` now refuse a non-empty destination by
+  default (`mode="error"`). Pass `mode="replace"` to clear the destination
+  first or `mode="append"` for the previous write-into behavior (#55).
+
 ## [0.2.1] - 2026-06-30
 
 ### Added

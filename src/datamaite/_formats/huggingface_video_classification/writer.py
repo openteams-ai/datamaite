@@ -53,6 +53,20 @@ class HuggingFaceVideoClassificationWriter(Writer[VideoClassificationDataset]):
     task: ClassVar[Task] = Task.VC
     consumes: ClassVar[type] = VideoClassificationDataset
 
+    def validate_options(self, **options: Any) -> None:
+        """Validate options that can raise, before write()'s destination policy runs (#55 Fix A1).
+
+        Mirrors the inline ``split`` / ``metadata_format`` checks in
+        ``write()``, but only for options that are present, so a
+        ``mode="replace"`` clear never happens ahead of an option error.
+        ``write()`` re-validates inline, which also covers direct
+        ``Writer.write()`` calls.
+        """
+        if "split" in options:
+            _normalize_optional_split(options["split"])
+        if "metadata_format" in options:
+            _validate_metadata_format(options["metadata_format"])
+
     def write(
         self,
         dataset: VisionDataset,

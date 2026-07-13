@@ -233,6 +233,20 @@ class Severity(enum.Enum):
     WARNING = "warning"
 
 
+class WriteMode(str, enum.Enum):
+    """Destination policy for :func:`datamaite.write`/:func:`datamaite.convert`.
+
+    A ``str`` subclass so ``WriteMode.REPLACE == "replace"`` holds and
+    downstream code that compares ``mode == "append"`` keeps working whether
+    callers pass an enum member or a plain string. Both are accepted; see
+    :func:`datamaite.writers._validate_mode`.
+    """
+
+    ERROR = "error"
+    REPLACE = "replace"
+    APPEND = "append"
+
+
 @dataclass(frozen=True)
 class Finding:
     """A single validation finding."""

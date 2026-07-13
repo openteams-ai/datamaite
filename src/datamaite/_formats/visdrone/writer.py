@@ -17,16 +17,18 @@ with OpenCV (``datamaite[fmv]``).
 from __future__ import annotations
 
 import logging
-import math
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+from datamaite._formats._coerce import coerce_finite_float, coerce_int
+from datamaite._formats._fixed_taxonomy import ClassIdResolver, validate_class_map
 from datamaite._types import DatasetFormat
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
-from datamaite.writers import Writer, register_writer
+from datamaite.writers import Writer, WriterCapabilities, register_writer
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,25 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
     """Write a :class:`BoxTrackDataset` as VisDrone VID or MOT video split roots."""
 
     format = DatasetFormat.VISDRONE_VIDEO
+    capabilities: ClassVar[WriterCapabilities] = WriterCapabilities(forbids_dense_remap=True)
+
+    def validate_options(self, **options: Any) -> None:
+        """Validate options that can raise, before ``write()``'s destination policy runs (#55 Fix A1).
+
+        Only validates options that are present so absent options never
+        duplicate ``write()``'s own defaults; ``write()`` re-validates inline
+        (cheap) after normalizing values, which also covers callers invoking
+        this writer's ``.write()`` directly.
+        """
+        if "variant" in options:
+            _validate_variant(options["variant"])
+        if "split" in options:
+            _normalize_split(options["split"], field="split")
+        if "annotation_source" in options:
+            _validate_source(options["annotation_source"])
+        if "image_extension" in options:
+            _validate_image_extension(options["image_extension"])
+        validate_class_map(options.get("class_map"), minimum=0, format_label="VisDrone")
 
     def write(
         self,
@@ -76,6 +97,7 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
         preserve_splits: bool = True,
         annotation_source: str = "gt",
         image_extension: str = ".jpg",
+        class_map: Mapping[str | int, int] | None = None,
         **_options: Any,
     ) -> list[Path]:
         """Serialise ``dataset`` under ``dest`` as VisDrone video and return files written.
@@ -98,6 +120,22 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
             objects. ``"det"`` allows non-positive detection IDs.
         image_extension
             Extension used for output frame images.
+        class_map
+            Optional explicit mapping from source categories to VisDrone
+            category ids. Keys are ``category_name`` strings (matched first)
+            or ``category_id`` ints; values must be ``>= 0`` (VisDrone allows
+            category id 0 for the ignored-region class). A ``category_name``
+            key is assumed to identify a single source category; if the same
+            name is seen with more than one distinct source ``category_id``,
+            they are all silently collapsed onto that key's target id, and
+            one aggregated WARNING flags the ambiguity. When provided it
+            overrides both the ``visdrone_category_id`` attribute and the
+            generic ``category_id`` fallback; boxes whose category is not in
+            the map are dropped and reported in one aggregated warning.
+            Without it, boxes lacking ``visdrone_category_id`` fall back to
+            the generic ``category_id`` with one aggregated warning per
+            write. Applies to both ``gt`` and ``det`` sources since both
+            carry the category column.
 
         Notes
         -----
@@ -110,6 +148,13 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
         fallback_split = _normalize_split(split, field="split")
         source = _validate_source(annotation_source)
         extension = _validate_image_extension(image_extension)
+        resolver = ClassIdResolver(
+            format_label="VisDrone",
+            attribute="visdrone_category_id",
+            class_map=validate_class_map(class_map, minimum=0, format_label="VisDrone"),
+            logger=logger,
+            minimum=0,
+        )
         dest = Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -117,33 +162,43 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
         written_seen: set[Path] = set()
         used_names: dict[tuple[str, str], set[str]] = {}
 
-        for seq in dataset.sequences:
-            seq_variant = _variant_for_sequence(seq, requested=requested_variant)
-            seq_split = _split_for_sequence(seq, fallback=fallback_split, preserve_splits=preserve_splits)
-            split_root = dest / f"VisDrone2019-{seq_variant.upper()}-{seq_split}"
-            sequence_name = _unique_sequence_name(seq, used_names.setdefault((seq_variant, seq_split), set()))
-            frame_dir = split_root / "sequences" / sequence_name
-            frame_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            for seq in dataset.sequences:
+                seq_variant = _variant_for_sequence(seq, requested=requested_variant)
+                seq_split = _split_for_sequence(seq, fallback=fallback_split, preserve_splits=preserve_splits)
+                split_root = dest / f"VisDrone2019-{seq_variant.upper()}-{seq_split}"
+                sequence_name = _unique_sequence_name(seq, used_names.setdefault((seq_variant, seq_split), set()))
+                frame_dir = split_root / "sequences" / sequence_name
+                frame_dir.mkdir(parents=True, exist_ok=True)
 
-            frame_outputs = _materialize_frames(
-                seq,
-                frame_dir=frame_dir,
-                sequence_name=sequence_name,
-                image_extension=extension,
-                written=written,
-                written_seen=written_seen,
-            )
-            if not frame_outputs:
-                logger.warning("Skipping VisDrone sequence %s because no source frames could be written", sequence_name)
-                continue
+                frame_outputs = _materialize_frames(
+                    seq,
+                    frame_dir=frame_dir,
+                    sequence_name=sequence_name,
+                    image_extension=extension,
+                    written=written,
+                    written_seen=written_seen,
+                )
+                if not frame_outputs:
+                    logger.warning(
+                        "Skipping VisDrone sequence %s because no source frames could be written", sequence_name
+                    )
+                    continue
 
-            rows = _annotation_rows(seq, frame_outputs, source=source, sequence_name=sequence_name)
-            ann_path = split_root / "annotations" / f"{sequence_name}.txt"
-            ann_path.parent.mkdir(parents=True, exist_ok=True)
-            text = "".join(f"{','.join(_format_field(value) for value in row)}\n" for row in rows)
-            ann_path.write_text(text, encoding="utf-8")
-            _append_written(written, written_seen, ann_path)
-
+                rows = _annotation_rows(
+                    seq, frame_outputs, source=source, sequence_name=sequence_name, resolver=resolver
+                )
+                ann_path = split_root / "annotations" / f"{sequence_name}.txt"
+                ann_path.parent.mkdir(parents=True, exist_ok=True)
+                text = "".join(f"{','.join(_format_field(value) for value in row)}\n" for row in rows)
+                ann_path.write_text(text, encoding="utf-8")
+                _append_written(written, written_seen, ann_path)
+        finally:
+            # Emit aggregated warnings even if a later sequence raises mid-write
+            # (#55 B2): earlier sequences' output is already on disk, so the
+            # resolver's fallback/unmapped/ambiguity tallies for them should
+            # still surface rather than being silently lost.
+            resolver.emit_warnings()
         return written
 
 
@@ -371,10 +426,11 @@ def _annotation_rows(
     *,
     source: str,
     sequence_name: str,
+    resolver: ClassIdResolver,
 ) -> list[list[float | int]]:
     rows: list[list[float | int]] = []
     for box in sorted(seq.boxes, key=lambda item: (item.frame_index, item.track_id, item.track_uuid)):
-        row = _row_for_box(box, frame_outputs, source=source, sequence_name=sequence_name)
+        row = _row_for_box(box, frame_outputs, source=source, sequence_name=sequence_name, resolver=resolver)
         if row is not None:
             rows.append(row)
     return rows
@@ -386,6 +442,7 @@ def _row_for_box(
     *,
     source: str,
     sequence_name: str,
+    resolver: ClassIdResolver,
 ) -> list[float | int] | None:
     if box.frame_index not in frame_outputs:
         logger.warning(
@@ -412,8 +469,11 @@ def _row_for_box(
         )
         return None
 
-    category_id = _first_int(_coerce_int(box.attributes.get("visdrone_category_id")), _coerce_int(box.category_id))
-    if category_id is None or category_id < 0:
+    resolved = resolver.resolve(box)
+    if resolved.class_id is None:
+        return None  # unmapped under class_map; the aggregated warning reports it
+    category_id = resolved.class_id
+    if category_id < 0:
         logger.warning(
             "Dropping VisDrone annotation for sequence %s frame %s because category id is negative or missing",
             sequence_name,
@@ -421,15 +481,21 @@ def _row_for_box(
         )
         return None
     score = _first_float(
-        _coerce_finite_float(box.attributes.get("visdrone_score")),
-        _coerce_finite_float(box.attributes.get("score")),
-        _coerce_finite_float(box.attributes.get("confidence")),
+        coerce_finite_float(box.attributes.get("visdrone_score")),
+        coerce_finite_float(box.attributes.get("score")),
+        coerce_finite_float(box.attributes.get("confidence")),
         1.0,
     )
-    target_id = _first_int(_coerce_int(box.attributes.get("visdrone_target_id")), _coerce_int(box.track_id))
+    target_id = _first_int(coerce_int(box.attributes.get("visdrone_target_id")), coerce_int(box.track_id))
     if target_id is None:
         target_id = -1
-    if source == "gt" and target_id <= 0 and category_id != 0 and score > 0:
+    # Category 0 is a genuine VisDrone "ignored region" exemption only when it
+    # came from a real source (the visdrone_category_id attribute or an
+    # explicit class_map); a category 0 produced by the generic category_id
+    # fallback is just an unrelated source category that happens to be 0, and
+    # must not be silently exempted from the target-id check (#55 B3).
+    genuine_ignored = category_id == 0 and not resolved.from_generic_fallback
+    if source == "gt" and target_id <= 0 and not genuine_ignored and score > 0:
         logger.warning(
             "Dropping VisDrone GT annotation for sequence %s frame %s because target id is not positive",
             sequence_name,
@@ -437,10 +503,10 @@ def _row_for_box(
         )
         return None
 
-    truncation = _coerce_int(box.attributes.get("truncation"))
+    truncation = coerce_int(box.attributes.get("truncation"))
     if truncation is None:
         truncation = -1
-    occlusion = _coerce_int(box.attributes.get("occlusion"))
+    occlusion = coerce_int(box.attributes.get("occlusion"))
     if occlusion is None:
         occlusion = -1
 
@@ -493,7 +559,7 @@ def _bbox_tuple(bbox: object) -> tuple[float, float, float, float] | None:
         return None
     values: list[float] = []
     for value in bbox:
-        parsed = _coerce_finite_float(value)
+        parsed = coerce_finite_float(value)
         if parsed is None:
             return None
         values.append(parsed)
@@ -514,23 +580,6 @@ def _first_float(*values: float | None) -> float:
         if value is not None:
             return value
     return 0.0
-
-
-def _coerce_int(value: object) -> int | None:
-    number = _coerce_finite_float(value)
-    if number is None or not number.is_integer():
-        return None
-    return int(number)
-
-
-def _coerce_finite_float(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _format_field(value: float | int) -> str:
