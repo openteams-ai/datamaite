@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-16
+
 ### Added
 
+- VisDrone Static-Images loaders (IR-3.2-S-3): object detection
+  (`load_od(root, dataset_format="visdrone")`) reads the official
+  VisDrone-DET layout (`images/` + eight-field `annotations/*.txt`), and
+  image classification (`load_ic(root, dataset_format="visdrone")`) derives
+  one classification sample per labeled box (the object crop, labeled by its
+  VisDrone category) from the same on-disk layout (#4).
+- Cloud object storage support for HMIE: dataset roots can be `s3://`,
+  `gs://`, or `az://` URLs with the matching extra installed
+  (`datamaite[aws]`, `[gcs]`, `[azure]`, or `[cloud]` for all three).
+  Cloud roots are HMIE-only; other format loaders raise a clear error on a
+  cloud URL. Video integrity checks over cloud data additionally need the
+  `fmv` extra — without it they are skipped with a `video_dependency`
+  warning.
 - MOTChallenge/VisDrone writers warn (aggregated, once per write) when
   falling back from generic `category_id` values to their fixed class
   tables, and accept an explicit `class_map=` option; categories missing
