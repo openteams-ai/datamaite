@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- VisDrone Static-Images writers (IR-3.2-S-7): `write(dataset,
+  output_format="visdrone")` serialises still-image object-detection and
+  image-classification datasets to official `VisDrone2019-DET-<split>/`
+  roots (`images/` + eight-field `annotations/*.txt`), with the
+  detection/classification selection keyed on the dataset task. Class ids
+  resolve through the shared fixed-taxonomy machinery (`class_map` option,
+  aggregated #55 warnings); the static loaders now preserve
+  `visdrone_category_id` in attributes so VisDrone-to-VisDrone round-trips
+  are warning-free (#9).
+- Flat-folder still-image loader (IR-3.2-S-1):
+  `load_od(root, dataset_format="flat_images")` reads a flat directory of
+  label-free `.jpg`/`.png`/`.tif` images as an unlabeled
+  object-detection dataset (zero detections, no taxonomy). Explicit opt-in
+  only — a bare folder of images is never autodetected. Images keep the
+  lazy OpenCV decode (`datamaite[od]`). SafeTensors ingest, also named by
+  IR-3.2-S-1, is deferred pending a program-standards change (#74) (#2).
 - Hugging Face Vision still-image format (IR-3.2-S-2 loader + IR-3.2-S-6
   writer): `load_ic(root, dataset_format="huggingface_vision")` reads the
   ImageFolder classification convention (class folders, split folders, or
@@ -20,6 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detection/classification selection keyed on the dataset task (#3, #8).
 
 ### Fixed
+
+- VisDrone still images: write -> reload is no longer lossy. The static
+  loader reads `.tif`/`.tiff` images (the writer copies images verbatim, so
+  a `.tif` source — e.g. arriving via `flat_images` — previously produced a
+  root that reloaded as zero samples; suffixes the loader cannot read are
+  now skipped with a warning at write time instead of silently vanishing on
+  reload). The loader infers the official `test-dev`/`test-challenge`
+  splits from split-root names instead of collapsing them onto `test`, so
+  writer-emitted split roots round-trip their split identity. The writers
+  no longer write a generic `category_id` 0 as VisDrone category 0
+  ("ignored regions", score 0, excluded from evaluation) — such rows are
+  dropped with an aggregated warning pointing at `class_map=` (#55
+  provenance rules). The IC writer no longer copies an image whose
+  annotation rows all drop, so an emitted root never contains images
+  without annotation files (#9).
 
 - Hugging Face Vision: the IC writer now preserves class-folder names with
   spaces/unicode/punctuation (e.g. `traffic light`, `café`) instead of skipping

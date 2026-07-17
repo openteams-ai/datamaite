@@ -8,7 +8,8 @@ One validation pipeline: **walk a dataset root on disk → pair each annotation
 JSON with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only validation format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout). On
-the loading side, flat-folder MP4 video, Hugging Face Video Classification,
+the loading side, flat-folder MP4 video, flat-folder still images
+(.jpg/.png/.tif), Hugging Face Video Classification,
 Hugging Face Vision (still-image classification + object detection),
 MOTChallenge, TAO, VisDrone Video, COCO object detection, YOLO image
 classification, and YOLO object detection are also implemented loaders.
@@ -128,14 +129,17 @@ flowchart LR
 Today, MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 reached through `load_mot(dataset_format=…)`; COCO OD is reached through
 `load_od(dataset_format="coco")`, `load_od(dataset_format="yolo")`, or
-`load_od(dataset_format="huggingface_vision")`; YOLO image
+`load_od(dataset_format="huggingface_vision")`; flat
+still-image folders are reached through
+`load_od(dataset_format="flat_images")` (explicit opt-in only — never
+autodetected); YOLO image
 classification is reached through `load_ic(dataset_format="yolo")` and Hugging
 Face ImageFolder classification through
 `load_ic(dataset_format="huggingface_vision")`; Hugging Face
 Video Classification is reached through `load_vc(dataset_format=…)`. The HMIE
 validation pipeline is the only validator. HMIE, Hugging Face Video
 Classification, Hugging Face Vision (IC + OD), MOTChallenge, TAO, VisDrone
-Video, COCO OD, YOLO OD, and YOLO IC
+Video, VisDrone still images (OD + IC), COCO OD, YOLO OD, and YOLO IC
 writers are implemented. The Hugging Face Vision loaders and writers cover the
 *local ImageFolder-compatible layout* (what
 `datasets.load_dataset("imagefolder", data_dir=…)` reads from disk), not
@@ -178,6 +182,9 @@ src/datamaite/
         _ic.py                   MAITE image-classification item builder
     _formats/
         __init__.py          Format package namespace
+        flat_images/
+            __init__.py              Flat still-image format exports
+            loader.py                FlatImagesLoader: flat label-free image folder -> ObjectDetectionDataset
         flat_mp4/
             __init__.py              Flat MP4 format exports
             loader.py                FlatMp4Loader: flat .mp4 video folder -> BoxTrackDataset
@@ -209,6 +216,8 @@ src/datamaite/
         visdrone/
             __init__.py              VisDrone format exports
             loader.py                VisDroneVideoLoader: VisDrone VID/MOT video -> BoxTrackDataset
+            static_loader.py         VisDrone-DET still-image loaders: OD (full images) + IC (object crops)
+            static_writer.py         VisDrone-DET still-image writers: OD + IC -> official DET split roots
             writer.py                VisDroneVideoWriter: BoxTrackDataset -> official VisDrone VID/MOT roots
         coco/
             loader.py                CocoLoader: COCO OD -> ObjectDetectionDataset

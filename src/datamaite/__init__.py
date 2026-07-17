@@ -54,6 +54,7 @@ from datamaite.writers import (
 if TYPE_CHECKING:
     from datamaite._formats.coco.loader import CocoLoader
     from datamaite._formats.coco.writer import CocoWriter
+    from datamaite._formats.flat_images.loader import FlatImagesLoader
     from datamaite._formats.flat_mp4.loader import FlatMp4Loader
     from datamaite._formats.hmie.loader import HmieLoader
     from datamaite._formats.hmie.writer import HmieWriter
@@ -78,6 +79,10 @@ if TYPE_CHECKING:
         VisDroneImageClassificationLoader,
         VisDroneObjectDetectionLoader,
     )
+    from datamaite._formats.visdrone.static_writer import (
+        VisDroneImageClassificationWriter,
+        VisDroneObjectDetectionWriter,
+    )
     from datamaite._formats.visdrone.writer import VisDroneVideoWriter
     from datamaite._formats.yolo.loader import YoloImageClassificationLoader, YoloObjectDetectionLoader
     from datamaite._formats.yolo.writer import YoloImageClassificationWriter, YoloObjectDetectionWriter
@@ -90,6 +95,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 _LAZY_EXPORTS = {
     "CocoLoader": ("datamaite._formats.coco.loader", "CocoLoader"),
     "CocoWriter": ("datamaite._formats.coco.writer", "CocoWriter"),
+    "FlatImagesLoader": ("datamaite._formats.flat_images.loader", "FlatImagesLoader"),
     "FlatMp4Loader": ("datamaite._formats.flat_mp4.loader", "FlatMp4Loader"),
     "HmieLoader": ("datamaite._formats.hmie.loader", "HmieLoader"),
     "HmieWriter": ("datamaite._formats.hmie.writer", "HmieWriter"),
@@ -129,6 +135,14 @@ _LAZY_EXPORTS = {
         "datamaite._formats.visdrone.static_loader",
         "VisDroneImageClassificationLoader",
     ),
+    "VisDroneImageClassificationWriter": (
+        "datamaite._formats.visdrone.static_writer",
+        "VisDroneImageClassificationWriter",
+    ),
+    "VisDroneObjectDetectionWriter": (
+        "datamaite._formats.visdrone.static_writer",
+        "VisDroneObjectDetectionWriter",
+    ),
     "VisDroneVideoLoader": ("datamaite._formats.visdrone.loader", "VisDroneVideoLoader"),
     "VisDroneVideoWriter": ("datamaite._formats.visdrone.writer", "VisDroneVideoWriter"),
     "YoloImageClassificationLoader": ("datamaite._formats.yolo.loader", "YoloImageClassificationLoader"),
@@ -159,6 +173,7 @@ __all__ = [
     "DatasetFormat",
     "DatasetMetadata",
     "Finding",
+    "FlatImagesLoader",
     "FlatMp4Loader",
     "HmieLoader",
     "HmieWriter",
@@ -188,7 +203,9 @@ __all__ = [
     "VideoClassificationSample",
     "VideoSequence",
     "VisDroneImageClassificationLoader",
+    "VisDroneImageClassificationWriter",
     "VisDroneObjectDetectionLoader",
+    "VisDroneObjectDetectionWriter",
     "VisDroneVideoLoader",
     "VisDroneVideoWriter",
     "VisionDataset",

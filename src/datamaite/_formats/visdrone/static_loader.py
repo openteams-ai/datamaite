@@ -47,8 +47,15 @@ VISDRONE_STATIC_CLASSES: tuple[str, ...] = (
     "others",
 )
 _EVAL_EXCLUDED_IDS = frozenset({0, 11})
-IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".bmp"})
-_SPLIT_TOKENS = ("train", "val", "test")
+#: Official VisDrone-DET releases ship ``.jpg`` images; loading is best-effort,
+#: so the loader also reads the other still-image suffixes datamaite writers
+#: copy verbatim into a VisDrone root (e.g. ``.tif`` sources arriving via the
+#: ``flat_images`` loader). The VisDrone static writer only emits suffixes in
+#: this set, keeping write -> reload lossless.
+IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"})
+#: Official split names, most specific first: ``test-dev``/``test-challenge``
+#: must match before plain ``test`` so those roots keep their identity.
+_SPLIT_TOKENS = ("test-challenge", "test-dev", "train", "val", "test")
 
 
 @dataclass(frozen=True)
@@ -141,10 +148,17 @@ def build_taxonomy(*, include_ignored_regions: bool) -> Taxonomy:
 
 
 def infer_split(name: str) -> str | None:
-    """Infer train/val/test from a VisDrone split-root directory name."""
-    tokens = re.split(r"[^a-z]+", name.lower())
+    """Infer the official split from a VisDrone split-root directory name.
+
+    Recognises all official VisDrone-DET splits — ``train``, ``val``,
+    ``test-dev``, ``test-challenge``, and plain ``test`` — so a
+    ``VisDrone2019-DET-test-dev`` root reloads as ``split="test-dev"``
+    rather than collapsing onto ``"test"``.
+    """
+    tokens = [t for t in re.split(r"[^a-z]+", name.lower()) if t]
+    joined = f"-{'-'.join(tokens)}-"
     for token in _SPLIT_TOKENS:
-        if token in tokens:
+        if f"-{token}-" in joined:
             return token
     return None
 
@@ -193,6 +207,7 @@ def _row_to_detection(row: _VisDroneRow) -> ObjectDetectionAnnotation:
         source_category_id=row.category,
         score=None,  # ground truth carries no confidence; raw flag kept in attributes
         attributes={
+            "visdrone_category_id": row.category,
             "visdrone_score": row.score,
             "truncation": row.truncation,
             "occlusion": row.occlusion,
@@ -337,6 +352,7 @@ class VisDroneImageClassificationLoader(Loader):
                                 source_category_id=row.category,
                                 category_name=name,
                                 attributes={
+                                    "visdrone_category_id": row.category,
                                     "visdrone_score": row.score,
                                     "truncation": row.truncation,
                                     "occlusion": row.occlusion,

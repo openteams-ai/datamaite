@@ -36,13 +36,15 @@ on-disk → on-disk conversion; writers refuse a non-empty destination unless
 you pass `mode="replace"`/`"append"`, and the fixed-taxonomy writers warn on
 generic-id reinterpretation — see
 [Writing & converting datasets](#writing--converting-datasets-python)).
-HMIE/Scale, flat MP4 video folders, Hugging Face
+HMIE/Scale, flat MP4 video folders, flat still-image folders
+(.jpg/.png/.tif), Hugging Face
 Video Classification, Hugging Face Vision (still-image IC + OD), MOTChallenge,
 TAO, VisDrone Video, VisDrone still images,
 COCO OD, YOLO image classification, and YOLO object detection are implemented
 input formats; HMIE/Scale, Hugging Face Video Classification, Hugging Face
 Vision (IC + OD), MOTChallenge,
-TAO, VisDrone Video, COCO OD, YOLO image classification, and YOLO object
+TAO, VisDrone Video, VisDrone still images (OD + IC), COCO OD, YOLO image
+classification, and YOLO object
 detection are implemented output formats. Validation is currently **HMIE/Scale only**;
 non-HMIE formats load and write but are not validated by `datamaite validate`
 yet.
@@ -51,14 +53,15 @@ yet.
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
+| Flat folder still images (.jpg / .png / .tif) | ✅ | — | — |
 | Hugging Face Video Classification | ✅ | — | ✅ |
 | Hugging Face Vision (image classification) | ✅ | — | ✅ |
 | Hugging Face Vision (object detection) | ✅ | — | ✅ |
 | MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
-| VisDrone still images (OD) | ✅ | — | — |
-| VisDrone still images (IC, object crops) | ✅ | — | — |
+| VisDrone still images (OD) | ✅ | — | ✅ |
+| VisDrone still images (IC, object crops) | ✅ | — | ✅ |
 | YOLO image classification | ✅ | — | ✅ |
 | COCO object detection | ✅ | — | ✅ |
 | YOLO object detection | ✅ | — | ✅ |
@@ -173,6 +176,25 @@ for seq in ds.iter_sequences():
 
 The flat MP4 loader does not recurse into subdirectories and carries no
 annotations, so `seq.boxes` is empty and `ds.categories == {}`.
+
+Load a flat folder of label-free still images (immediate children only;
+`.jpg`, `.png`, and `.tif`) as an unlabeled object-detection dataset. This
+format is explicit opt-in only — a bare folder of images is never
+autodetected:
+
+```python
+from datamaite import load_od
+
+ds = load_od("/path/to/image-folder", dataset_format="flat_images")
+
+for sample in ds.iter_samples():
+    print(sample.image_id, sample.path_or_uri)
+
+image, target, meta = ds[0]  # MAITE indexing; requires datamaite[od]
+```
+
+Every sample has zero detections and there is no taxonomy, because this
+format carries no annotations.
 
 Load a Hugging Face VideoFolder-style video classification repository (class
 folders, optional `train` / `validation` / `test` splits, or `metadata.csv` /
@@ -492,7 +514,8 @@ write(od, "/path/to/yolo-det-out", output_format="yolo")
 ```
 
 HMIE, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone Video,
-COCO OD, YOLO OD, and YOLO IC have round-trip writers. The MOT routes recover
+VisDrone still images (OD + IC), COCO OD, YOLO OD, and YOLO IC have
+round-trip writers. The MOT routes recover
 the same box/category/frame content represented by `BoxTrackDataset`; VC/OD/IC
 routes preserve their task records within the constraints of each format (for
 example, YOLO OD stores normalized boxes and class indices, not COCO

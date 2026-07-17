@@ -90,6 +90,14 @@ class TestParsing:
         assert infer_split("VisDrone2019-DET-val") == "val"
         assert infer_split("random-folder") is None
 
+    def test_infer_split_keeps_test_dev_and_test_challenge_identity(self):
+        # The official DET roots include test-dev and test-challenge; they
+        # must not collapse onto plain "test".
+        assert infer_split("VisDrone2019-DET-test-dev") == "test-dev"
+        assert infer_split("VisDrone2019-DET-test-challenge") == "test-challenge"
+        assert infer_split("VisDrone2019-DET-test_dev") == "test-dev"
+        assert infer_split("VisDrone2019-DET-test") == "test"
+
     def test_class_list_length(self):
         assert len(VISDRONE_STATIC_CLASSES) == 12
 
@@ -120,7 +128,13 @@ class TestObjectDetection:
         assert det.category_id == 4
         assert det.category_name == "car"
         assert det.score is None
-        assert det.attributes == {"visdrone_score": 1.0, "truncation": 0, "occlusion": 1, "source_line": 1}
+        assert det.attributes == {
+            "visdrone_category_id": det.category_id,
+            "visdrone_score": 1.0,
+            "truncation": 0,
+            "occlusion": 1,
+            "source_line": 1,
+        }
         assert ds.index2label()[9] == "bus"
         assert len(ds.dataset_metadata.taxonomy.entries) == 12
         assert ds.samples[0].split == "train"
@@ -130,6 +144,25 @@ class TestObjectDetection:
         (tmp_path / "images").mkdir()  # no annotations/
         ds = load_od(tmp_path, dataset_format="visdrone")
         assert ds.sample_count == 0
+
+    def test_reads_tif_images_by_default(self, tmp_path: Path) -> None:
+        # The static writer copies source images verbatim, so .tif sources
+        # (e.g. arriving via flat_images) must reload rather than vanish.
+        base = tmp_path / "VisDrone2019-DET-train"
+        (base / "images").mkdir(parents=True)
+        (base / "annotations").mkdir(parents=True)
+        (base / "images" / "0001.tif").write_bytes(b"II*\x00 fake tif")
+        (base / "annotations" / "0001.txt").write_text("10,20,30,40,1,4,0,1\n", encoding="utf-8")
+        ds = load_od(base, dataset_format="visdrone")
+        assert ds.sample_count == 1
+        assert ds.samples[0].file_name == "0001.tif"
+        assert len(ds.samples[0].detections) == 1
+
+    def test_split_from_test_dev_root(self, tmp_path: Path) -> None:
+        base = _make_od_root(tmp_path, name="VisDrone2019-DET-test-dev")
+        ds = load_od(base, dataset_format="visdrone")
+        assert ds.samples[0].split == "test-dev"
+        assert ds.dataset_metadata.splits == ("test-dev",)
 
     def test_orphan_annotation_warns(self, tmp_path: Path, caplog) -> None:
         base = _make_od_root(tmp_path)
@@ -167,7 +200,12 @@ class TestImageClassification:
         assert car.height == 40  # crop dims
         assert car.image_id == "img#2"  # traceable to source line
         assert car.path_or_uri.endswith("img.jpg")
-        assert car.labels[0].attributes == {"visdrone_score": 1.0, "truncation": 0, "occlusion": 1}
+        assert car.labels[0].attributes == {
+            "visdrone_category_id": car.labels[0].category_id,
+            "visdrone_score": 1.0,
+            "truncation": 0,
+            "occlusion": 1,
+        }
         assert ds.index2label() == {
             0: "pedestrian",
             1: "people",

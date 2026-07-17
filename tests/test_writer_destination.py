@@ -188,6 +188,8 @@ _OPTION_VALIDATION_CASES = [
         "annotation_file_name",
     ),
     (Task.OD, DatasetFormat.YOLO, "default", _EMPTY_OD, {"precision": 0}, "precision"),
+    (Task.OD, DatasetFormat.VISDRONE, "default", _EMPTY_OD, {"class_map": {"x": -1}}, "class ids must be"),
+    (Task.IC, DatasetFormat.VISDRONE, "default", _EMPTY_IC, {"split": "bogus"}, "split"),
     (
         Task.VC,
         DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION,

@@ -90,6 +90,7 @@ _LoaderT = TypeVar("_LoaderT", bound=Loader)
 _LOADERS: dict[LoaderKey, type[Loader]] = {}
 _BUILTIN_LOADER_MODULES = (
     "datamaite._formats.coco.loader",
+    "datamaite._formats.flat_images.loader",
     "datamaite._formats.flat_mp4.loader",
     "datamaite._formats.hmie.loader",
     "datamaite._formats.huggingface_video_classification.loader",

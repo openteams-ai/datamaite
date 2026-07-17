@@ -199,6 +199,7 @@ class DatasetFormat(enum.Enum):
     """Supported dataset formats (the on-disk *wire* format, independent of task)."""
 
     COCO = "coco"
+    FLAT_IMAGES = "flat_images"
     FLAT_MP4 = "flat_mp4"
     HUGGINGFACE_VIDEO_CLASSIFICATION = "huggingface_video_classification"
     HUGGINGFACE_VISION = "huggingface_vision"
