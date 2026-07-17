@@ -9,6 +9,7 @@ JSON with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only validation format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout). On
 the loading side, flat-folder MP4 video, Hugging Face Video Classification,
+Hugging Face Vision (still-image classification + object detection),
 MOTChallenge, TAO, VisDrone Video, COCO object detection, YOLO image
 classification, and YOLO object detection are also implemented loaders.
 Validation remains HMIE-only even
@@ -126,12 +127,21 @@ flowchart LR
 
 Today, MOT loaders (HMIE, flat MP4, MOTChallenge, TAO, VisDrone Video) are
 reached through `load_mot(dataset_format=…)`; COCO OD is reached through
-`load_od(dataset_format="coco")` or `load_od(dataset_format="yolo")`; YOLO image
-classification is reached through `load_ic(dataset_format="yolo")`; Hugging Face
+`load_od(dataset_format="coco")`, `load_od(dataset_format="yolo")`, or
+`load_od(dataset_format="huggingface_vision")`; YOLO image
+classification is reached through `load_ic(dataset_format="yolo")` and Hugging
+Face ImageFolder classification through
+`load_ic(dataset_format="huggingface_vision")`; Hugging Face
 Video Classification is reached through `load_vc(dataset_format=…)`. The HMIE
 validation pipeline is the only validator. HMIE, Hugging Face Video
-Classification, MOTChallenge, TAO, VisDrone Video, COCO OD, YOLO OD, and YOLO IC
-writers are implemented. Hugging Face Video Classification returns its own
+Classification, Hugging Face Vision (IC + OD), MOTChallenge, TAO, VisDrone
+Video, COCO OD, YOLO OD, and YOLO IC
+writers are implemented. The Hugging Face Vision loaders and writers cover the
+*local ImageFolder-compatible layout* (what
+`datasets.load_dataset("imagefolder", data_dir=…)` reads from disk), not
+general Hugging Face `datasets` support — Hub repositories, Arrow datasets,
+dataset scripts, and full feature schemas are out of
+scope. Hugging Face Video Classification returns its own
 `VideoClassificationDataset` records and has no MAITE surface yet. See
 [Loading](#loading--hmie-loader) for how MOT loaders build the box-track model,
 [The model as a MAITE dataset](#the-model-as-a-maite-dataset) for the MAITE
@@ -184,6 +194,10 @@ src/datamaite/
         huggingface_video_classification/
             __init__.py              Hugging Face Video Classification exports
             loader.py                HuggingFaceVideoClassificationLoader: VideoFolder -> VideoClassificationDataset
+        huggingface_vision/
+            __init__.py              Hugging Face Vision (still-image) exports
+            loader.py                HF ImageFolder loaders: IC (class folders/metadata) + OD (objects metadata)
+            writer.py                HF ImageFolder writers: IC (class folders) + OD (images + objects metadata)
         motchallenge/
             __init__.py              MOTChallenge format exports
             loader.py                MotChallengeLoader: standard MOTChallenge -> BoxTrackDataset
@@ -1046,8 +1060,8 @@ explicit opt-in operation, not implicit writer dispatch.
 ```mermaid
 flowchart LR
     fM["MOT formats:<br/>HMIE · MOTChallenge · TAO · VisDrone-VID · flat-MP4"] <--> IRM(["BoxTrackDataset<br/>· MOT ·"])
-    fO["OD formats:<br/>COCO · YOLO implemented<br/>Pascal-VOC/KITTI future"] <--> IRO(["ObjectDetectionDataset<br/>· OD ·"])
-    fI["IC formats:<br/>YOLO classification implemented · HF/ImageFolder future"] <--> IRI(["ImageClassificationDataset<br/>· IC ·"])
+    fO["OD formats:<br/>COCO · YOLO · HF ImageFolder implemented<br/>Pascal-VOC/KITTI future"] <--> IRO(["ObjectDetectionDataset<br/>· OD ·"])
+    fI["IC formats:<br/>YOLO classification · HF ImageFolder implemented"] <--> IRI(["ImageClassificationDataset<br/>· IC ·"])
     fV["VC formats:<br/>HF VideoFolder"] --> IRV(["VideoClassificationDataset<br/>· VC ·<br/>no MAITE protocol"])
     IRM -. "explicit lossy bridge only<br/>(not implicit dispatch)" .-> IRO
 

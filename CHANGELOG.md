@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Hugging Face Vision still-image format (IR-3.2-S-2 loader + IR-3.2-S-6
+  writer): `load_ic(root, dataset_format="huggingface_vision")` reads the
+  ImageFolder classification convention (class folders, split folders, or
+  `metadata.csv`/`metadata.jsonl` with `label`), and
+  `load_od(root, dataset_format="huggingface_vision")` reads the
+  object-detection convention (metadata `objects` column of parallel
+  `bbox`/`categories` lists). `write(dataset,
+  output_format="huggingface_vision")` mirrors both back out, with the
+  detection/classification selection keyed on the dataset task (#3, #8).
+
+### Fixed
+
+- Hugging Face Vision: the IC writer now preserves class-folder names with
+  spaces/unicode/punctuation (e.g. `traffic light`, `café`) instead of skipping
+  those samples, keeping write->reload label identity. The IC/OD loaders order
+  integer category ids numerically (not lexically) and preserve original integer
+  ids rather than re-indexing them; a metadata file no longer fabricates a label
+  from a file_name's parent directory; and class folders literally named
+  `train`/`test`/`val` are no longer mistaken for split directories (#3, #8).
+
+- Hugging Face Vision: the OD writer now places `metadata.jsonl`/`.csv`
+  *inside* each split directory (`train/metadata.jsonl`,
+  `data/metadata.jsonl`) with directory-relative `file_name`s instead of one
+  root-level file: `datasets.load_dataset("imagefolder", ...)` only
+  associates metadata files within a split's directory tree, so the
+  root-level file silently lost the `objects` column on the Hugging Face
+  side (verified against `datasets` 5.x). The OD loader correspondingly
+  scans all first-level directories (not just split-named ones) for
+  metadata files; root-level metadata files remain supported for reading
+  (#3, #8).
+
+- Hugging Face Vision: custom split names can no longer break round-trips —
+  the writers only emit ImageFolder-recognized split directories
+  (`train`/`validation`/`test`; aliases such as `val`/`dev`/`eval` normalise,
+  unknown split *options* raise, unknown *sample* splits fall back to the
+  default split with a warning), since a directory like `holdout/` would
+  reload as a class folder (IC) or lose its split (OD). The loaders now
+  recognize the full Hugging Face split keyword set (`dev`, `testing`,
+  `eval`, `evaluation`). The OD writer preserves category *names* in
+  `objects.categories` when detections carry them (reloads keep `"person"`
+  instead of a bare id; the numeric-id drop is declared in
+  `lossy_without`). Docs now scope the format as the local
+  ImageFolder-compatible layout (not general `datasets`/Hub support) and mark
+  CSV OD metadata (JSON-encoded `objects`) as a datamaite extension; an
+  optional test module verifies writer output loads with the real
+  `datasets.load_dataset("imagefolder", ...)` when `datasets` is installed
+  (#3, #8).
+
 ## [0.2.2] - 2026-07-16
 
 ### Added

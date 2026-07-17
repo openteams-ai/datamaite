@@ -93,6 +93,7 @@ _BUILTIN_LOADER_MODULES = (
     "datamaite._formats.flat_mp4.loader",
     "datamaite._formats.hmie.loader",
     "datamaite._formats.huggingface_video_classification.loader",
+    "datamaite._formats.huggingface_vision.loader",
     "datamaite._formats.motchallenge.loader",
     "datamaite._formats.tao.loader",
     "datamaite._formats.visdrone.loader",

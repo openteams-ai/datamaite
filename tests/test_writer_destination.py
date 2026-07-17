@@ -16,6 +16,7 @@ from datamaite import DatasetFormat, Task, convert, load_ic, load_od, write
 from datamaite._formats.huggingface_video_classification.loader import (
     load_huggingface_video_classification,
 )
+from datamaite.image_classification import ImageClassificationDataset
 from datamaite.loaders import load, load_mot
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
@@ -166,6 +167,7 @@ class TestValidateOptionsBeforeReplace:
 # any writer touches the sequences/samples, so an empty dataset is enough to
 # reach it. Reused across every case in the cross-writer regression table.
 _EMPTY_OD = ObjectDetectionDataset(samples=())
+_EMPTY_IC = ImageClassificationDataset(samples=())
 _EMPTY_VC = VideoClassificationDataset(samples=(), categories={})
 
 # (task, format, variant, minimal dataset, one known-invalid option, error-match).
@@ -191,6 +193,22 @@ _OPTION_VALIDATION_CASES = [
         DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION,
         "default",
         _EMPTY_VC,
+        {"metadata_format": "xml"},
+        "metadata_format",
+    ),
+    (
+        Task.IC,
+        DatasetFormat.HUGGINGFACE_VISION,
+        "default",
+        _EMPTY_IC,
+        {"default_split": "../evil"},
+        "default_split",
+    ),
+    (
+        Task.OD,
+        DatasetFormat.HUGGINGFACE_VISION,
+        "default",
+        _EMPTY_OD,
         {"metadata_format": "xml"},
         "metadata_format",
     ),

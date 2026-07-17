@@ -61,6 +61,14 @@ if TYPE_CHECKING:
         HuggingFaceVideoClassificationLoader,
     )
     from datamaite._formats.huggingface_video_classification.writer import HuggingFaceVideoClassificationWriter
+    from datamaite._formats.huggingface_vision.loader import (
+        HuggingFaceVisionImageClassificationLoader,
+        HuggingFaceVisionObjectDetectionLoader,
+    )
+    from datamaite._formats.huggingface_vision.writer import (
+        HuggingFaceVisionImageClassificationWriter,
+        HuggingFaceVisionObjectDetectionWriter,
+    )
     from datamaite._formats.motchallenge.loader import MotChallengeLoader
     from datamaite._formats.motchallenge.writer import MotChallengeWriter
     from datamaite._formats.tao.loader import TaoLoader
@@ -92,6 +100,22 @@ _LAZY_EXPORTS = {
     "HuggingFaceVideoClassificationWriter": (
         "datamaite._formats.huggingface_video_classification.writer",
         "HuggingFaceVideoClassificationWriter",
+    ),
+    "HuggingFaceVisionImageClassificationLoader": (
+        "datamaite._formats.huggingface_vision.loader",
+        "HuggingFaceVisionImageClassificationLoader",
+    ),
+    "HuggingFaceVisionImageClassificationWriter": (
+        "datamaite._formats.huggingface_vision.writer",
+        "HuggingFaceVisionImageClassificationWriter",
+    ),
+    "HuggingFaceVisionObjectDetectionLoader": (
+        "datamaite._formats.huggingface_vision.loader",
+        "HuggingFaceVisionObjectDetectionLoader",
+    ),
+    "HuggingFaceVisionObjectDetectionWriter": (
+        "datamaite._formats.huggingface_vision.writer",
+        "HuggingFaceVisionObjectDetectionWriter",
     ),
     "MotChallengeLoader": ("datamaite._formats.motchallenge.loader", "MotChallengeLoader"),
     "MotChallengeWriter": ("datamaite._formats.motchallenge.writer", "MotChallengeWriter"),
@@ -140,6 +164,10 @@ __all__ = [
     "HmieWriter",
     "HuggingFaceVideoClassificationLoader",
     "HuggingFaceVideoClassificationWriter",
+    "HuggingFaceVisionImageClassificationLoader",
+    "HuggingFaceVisionImageClassificationWriter",
+    "HuggingFaceVisionObjectDetectionLoader",
+    "HuggingFaceVisionObjectDetectionWriter",
     "ImageClassificationDataset",
     "ImageClassificationSample",
     "ImageObjectDetectionSample",

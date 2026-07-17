@@ -73,6 +73,7 @@ _BUILTIN_WRITER_MODULES = (
     "datamaite._formats.coco.writer",
     "datamaite._formats.hmie.writer",
     "datamaite._formats.huggingface_video_classification.writer",
+    "datamaite._formats.huggingface_vision.writer",
     "datamaite._formats.motchallenge.writer",
     "datamaite._formats.tao.writer",
     "datamaite._formats.visdrone.writer",

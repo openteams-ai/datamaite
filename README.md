@@ -37,9 +37,11 @@ you pass `mode="replace"`/`"append"`, and the fixed-taxonomy writers warn on
 generic-id reinterpretation — see
 [Writing & converting datasets](#writing--converting-datasets-python)).
 HMIE/Scale, flat MP4 video folders, Hugging Face
-Video Classification, MOTChallenge, TAO, VisDrone Video, VisDrone still images,
+Video Classification, Hugging Face Vision (still-image IC + OD), MOTChallenge,
+TAO, VisDrone Video, VisDrone still images,
 COCO OD, YOLO image classification, and YOLO object detection are implemented
-input formats; HMIE/Scale, Hugging Face Video Classification, MOTChallenge,
+input formats; HMIE/Scale, Hugging Face Video Classification, Hugging Face
+Vision (IC + OD), MOTChallenge,
 TAO, VisDrone Video, COCO OD, YOLO image classification, and YOLO object
 detection are implemented output formats. Validation is currently **HMIE/Scale only**;
 non-HMIE formats load and write but are not validated by `datamaite validate`
@@ -50,6 +52,8 @@ yet.
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
 | Hugging Face Video Classification | ✅ | — | ✅ |
+| Hugging Face Vision (image classification) | ✅ | — | ✅ |
+| Hugging Face Vision (object detection) | ✅ | — | ✅ |
 | MOTChallenge | ✅ | — | ✅ |
 | TAO | ✅ | — | ✅ |
 | VisDrone Video (VID/MOT) | ✅ | — | ✅ |
@@ -193,6 +197,54 @@ MAITE 0.9.5 has no video-classification protocol. The loader returns a
 `ds[i]` / iteration are plain sample-record accessors, `ds.label_names()` maps
 stable label IDs to raw labels, and `ds.categories` uses injective percent-encoded
 label URIs so labels such as `"a b"`, `"a/b"`, and `"a_b"` remain distinct.
+
+Load a local Hugging Face **ImageFolder-compatible** vision repository — the
+on-disk layout `datasets.load_dataset("imagefolder", data_dir=…)` reads, not
+general Hugging Face `datasets` support (Hub repositories, Arrow dumps,
+dataset scripts, and full feature schemas are out of scope). Classification
+reads the ImageFolder convention (class folders such as `train/cat/0001.jpg`,
+or a `metadata.csv` / `metadata.jsonl` with `file_name` and `label` columns);
+object detection reads the metadata `objects` column of parallel
+`bbox` / `categories` lists (COCO-style absolute-pixel `xywh` boxes):
+
+```python
+from datamaite import load_ic, load_od
+
+ic = load_ic("/path/to/hf-image-dataset", dataset_format="huggingface_vision")
+for sample in ic.iter_samples():
+    print(sample.image_id, sample.split, sample.labels[0].category_name)
+
+od = load_od("/path/to/hf-od-dataset", dataset_format="huggingface_vision")
+for sample in od.iter_samples():
+    for det in sample.detections:
+        print(sample.image_id, det.bbox, det.category_id)
+```
+
+Both variants write back out through the same format name — the
+detection/classification selection is keyed on the dataset task:
+
+```python
+from datamaite import write
+
+write(ic, "out/hf-ic", output_format="huggingface_vision")   # class folders
+write(od, "out/hf-od", output_format="huggingface_vision")   # images + per-split metadata.jsonl
+```
+
+The OD writer places `metadata.jsonl` *inside* each split directory
+(`train/metadata.jsonl`, `data/metadata.jsonl` for unsplit samples) with
+directory-relative `file_name`s — once split directories exist, Hugging
+Face's ImageFolder only associates metadata files within each split's tree,
+so a root-level metadata file would silently lose the `objects` column when
+loaded with `datasets`. The writers only emit split directories ImageFolder split inference
+recognizes (`train`/`validation`/`test`, with aliases such as `val`, `dev`,
+and `eval` normalised); samples with any other split name fall back to the
+default split with a warning, since a custom split directory would reload as
+a class folder (IC) or lose its split (OD). Detections that carry a category
+name write the name into `objects.categories` (the layout has no ClassLabel
+name table to put it in), so reloads keep `"person"` rather than a bare id.
+The OD writer's `metadata_format="csv"` (JSON-encoded `objects`) is a
+datamaite extension read back by the matching loader — keep the default
+`metadata.jsonl` for Hugging Face-standard output.
 
 Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
 splits) the same way:

@@ -201,6 +201,7 @@ class DatasetFormat(enum.Enum):
     COCO = "coco"
     FLAT_MP4 = "flat_mp4"
     HUGGINGFACE_VIDEO_CLASSIFICATION = "huggingface_video_classification"
+    HUGGINGFACE_VISION = "huggingface_vision"
     HMIE = "hmie"
     MOTCHALLENGE = "motchallenge"
     TAO = "tao"
