@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Native IC/OD datasets now implement the MAITE `FieldwiseDataset` protocol
+  (`get_input`/`get_target`/`get_metadata`) in addition to `__getitem__`.
+  `get_target` and `get_metadata` avoid decoding the image when the target and
+  dimensions are known without it, so fieldwise consumers (e.g. dataeval and
+  other MAITE tooling) can read targets/metadata without the image extra (#77).
+
 ## [0.3.0] - 2026-07-23
 
 ### Added

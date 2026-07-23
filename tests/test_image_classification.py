@@ -196,3 +196,67 @@ def test_no_path_import_side_effects(tmp_path: Path) -> None:
         labels=(ClassificationLabel(category_id=0, category_name="missing"),),
     )
     assert sample.path_or_uri is not None
+
+
+class TestImageClassificationFieldwise:
+    """MAITE ``FieldwiseDataset`` surface: get_input / get_target / get_metadata."""
+
+    def _ds(self) -> ImageClassificationDataset:
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
+            id_density="dense",
+        )
+        return ImageClassificationDataset(
+            samples=(
+                ImageClassificationSample(
+                    image_id="train/dog/a.png",
+                    image_bytes=_png_bytes(),
+                    file_name="train/dog/a.png",
+                    width=3,
+                    height=2,
+                    split="train",
+                    labels=(ClassificationLabel(category_id=1, source_category_id=1, category_name="dog"),),
+                ),
+            ),
+            dataset_metadata=DatasetMetadata(taxonomy=taxonomy, splits=("train",)),
+            dataset_id="ic-set",
+        )
+
+    def test_has_fieldwise_methods(self) -> None:
+        ds = self._ds()
+        for name in ("get_input", "get_target", "get_metadata"):
+            assert callable(getattr(ds, name))
+
+    def test_fieldwise_matches_getitem(self) -> None:
+        ds = self._ds()
+        image, target, metadata = ds[0]
+        assert np.array_equal(ds.get_input(0), image)
+        assert np.array_equal(ds.get_target(0), target)
+        assert ds.get_metadata(0) == metadata
+
+    def test_target_and_metadata_need_no_image_decode(self) -> None:
+        # A sample with known dims but NO decodable image data: fieldwise target
+        # and metadata must still resolve, proving neither decodes the image.
+        ds = ImageClassificationDataset(
+            samples=(
+                ImageClassificationSample(
+                    image_id="x",
+                    width=3,
+                    height=2,
+                    split="train",
+                    labels=(ClassificationLabel(category_id=1, source_category_id=1, category_name="dog"),),
+                ),
+            ),
+            dataset_metadata=DatasetMetadata(
+                taxonomy=Taxonomy(
+                    entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
+                    id_density="dense",
+                )
+            ),
+        )
+        assert ds.get_target(0).tolist() == [0.0, 1.0]
+        assert ds.get_metadata(0) == {"id": "x", "split": "train", "height": 2, "width": 3}
+        # get_input has no bytes/path to decode -> it must fail, confirming the
+        # others genuinely avoided the decode path.
+        with pytest.raises(ValueError, match="neither path_or_uri nor image_bytes"):
+            ds.get_input(0)

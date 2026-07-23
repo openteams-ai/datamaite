@@ -64,6 +64,24 @@ class ObjectDetectionDataset:
             ) from exc
         return build_od_item(sample)
 
+    def get_input(self, index: int, /) -> Any:
+        """MAITE ``FieldwiseDataset.get_input``: the decoded image for ``index``."""
+        from datamaite.maite._od import od_input
+
+        return od_input(self.samples[index])
+
+    def get_target(self, index: int, /) -> Any:
+        """MAITE ``FieldwiseDataset.get_target``: the OD target for ``index`` (no image decode)."""
+        from datamaite.maite._od import od_target
+
+        return od_target(self.samples[index])
+
+    def get_metadata(self, index: int, /) -> dict[str, Any]:
+        """MAITE ``FieldwiseDataset.get_metadata``: datum metadata for ``index`` (decodes only if dims unknown)."""
+        from datamaite.maite._od import od_metadata
+
+        return od_metadata(self.samples[index])
+
     @property
     def metadata(self) -> dict[str, Any]:
         """MAITE ``DatasetMetadata``: dataset id + ``index2label`` map."""

@@ -61,12 +61,36 @@ def _target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
     return ObjectDetectionTarget(boxes, labels, scores)
 
 
-def build_od_item(sample: ImageObjectDetectionSample) -> tuple[np.ndarray, ObjectDetectionTarget, dict[str, Any]]:
-    """Build one MAITE OD item ``(image, target, datum_metadata)`` for ``sample``."""
-    image = decode_image(sample, task_name="ObjectDetectionDataset", extra="od")
+def od_input(sample: ImageObjectDetectionSample) -> np.ndarray:
+    """Decode one OD sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
+    return decode_image(sample, task_name="ObjectDetectionDataset", extra="od")
+
+
+def od_target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
+    """Build one OD sample's MAITE target (no image decode required)."""
+    return _target(sample)
+
+
+def od_metadata(sample: ImageObjectDetectionSample, image: np.ndarray | None = None) -> dict[str, Any]:
+    """Build one OD sample's MAITE datum metadata (``id``/``height``/``width``).
+
+    The image is decoded only when ``height``/``width`` are not stored on the
+    sample. When ``build_od_item`` has already decoded the image it is passed in
+    via ``image`` to avoid a re-decode.
+    """
     meta: dict[str, Any] = {"id": sample.image_id}
-    height = sample.height if sample.height is not None else int(image.shape[1])
-    width = sample.width if sample.width is not None else int(image.shape[2])
+    height, width = sample.height, sample.width
+    if height is None or width is None:
+        if image is None:
+            image = od_input(sample)
+        height = sample.height if sample.height is not None else int(image.shape[1])
+        width = sample.width if sample.width is not None else int(image.shape[2])
     meta["height"] = height
     meta["width"] = width
-    return image, _target(sample), meta
+    return meta
+
+
+def build_od_item(sample: ImageObjectDetectionSample) -> tuple[np.ndarray, ObjectDetectionTarget, dict[str, Any]]:
+    """Build one MAITE OD item ``(image, target, datum_metadata)`` for ``sample``."""
+    image = od_input(sample)
+    return image, od_target(sample), od_metadata(sample, image)

@@ -181,3 +181,47 @@ class TestMaiteOdSurface:
         ds = ObjectDetectionDataset(samples=(ImageObjectDetectionSample(image_id=1, path_or_uri=str(bad)),))
         with pytest.raises(OSError, match="could not decode"):
             _ = ds[0]
+
+
+class TestObjectDetectionFieldwise:
+    """MAITE ``FieldwiseDataset`` surface: get_input / get_target / get_metadata."""
+
+    def test_has_fieldwise_methods(self) -> None:
+        ds = _ds()
+        for name in ("get_input", "get_target", "get_metadata"):
+            assert callable(getattr(ds, name))
+
+    def test_target_and_metadata_need_no_image_decode(self) -> None:
+        # _ds() samples carry width/height but no decodable image (file_name only):
+        # fieldwise target + metadata resolve without a decode.
+        ds = _ds()
+        target = ds.get_target(0)
+        assert target.boxes.shape == (2, 4)
+        assert target.labels.tolist() == [1, 3]
+        assert ds.get_metadata(0) == {"id": 100, "height": 480, "width": 640}
+        # Empty-detection sample still yields an empty, well-formed target.
+        empty = ds.get_target(1)
+        assert empty.boxes.shape == (0, 4)
+
+    def test_fieldwise_matches_getitem(self, tmp_path) -> None:
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+
+        img = tmp_path / "a.jpg"
+        cv2.imwrite(str(img), np.full((4, 6, 3), 128, dtype=np.uint8))  # H=4, W=6
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id=7,
+                    path_or_uri=str(img),
+                    file_name="a.jpg",
+                    detections=(ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1),),
+                ),
+            ),
+        )
+        image, target, metadata = ds[0]
+        assert np.array_equal(ds.get_input(0), image)
+        got = ds.get_target(0)
+        assert np.array_equal(got.boxes, target.boxes)
+        assert np.array_equal(got.labels, target.labels)
+        assert ds.get_metadata(0) == metadata

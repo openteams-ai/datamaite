@@ -52,6 +52,24 @@ class ImageClassificationDataset:
             ) from exc
         return build_ic_item(sample, self.dataset_metadata.taxonomy)
 
+    def get_input(self, index: int, /) -> Any:
+        """MAITE ``FieldwiseDataset.get_input``: the decoded image for ``index``."""
+        from datamaite.maite._ic import ic_input
+
+        return ic_input(self.samples[index])
+
+    def get_target(self, index: int, /) -> Any:
+        """MAITE ``FieldwiseDataset.get_target``: the class vector for ``index`` (no image decode)."""
+        from datamaite.maite._ic import ic_target
+
+        return ic_target(self.samples[index], self.dataset_metadata.taxonomy)
+
+    def get_metadata(self, index: int, /) -> dict[str, Any]:
+        """MAITE ``FieldwiseDataset.get_metadata``: datum metadata for ``index`` (decodes only if dims unknown)."""
+        from datamaite.maite._ic import ic_metadata
+
+        return ic_metadata(self.samples[index])
+
     @property
     def metadata(self) -> dict[str, Any]:
         """MAITE ``DatasetMetadata``: dataset id + dense ``index2label`` map."""

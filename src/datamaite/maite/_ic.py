@@ -58,29 +58,57 @@ def _target(sample: ImageClassificationSample, taxonomy: Taxonomy | None) -> np.
     return target
 
 
-def build_ic_item(
-    sample: ImageClassificationSample,
-    taxonomy: Taxonomy | None,
-) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
-    """Build one MAITE IC item ``(image, target, datum_metadata)`` for ``sample``.
+def ic_input(sample: ImageClassificationSample) -> np.ndarray:
+    """Decode one IC sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
+    return decode_image(sample, task_name="ImageClassificationDataset", extra="ic")
+
+
+def ic_target(sample: ImageClassificationSample, taxonomy: Taxonomy | None) -> np.ndarray:
+    """Build one IC sample's MAITE target vector (no image decode required).
 
     A dataset-level ``taxonomy`` is required for a stable target width across
     samples (every loader in this package supplies one). Without it the width is
     inferred per-sample from integer source ids, so a taxonomy-less dataset can
     yield ragged targets -- usable for a quick look, not for batched evaluation.
     """
-    image = decode_image(sample, task_name="ImageClassificationDataset", extra="ic")
+    return _target(sample, taxonomy)
+
+
+def ic_metadata(sample: ImageClassificationSample, image: np.ndarray | None = None) -> dict[str, Any]:
+    """Build one IC sample's MAITE datum metadata (``id``/``split``/``height``/``width``).
+
+    The image is decoded only when the true dimensions cannot be known without
+    it: a region crop (whose clamped size is known only from the decoded array)
+    or a sample missing stored ``height``/``width``. When ``build_ic_item`` has
+    already decoded the image it is passed in via ``image`` to avoid a re-decode.
+    """
     meta: dict[str, Any] = {"id": sample.image_id}
     if sample.split is not None:
         meta["split"] = sample.split
-    if getattr(sample, "region", None) is not None:
-        # A region crop is clamped to image bounds at decode time, so its true size
-        # is known only from the decoded array -- the stored dims are the nominal
-        # (possibly over-edge) box size and would disagree for edge-straddling crops.
-        height, width = int(image.shape[1]), int(image.shape[2])
+    has_region = getattr(sample, "region", None) is not None
+    if has_region or sample.height is None or sample.width is None:
+        if image is None:
+            image = ic_input(sample)
+        if has_region:
+            # A region crop is clamped to image bounds at decode time, so its true
+            # size is known only from the decoded array -- the stored dims are the
+            # nominal (possibly over-edge) box size and would disagree for
+            # edge-straddling crops.
+            height, width = int(image.shape[1]), int(image.shape[2])
+        else:
+            height = sample.height if sample.height is not None else int(image.shape[1])
+            width = sample.width if sample.width is not None else int(image.shape[2])
     else:
-        height = sample.height if sample.height is not None else int(image.shape[1])
-        width = sample.width if sample.width is not None else int(image.shape[2])
+        height, width = sample.height, sample.width
     meta["height"] = height
     meta["width"] = width
-    return image, _target(sample, taxonomy), meta
+    return meta
+
+
+def build_ic_item(
+    sample: ImageClassificationSample,
+    taxonomy: Taxonomy | None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Build one MAITE IC item ``(image, target, datum_metadata)`` for ``sample``."""
+    image = ic_input(sample)
+    return image, ic_target(sample, taxonomy), ic_metadata(sample, image)
