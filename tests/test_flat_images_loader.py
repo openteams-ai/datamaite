@@ -133,4 +133,9 @@ class TestFlatImagesMaiteDecode:
         # decode_image returns RGB CHW; cv2.imencode consumed BGR.
         np.testing.assert_array_equal(np.transpose(image, (1, 2, 0)), source[:, :, ::-1])
         assert target.boxes.shape == (0, 4)  # type: ignore[attr-defined]
-        assert meta == {"id": "real.png", "height": 4, "width": 6}
+        assert meta["id"] == "real.png"
+        assert meta["height"] == 4
+        assert meta["width"] == 6
+        # #79: the loader's source-preserving per-image passthrough is now
+        # surfaced on the datum metadata as flat keys.
+        assert meta["source_format"] == "flat_images"

@@ -198,7 +198,7 @@ class TestObjectDetectionFieldwise:
         target = ds.get_target(0)
         assert target.boxes.shape == (2, 4)
         assert target.labels.tolist() == [1, 3]
-        assert ds.get_metadata(0) == {"id": 100, "height": 480, "width": 640}
+        assert ds.get_metadata(0) == {"file_name": "a.jpg", "id": 100, "height": 480, "width": 640}
         # Empty-detection sample still yields an empty, well-formed target.
         empty = ds.get_target(1)
         assert empty.boxes.shape == (0, 4)
@@ -225,3 +225,51 @@ class TestObjectDetectionFieldwise:
         assert np.array_equal(got.boxes, target.boxes)
         assert np.array_equal(got.labels, target.labels)
         assert ds.get_metadata(0) == metadata
+
+
+class TestOdDatumMetadataExtras:
+    """#79: source-preserving per-image metadata is surfaced as flat datum-metadata keys."""
+
+    def test_surfaces_file_name_and_extras_with_reserved_precedence(self, tmp_path) -> None:
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+
+        img = tmp_path / "img.png"
+        cv2.imwrite(str(img), np.full((4, 6, 3), 128, dtype=np.uint8))  # H=4, W=6
+        sample = ImageObjectDetectionSample(
+            image_id=100,
+            path_or_uri=str(img),
+            file_name="a.jpg",
+            width=6,
+            height=4,
+            metadata={
+                "license": 1,
+                "date_captured": "2021-01-01",
+                "flickr_url": "http://f/x",
+                "coco_url": "http://c/x",
+                "id": "SHOULD_NOT_WIN",  # reserved-key collision
+                "width": -5,  # invalid raw value a COCO loader may leave visible
+            },
+            detections=(),
+        )
+        ds = ObjectDetectionDataset(samples=(sample,))
+        _img, _target, meta = ds[0]
+        assert meta["id"] == 100  # typed id wins over passthrough
+        assert meta["file_name"] == "a.jpg"
+        assert meta["width"] == 6  # typed dims win over -5
+        assert meta["height"] == 4
+        assert meta["license"] == 1
+        assert meta["date_captured"] == "2021-01-01"
+        assert meta["flickr_url"] == "http://f/x"
+        assert meta["coco_url"] == "http://c/x"
+        assert ds.get_metadata(0) == meta
+
+    def test_bare_sample_metadata_is_exactly_id_height_width(self, tmp_path) -> None:
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+
+        img = tmp_path / "img.png"
+        cv2.imwrite(str(img), np.zeros((3, 5, 3), dtype=np.uint8))
+        sample = ImageObjectDetectionSample(image_id=7, path_or_uri=str(img), width=5, height=3)
+        _img, _t, meta = ObjectDetectionDataset(samples=(sample,))[0]
+        assert meta == {"id": 7, "height": 3, "width": 5}

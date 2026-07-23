@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dimensions are known without it, so fieldwise consumers (e.g. dataeval and
   other MAITE tooling) can read targets/metadata without the image extra (#77).
 
+- Object-detection MAITE datum metadata now surfaces the source-preserving
+  per-image passthrough (`sample.metadata`) as flat top-level keys, plus
+  `file_name`. For COCO this exposes the full `images[]` extras
+  (`license`/`date_captured`/`flickr_url`/`coco_url`/...) that MAITE metadata
+  consumers (e.g. dataeval bias factors) read; YOLO/VisDrone provenance is
+  surfaced the same way. The typed `id`/`height`/`width` keys always win over
+  any same-named passthrough value, and a bare sample still yields exactly
+  `{id, height, width}` (#79).
+- Object-detection MAITE datum metadata now surfaces per-box source attributes
+  as flat lists index-aligned to the target boxes, so metadata consumers
+  (dataeval, which expands list-valued datum-metadata keys into per-object bias
+  factors) can read them. This surfaces VisDrone `truncation`/`occlusion`/
+  `visdrone_score` and other entries that detection records retain in their
+  attributes. `target.scores` still carries ground-truth
+  confidence; the raw VisDrone score stays a distinct `visdrone_score` factor
+  (#80).
+
 ## [0.3.0] - 2026-07-23
 
 ### Added

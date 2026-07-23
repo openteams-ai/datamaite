@@ -18,6 +18,7 @@ datamaite`` / loading / validating never pulls either.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,7 +27,7 @@ import numpy as np
 from datamaite.geometry import to_xyxy
 from datamaite.maite._common import EMPTY_BOXES, EMPTY_LABELS, EMPTY_SCORES
 from datamaite.maite._image import decode_image
-from datamaite.records import ImageObjectDetectionSample
+from datamaite.records import ImageObjectDetectionSample, ObjectDetectionAnnotation
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,20 @@ def _target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
     return ObjectDetectionTarget(boxes, labels, scores)
 
 
+def _detection_attributes(dets: Sequence[ObjectDetectionAnnotation]) -> dict[str, list[Any]]:
+    """Per-box source attributes as flat lists index-aligned to ``target.boxes``.
+
+    One list per attribute key seen across the sample's detections; box ``i``
+    contributes ``dets[i].attributes.get(key)`` (``None`` when that box omits the
+    key). dataeval expands a list-valued datum-metadata key into a per-detection
+    bias factor, so VisDrone ``truncation``/``occlusion``/``visdrone_score`` and
+    other attributes become per-object factors. Empty when no detection carries
+    attributes, so a format with none adds nothing to the datum metadata.
+    """
+    keys = sorted({k for d in dets for k in d.attributes})
+    return {key: [d.attributes.get(key) for d in dets] for key in keys}
+
+
 def od_input(sample: ImageObjectDetectionSample) -> np.ndarray:
     """Decode one OD sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
     return decode_image(sample, task_name="ObjectDetectionDataset", extra="od")
@@ -72,13 +87,27 @@ def od_target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
 
 
 def od_metadata(sample: ImageObjectDetectionSample, image: np.ndarray | None = None) -> dict[str, Any]:
-    """Build one OD sample's MAITE datum metadata (``id``/``height``/``width``).
+    """Build one OD sample's MAITE datum metadata.
+
+    The source-preserving per-image passthrough (``sample.metadata`` -- e.g. COCO
+    ``images[]`` extras such as ``license``/``date_captured``/``flickr_url``/
+    ``coco_url``; YOLO/VisDrone provenance) is surfaced as flat datum-metadata
+    keys so MAITE metadata consumers can see them. The authoritative typed keys
+    (``id``/``height``/``width``) and ``file_name`` are written last so they
+    always win over any same-named passthrough key.
 
     The image is decoded only when ``height``/``width`` are not stored on the
     sample. When ``build_od_item`` has already decoded the image it is passed in
     via ``image`` to avoid a re-decode.
     """
-    meta: dict[str, Any] = {"id": sample.image_id}
+    meta: dict[str, Any] = dict(sample.metadata)
+    # Per-box attributes as flat lists aligned to the detections, so dataeval
+    # reads them as per-object factors (a per-box key wins over a same-named
+    # per-image passthrough key).
+    meta.update(_detection_attributes(sample.detections))
+    if sample.file_name is not None:
+        meta["file_name"] = sample.file_name
+    meta["id"] = sample.image_id
     height, width = sample.height, sample.width
     if height is None or width is None:
         if image is None:

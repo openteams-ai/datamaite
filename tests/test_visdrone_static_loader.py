@@ -346,3 +346,50 @@ class TestSniff:
     def test_lazy_exports_resolve(self) -> None:
         assert datamaite.VisDroneObjectDetectionLoader is VisDroneObjectDetectionLoader
         assert datamaite.VisDroneImageClassificationLoader is VisDroneImageClassificationLoader
+
+
+class TestVisDroneOdPerBoxAttributes:
+    """#80: per-box truncation/occlusion/raw-score surface as flat per-detection
+    lists on the OD MAITE datum metadata (dataeval per-object factors)."""
+
+    def test_maite_item_surfaces_per_box_attrs(self, tmp_path: Path) -> None:
+        pytest.importorskip("cv2")
+        import cv2
+        import numpy as np
+
+        base = tmp_path / "VisDrone2019-DET-train"
+        (base / "images").mkdir(parents=True)
+        (base / "annotations").mkdir(parents=True)
+        cv2.imwrite(str(base / "images" / "0001.jpg"), np.zeros((70, 70, 3), dtype=np.uint8))
+        # rows: left,top,w,h,score,category,truncation,occlusion
+        (base / "annotations" / "0001.txt").write_text("10,20,30,40,0,4,0,1\n5,5,8,8,1,9,2,0\n", encoding="utf-8")
+        ds = load_od(base, dataset_format="visdrone")
+        _image, target, meta = ds[0]
+
+        n = len(target.boxes)
+        assert n == 2
+        # every surfaced per-box list is index-aligned to target.boxes
+        assert all(len(v) == n for v in (meta["truncation"], meta["occlusion"], meta["visdrone_score"]))
+        assert meta["truncation"] == [0, 2]
+        assert meta["occlusion"] == [1, 0]
+        assert meta["visdrone_score"] == [0.0, 1.0]  # raw score preserved
+        assert meta["visdrone_category_id"] == [4, 9]
+        assert ds.get_metadata(0) == meta  # fieldwise metadata exposes the same per-box factors
+        # target.scores are ground-truth 1.0 -- the raw score is NOT overloaded onto them
+        assert target.scores.tolist() == [1.0, 1.0]
+
+    def test_no_detections_adds_no_attribute_keys(self, tmp_path: Path) -> None:
+        pytest.importorskip("cv2")
+        import cv2
+        import numpy as np
+
+        base = tmp_path / "VisDrone2019-DET-train"
+        (base / "images").mkdir(parents=True)
+        (base / "annotations").mkdir(parents=True)
+        cv2.imwrite(str(base / "images" / "0001.jpg"), np.zeros((20, 20, 3), dtype=np.uint8))
+        (base / "annotations" / "0001.txt").write_text("", encoding="utf-8")
+        ds = load_od(base, dataset_format="visdrone")
+        _image, target, meta = ds[0]
+        assert len(target.boxes) == 0
+        assert "truncation" not in meta
+        assert "occlusion" not in meta

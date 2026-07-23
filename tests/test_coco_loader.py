@@ -287,3 +287,33 @@ class TestRegistryDispatch:
         _write(tmp_path, _coco())
         with pytest.raises(TypeError, match="load_mot expected a BoxTrackDataset"):
             load_mot(tmp_path, dataset_format="coco")
+
+
+class TestCocoDatumMetadata:
+    """#79: full COCO images[] fields surface on the MAITE OD datum metadata."""
+
+    def test_coco_images_fields_surface_in_datum_metadata(self, tmp_path: Path) -> None:
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+
+        payload = _coco()
+        payload["images"][0].update(
+            {"date_captured": "2021-01-01", "flickr_url": "http://f/x", "coco_url": "http://c/x"}
+        )
+        _write(tmp_path, payload)
+        cv2.imwrite(str(tmp_path / "a.jpg"), np.zeros((480, 640, 3), dtype=np.uint8))
+
+        ds = load_od(tmp_path, dataset_format="coco")
+        index = next(i for i, s in enumerate(ds.iter_samples()) if s.image_id == 100)
+        _img, _target, meta = ds[index]
+
+        assert meta["id"] == 100
+        assert meta["file_name"] == "a.jpg"
+        assert meta["width"] == 640
+        assert meta["height"] == 480
+        assert meta["license"] == 1
+        assert (meta["date_captured"], meta["flickr_url"], meta["coco_url"]) == (
+            "2021-01-01",
+            "http://f/x",
+            "http://c/x",
+        )
