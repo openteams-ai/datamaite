@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 name = "datamaite"
 # Static version: the single source of truth. Bump this on each release.
 # Exposed at runtime via importlib.metadata (see src/datamaite/_version.py).
-version = "0.2.2"
+version = "0.3.0"
 description = "A unified framework for dataset loading, conversion, and quality validation."
 readme = "README.md"
 license = "Apache-2.0"
