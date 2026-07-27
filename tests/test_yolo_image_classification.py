@@ -424,3 +424,66 @@ class TestConvertOptionGuards:
                 write_options={"write_data_yaml": False},
                 write_data_yaml=True,
             )
+
+
+class TestYoloImageClassificationEmptyClasses:
+    """#81: empty class directories are included in the taxonomy so dense label
+    indices stay stable across splits."""
+
+    def test_empty_class_dir_included_in_taxonomy(self, tmp_path: Path) -> None:
+        # 'bird' exists as a class directory in both splits but has no images.
+        _write_image(tmp_path / "train" / "cat" / "a.jpg", b"cat-a")
+        _write_image(tmp_path / "train" / "dog" / "b.jpg", b"dog-b")
+        (tmp_path / "train" / "bird").mkdir(parents=True)
+        _write_image(tmp_path / "val" / "cat" / "c.jpg", b"cat-c")
+        (tmp_path / "val" / "bird").mkdir(parents=True)
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        # bird kept; sorted order bird/cat/dog gives stable dense indices.
+        assert ds.index2label() == {0: "bird", 1: "cat", 2: "dog"}
+        assert ds.dataset_metadata.taxonomy.dense_index2label() == {0: "bird", 1: "cat", 2: "dog"}
+        assert ds.sample_count == 3  # empty class adds no samples
+
+    def test_label_indices_not_shifted_by_empty_class(self, tmp_path: Path) -> None:
+        _write_image(tmp_path / "train" / "cat" / "a.jpg", b"cat-a")
+        _write_image(tmp_path / "train" / "dog" / "b.jpg", b"dog-b")
+        (tmp_path / "train" / "bird").mkdir(parents=True)
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        by_name = {s.labels[0].category_name: s.labels[0].category_id for s in ds.samples}
+        # index 0 is reserved for the empty 'bird'; cat/dog are not pulled down to 0/1.
+        assert by_name == {"cat": 1, "dog": 2}
+        assert 0 not in by_name.values()
+
+    def test_split_with_only_empty_class_dirs_is_still_discovered(self, tmp_path: Path) -> None:
+        # 'val' holds no images at all, so the structural split check does not
+        # recognize it on its own; the layout is established by 'train' and every
+        # split-named sibling then contributes its class dirs to the union.
+        _write_image(tmp_path / "train" / "cat" / "a.jpg", b"cat-a")
+        (tmp_path / "val" / "bird").mkdir(parents=True)
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        assert ds.index2label() == {0: "bird", 1: "cat"}
+        assert ds.sample_count == 1
+        assert [s.labels[0].category_id for s in ds.samples] == [1]
+
+    def test_empty_split_named_dir_without_class_dirs_adds_no_classes(self, tmp_path: Path) -> None:
+        # A split dir that is entirely empty declares no classes -- it must not
+        # invent one from its own name.
+        _write_image(tmp_path / "train" / "cat" / "a.jpg", b"cat-a")
+        (tmp_path / "test").mkdir(parents=True)
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        assert ds.index2label() == {0: "cat"}
+        assert ds.dataset_metadata.splits == ("train",)
+
+    def test_no_empty_dirs_is_unchanged(self, tmp_path: Path) -> None:
+        # Regression guard: the common no-empty-class path is unperturbed.
+        _dataset(tmp_path)
+        ds = load_ic(tmp_path, dataset_format="yolo")
+        assert ds.index2label() == {0: "cat", 1: "dog"}
+        assert ds.sample_count == 3

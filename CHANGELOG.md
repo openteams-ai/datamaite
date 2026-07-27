@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolve against the YAML's own directory when it declares no `path:`,
   matching Ultralytics (#78).
 
+### Fixed
+
+- YOLO image-classification loader: empty class directories (a class folder
+  present on disk but containing no images) are now included in the taxonomy.
+  Previously the taxonomy was derived only from classes that contained samples,
+  so an empty class in one split shifted dense label indices relative to another
+  split (or dropped the class entirely), misaligning labels across splits. This
+  covers a split that holds only empty class directories, which was previously
+  skipped by split discovery entirely (#81).
+
 ## [0.3.1] - 2026-07-24
 
 ### Added

@@ -92,12 +92,15 @@ class YoloImageClassificationLoader(Loader):
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
 
         extensions = normalize_extensions(image_extensions)
-        records = _discover_classification_records(root_path, extensions)
+        records, class_name_list = _discover_classification_records(root_path, extensions)
         if not records:
             logger.warning("No YOLO image-classification images found in %s", root_path)
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
 
-        class_names = tuple(sorted({record[2] for record in records}))
+        # Union of every class subdirectory (already sorted), including empty
+        # ones -- not just classes that contain images -- so dense label indices
+        # stay stable across splits (#81).
+        class_names = tuple(class_name_list)
         class_to_id = {name: idx for idx, name in enumerate(class_names)}
         taxonomy = Taxonomy(
             entries=tuple(CategoryEntry(source_id=idx, name=name) for idx, name in enumerate(class_names)),
@@ -303,20 +306,36 @@ def _is_classification_split_dir(child: Path, extensions: frozenset[str]) -> boo
     return any(sub.is_dir() and _has_direct_image(sub, extensions) for sub in safe_children(child))
 
 
-def _discover_classification_records(root: Path, extensions: frozenset[str]) -> list[tuple[Path, str | None, str, str]]:
-    """Return ``(image_path, split, class_name, rel_path)`` rows."""
-    split_dirs = [
-        (child, infer_split(child.name))
-        for child in safe_children(root)
-        if child.is_dir() and _is_classification_split_dir(child, extensions)
-    ]
+def _discover_classification_records(
+    root: Path, extensions: frozenset[str]
+) -> tuple[list[tuple[Path, str | None, str, str]], list[str]]:
+    """Return ``(rows, class_names)`` where each row is ``(image_path, split, class_name, rel_path)``.
+
+    ``class_names`` is the sorted union of every class subdirectory seen across
+    all splits, including class dirs that contain no images -- so an empty class
+    in one split does not shift dense label indices relative to another (#81).
+    """
+    child_dirs = [child for child in safe_children(root) if child.is_dir()]
+    # Deciding split-vs-flat layout stays structural: a split must hold at least
+    # one class subdirectory with an image. A purely name-based test would misread
+    # a flat-layout class legitimately named "train" as the sole split.
+    uses_split_layout = any(_is_classification_split_dir(child, extensions) for child in child_dirs)
     records: list[tuple[Path, str | None, str, str]] = []
-    if split_dirs:
+    class_names: set[str] = set()
+    if uses_split_layout:
+        # Once the layout is established, every split-named sibling is a split --
+        # including one whose class dirs are all empty. Requiring each split to
+        # contain an image would drop its declared classes from the union (#81).
+        split_dirs = [(child, split) for child in child_dirs if (split := infer_split(child.name)) is not None]
         for split_dir, split in sorted(split_dirs, key=lambda item: (split_sort_key(item[1]), item[0].name)):
-            records.extend(_classification_records_from_class_dirs(root, split_dir, split=split, extensions=extensions))
+            recs, names = _classification_records_from_class_dirs(root, split_dir, split=split, extensions=extensions)
+            records.extend(recs)
+            class_names.update(names)
     else:
-        records.extend(_classification_records_from_class_dirs(root, root, split=None, extensions=extensions))
-    return sorted(records, key=lambda row: row[3])
+        recs, names = _classification_records_from_class_dirs(root, root, split=None, extensions=extensions)
+        records.extend(recs)
+        class_names.update(names)
+    return sorted(records, key=lambda row: row[3]), sorted(class_names)
 
 
 def _classification_records_from_class_dirs(
@@ -325,12 +344,21 @@ def _classification_records_from_class_dirs(
     *,
     split: str | None,
     extensions: frozenset[str],
-) -> list[tuple[Path, str | None, str, str]]:
+) -> tuple[list[tuple[Path, str | None, str, str]], list[str]]:
+    """Return ``(records, class_names)`` for one base dir.
+
+    ``class_names`` lists *every* class subdirectory, including empty ones (no
+    images), so the taxonomy is the union of declared classes rather than only
+    the classes that happen to contain samples. This keeps dense label indices
+    stable across splits when a class is empty in some split (#81).
+    """
     records: list[tuple[Path, str | None, str, str]] = []
+    class_names: list[str] = []
     for class_dir in safe_children(base):
         if not class_dir.is_dir():
             continue
         class_name = class_dir.name
+        class_names.append(class_name)
         # Direct children only -- the documented flat layout, and consistent with
         # the shallow ``sniff``. (``rglob`` would silently flatten nested
         # subdirectories into the class and diverge from autodetect.)
@@ -341,7 +369,7 @@ def _classification_records_from_class_dirs(
                 logger.warning("Skipping symlinked image escaping the dataset root: %s", image_path)
                 continue
             records.append((image_path, split, class_name, relative_posix(image_path, root)))
-    return records
+    return records, class_names
 
 
 # ---------------------------------------------------------------------------
