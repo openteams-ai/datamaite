@@ -22,8 +22,15 @@ when optional ``pyarrow`` or ``pandas`` support is installed.
 Scope: this is support for the *local ImageFolder-compatible layout* — what
 ``datasets.load_dataset("imagefolder", data_dir=...)`` reads from disk — not
 general Hugging Face ``datasets`` support. Hub repositories, Arrow/parquet
-dataset dumps, dataset scripts, and full feature schemas (e.g. ``ClassLabel``
-name tables) are out of scope. ``metadata.csv`` rows whose ``objects`` value
+dataset dumps, and dataset scripts are out of scope. One feature-schema
+exception: a ``metadata.parquet`` produced by ``datasets`` (``ds.to_parquet``)
+embeds the features schema in the parquet header (the ``huggingface`` schema
+metadata key), and ``ClassLabel`` name tables found there — a top-level label
+column or the OD ``objects.categories`` list — are decoded so integer class
+indices load as their class names instead of stringified ints (``metadata.csv``
+/ ``metadata.jsonl`` have no schema channel, so integer labels there stay
+integers, matching ``datasets``' own behaviour). ``metadata.csv`` rows whose
+``objects`` value
 is a JSON-encoded string are also parsed as a datamaite extension (the
 matching writer's ``metadata_format="csv"``); Hugging Face documents the OD
 ``objects`` convention for ``metadata.jsonl`` only.
@@ -135,9 +142,10 @@ class HuggingFaceVisionImageClassificationLoader(Loader):
             )
 
         extensions = _normalize_image_extensions(image_extensions)
-        rows = _discover_rows(root, extensions, folder_fallback=True)
+        rows, class_tables = _discover_rows(root, extensions, folder_fallback=True)
         rows = _dedupe_rows(_filter_existing_rows(rows))
-        taxonomy, label_lookup = _ic_taxonomy(rows)
+        class_names = next((class_tables[column] for column in _LABEL_COLUMNS if column in class_tables), None)
+        taxonomy, label_lookup = _ic_taxonomy(rows, class_names=class_names)
 
         samples: list[ImageClassificationSample] = []
         for row in sorted(rows, key=_row_sort_key):
@@ -205,7 +213,10 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
             )
 
         extensions = _normalize_image_extensions(image_extensions)
-        rows = _discover_rows(root, extensions, folder_fallback=False)
+        rows, class_tables = _discover_rows(root, extensions, folder_fallback=False)
+        category_names = next(
+            (class_tables[key] for key in ("objects.categories", "objects.category") if key in class_tables), None
+        )
         if not rows:
             logger.warning(
                 "No Hugging Face metadata rows found under %s; the OD convention requires a metadata file "
@@ -219,7 +230,7 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
 
         samples: list[ImageObjectDetectionSample] = []
         for row in sorted(rows, key=_row_sort_key):
-            detections = _parse_objects(row)
+            detections = _parse_objects(row, category_names=category_names)
             samples.append(
                 ImageObjectDetectionSample(
                     image_id=row.rel_path,
@@ -232,7 +243,7 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
                     metadata=_sample_metadata(row),
                 )
             )
-        taxonomy = _od_taxonomy(samples)
+        taxonomy = _od_taxonomy(samples, class_names=category_names)
         if not samples:
             logger.warning("No loadable Hugging Face vision OD images found in %s", root)
         logger.info(
@@ -255,33 +266,55 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
 # ---------------------------------------------------------------------------
 
 
-def _discover_rows(root: Path, extensions: frozenset[str], *, folder_fallback: bool) -> list[_ImageRow]:
-    """Collect candidate image rows from metadata files or the folder layout."""
+def _discover_rows(
+    root: Path, extensions: frozenset[str], *, folder_fallback: bool
+) -> tuple[list[_ImageRow], dict[str, tuple[str, ...]]]:
+    """Collect candidate image rows plus any ClassLabel name tables found in metadata.
+
+    The second element maps a features-schema location (a label column name such
+    as ``"label"``, or ``"objects.categories"``) to its ``ClassLabel`` names.
+    Only ``metadata.parquet`` files can carry one; folder discovery returns an
+    empty mapping.
+    """
     metadata_files = _metadata_files(root)
     if metadata_files:
-        rows = _rows_from_metadata(root, metadata_files, extensions)
+        rows, class_tables = _rows_from_metadata(root, metadata_files, extensions)
         if rows or not folder_fallback:
-            return rows
+            return rows, class_tables
         if all(path.suffix.lower() == ".parquet" for path in metadata_files):
             logger.warning(
                 "Hugging Face parquet metadata produced no loadable rows in %s; falling back to folder discovery",
                 root,
             )
-            return _rows_from_folder_layout(root, extensions)
-        return rows
+            return _rows_from_folder_layout(root, extensions), {}
+        return rows, class_tables
     if folder_fallback:
-        return _rows_from_folder_layout(root, extensions)
-    return []
+        return _rows_from_folder_layout(root, extensions), {}
+    return [], {}
 
 
-def _rows_from_metadata(root: Path, metadata_files: Iterable[Path], extensions: frozenset[str]) -> list[_ImageRow]:
+def _rows_from_metadata(
+    root: Path, metadata_files: Iterable[Path], extensions: frozenset[str]
+) -> tuple[list[_ImageRow], dict[str, tuple[str, ...]]]:
     rows: list[_ImageRow] = []
+    class_tables: dict[str, tuple[str, ...]] = {}
     for metadata_path in metadata_files:
-        for row_number, raw in enumerate(_read_metadata_rows(metadata_path), start=1):
-            row = _row_from_metadata(root, metadata_path, raw, row_number, extensions)
+        file_rows, file_tables = _read_metadata_rows(metadata_path)
+        for row_number, raw in enumerate(file_rows, start=1):
+            row = _row_from_metadata(root, metadata_path, raw, row_number, extensions, class_tables=file_tables)
             if row is not None:
                 rows.append(row)
-    return rows
+        for key, names in file_tables.items():
+            if key in class_tables and class_tables[key] != names:
+                logger.warning(
+                    "Conflicting Hugging Face ClassLabel name tables for %r across metadata files; keeping the "
+                    "first (%s ignored)",
+                    key,
+                    metadata_path,
+                )
+                continue
+            class_tables[key] = names
+    return rows, class_tables
 
 
 def _row_from_metadata(
@@ -290,6 +323,7 @@ def _row_from_metadata(
     raw: Mapping[str, Any],
     row_number: int,
     extensions: frozenset[str],
+    class_tables: Mapping[str, tuple[str, ...]] | None = None,
 ) -> _ImageRow | None:
     posix = _parse_file_name(raw.get("file_name"), path=metadata_path, row_number=row_number)
     if posix is None:
@@ -318,7 +352,7 @@ def _row_from_metadata(
     # than fabricating a class from its file_name's parent directory. The
     # folder-derived fallback lives only in the pure folder-discovery path
     # (`_rows_from_image_tree`).
-    label = _label_from_metadata(raw, path=metadata_path, row_number=row_number)
+    label = _label_from_metadata(raw, path=metadata_path, row_number=row_number, class_tables=class_tables)
     return _ImageRow(
         path=image_path,
         rel_path=_relative_posix(image_path, root),
@@ -420,17 +454,40 @@ def _dedupe_rows(rows: Iterable[_ImageRow]) -> list[_ImageRow]:
 # ---------------------------------------------------------------------------
 
 
-def _ic_taxonomy(rows: Iterable[_ImageRow]) -> tuple[Taxonomy | None, dict[str, tuple[int, int]]]:
+def _ic_taxonomy(
+    rows: Iterable[_ImageRow], *, class_names: tuple[str, ...] | None = None
+) -> tuple[Taxonomy | None, dict[str, tuple[int, int]]]:
     """Class ids from discovered label names.
 
-    When every discovered label is an integer-valued string (e.g. Hugging Face
-    ``ClassLabel`` indices stringified by :func:`_coerce_label`), the integer is
-    preserved as both ``category_id`` and ``source_category_id`` and labels are
-    ordered NUMERICALLY, so integer label ``10`` keeps id ``10`` instead of being
-    re-indexed to a lexical position. Genuinely non-numeric string labels fall
-    back to dense positional ids ordered case-insensitively.
+    When a ``ClassLabel`` name table was recovered from parquet metadata
+    (``class_names``), it is the positional truth: every name keeps its
+    ClassLabel index as ``category_id``/``source_category_id`` and the taxonomy
+    covers the FULL table (including classes with no sample in this split, which
+    is exactly what ``ClassLabel`` guarantees on the ``datasets`` side). Labels
+    observed outside the table are appended after it with the next dense ids.
+
+    Otherwise, when every discovered label is an integer-valued string (e.g.
+    Hugging Face ``ClassLabel`` indices stringified by :func:`_coerce_label`),
+    the integer is preserved as both ``category_id`` and ``source_category_id``
+    and labels are ordered NUMERICALLY, so integer label ``10`` keeps id ``10``
+    instead of being re-indexed to a lexical position. Genuinely non-numeric
+    string labels fall back to dense positional ids ordered case-insensitively.
     """
     unique = {row.label for row in rows if row.label is not None}
+    if class_names:
+        entries = [CategoryEntry(source_id=index, name=name) for index, name in enumerate(class_names)]
+        lookup = {name: (index, index) for index, name in enumerate(class_names)}
+        for label in sorted((label for label in unique if label not in lookup), key=lambda value: value.casefold()):
+            index = len(entries)
+            entries.append(CategoryEntry(source_id=index, name=label))
+            lookup[label] = (index, index)
+        taxonomy = Taxonomy(
+            entries=tuple(entries),
+            source_dataset="huggingface_vision",
+            id_density="dense",
+            ordered_names=tuple(entry.name for entry in entries),
+        )
+        return taxonomy, lookup
     if not unique:
         return None, {}
     int_values = _integer_label_values(unique)
@@ -480,7 +537,9 @@ def _integer_label_values(labels: Iterable[str]) -> dict[str, int] | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_objects(row: _ImageRow) -> tuple[ObjectDetectionAnnotation, ...]:  # noqa: C901 - per-detection validation is intentionally explicit
+def _parse_objects(  # noqa: C901 - per-detection validation is intentionally explicit
+    row: _ImageRow, *, category_names: tuple[str, ...] | None = None
+) -> tuple[ObjectDetectionAnnotation, ...]:
     """Parse one row's ``objects`` value into detections, skipping bad boxes with warnings."""
     raw = row.objects
     if raw is None or _is_missing(raw):
@@ -520,7 +579,7 @@ def _parse_objects(row: _ImageRow) -> tuple[ObjectDetectionAnnotation, ...]:  # 
         if bbox is None:
             continue
         category = categories[index] if categories is not None and index < len(categories) else None
-        category_id, category_name, source_category_id = _parse_category(category)
+        category_id, category_name, source_category_id = _parse_category(category, category_names=category_names)
         detections.append(
             ObjectDetectionAnnotation(
                 bbox=bbox,
@@ -552,23 +611,45 @@ def _parse_bbox(value: Any, *, rel_path: str, index: int) -> BBox | None:
     return bbox
 
 
-def _parse_category(value: Any) -> tuple[int | None, str | None, SourceId]:
-    """Split one category value into ``(category_id, category_name, source_category_id)``."""
+def _parse_category(
+    value: Any, *, category_names: tuple[str, ...] | None = None
+) -> tuple[int | None, str | None, SourceId]:
+    """Split one category value into ``(category_id, category_name, source_category_id)``.
+
+    An integer category keeps its id; when a ``ClassLabel`` name table was
+    recovered from parquet metadata (``category_names``) the id also resolves to
+    its class name, so the write side emits the name instead of the bare int.
+    """
     if isinstance(value, bool) or _is_missing(value):
         return None, None, None
     if isinstance(value, int):
-        return value, None, value
+        return value, _classlabel_name(value, category_names), value
     if isinstance(value, float) and value.is_integer():
-        return int(value), None, int(value)
+        return int(value), _classlabel_name(int(value), category_names), int(value)
     if isinstance(value, str):
         text = value.strip()
         return None, text or None, text or None
     return None, None, None
 
 
-def _od_taxonomy(samples: Iterable[ImageObjectDetectionSample]) -> Taxonomy | None:
-    """Source-preserving taxonomy from observed detection categories."""
-    discovered: dict[SourceId, str] = {}
+def _classlabel_name(index: int, names: tuple[str, ...] | None) -> str | None:
+    if names is not None and 0 <= index < len(names):
+        return names[index]
+    return None
+
+
+def _od_taxonomy(
+    samples: Iterable[ImageObjectDetectionSample], *, class_names: tuple[str, ...] | None = None
+) -> Taxonomy | None:
+    """Source-preserving taxonomy from observed detection categories.
+
+    When a ``ClassLabel`` name table was recovered from parquet metadata
+    (``class_names``), the taxonomy is seeded with the FULL table (index ->
+    name), so classes without a detection in this split are kept, matching the
+    ``datasets``-side ``ClassLabel`` guarantee; observed categories outside the
+    table are still appended below.
+    """
+    discovered: dict[SourceId, str] = dict(enumerate(class_names)) if class_names else {}
     for sample in samples:
         for detection in sample.detections:
             source_id = (
@@ -678,16 +759,21 @@ def _metadata_files_in_dir(path: Path) -> list[Path]:
     return matches
 
 
-def _read_metadata_rows(path: Path) -> list[dict[str, Any]]:
+def _read_metadata_rows(path: Path) -> tuple[list[dict[str, Any]], dict[str, tuple[str, ...]]]:
+    """Read one metadata file's rows plus any ClassLabel name tables it carries.
+
+    Only parquet has a schema channel (the ``huggingface`` schema-metadata key
+    ``datasets`` embeds); CSV/JSONL always return an empty table mapping.
+    """
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        return _read_csv_rows(path)
+        return _read_csv_rows(path), {}
     if suffix == ".jsonl":
-        return _read_jsonl_rows(path)
+        return _read_jsonl_rows(path), {}
     if suffix == ".parquet":
         return _read_parquet_rows(path)
     logger.warning("Unsupported Hugging Face metadata file type: %s", path)
-    return []
+    return [], {}
 
 
 def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
@@ -730,7 +816,8 @@ def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
+def _read_parquet_rows(path: Path) -> tuple[list[dict[str, Any]], dict[str, tuple[str, ...]]]:
+    class_tables: dict[str, tuple[str, ...]] = {}
     try:  # pragma: no cover - optional parquet dependency not installed in the core test matrix.
         import pyarrow.parquet as pq  # type: ignore[import-untyped]
     except ImportError:  # pragma: no cover - optional pandas fallback is not installed in the core test matrix.
@@ -741,19 +828,100 @@ def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
                 "Cannot read Hugging Face metadata parquet %s; install pyarrow or pandas to enable parquet metadata",
                 path,
             )
-            return []
+            return [], {}
         try:
             rows = pd.read_parquet(path).to_dict(orient="records")
         except Exception as exc:
             logger.warning("Could not read Hugging Face metadata parquet %s: %s", path, exc)
-            return []
+            return [], {}
     else:  # pragma: no cover - pyarrow success path needs the optional parquet dependency.
         try:
-            rows = pq.read_table(path).to_pylist()
+            table = pq.read_table(path)
         except Exception as exc:
             logger.warning("Could not read Hugging Face metadata parquet %s: %s", path, exc)
-            return []
-    return [dict(row) for row in rows if isinstance(row, Mapping)]
+            return [], {}
+        rows = table.to_pylist()
+        class_tables = _classlabel_tables(table.schema.metadata, path=path)
+    return [dict(row) for row in rows if isinstance(row, Mapping)], class_tables
+
+
+# ---------------------------------------------------------------------------
+# ClassLabel name tables from the parquet features schema
+# ---------------------------------------------------------------------------
+
+
+def _classlabel_tables(schema_metadata: Mapping[bytes, bytes] | None, *, path: Path) -> dict[str, tuple[str, ...]]:
+    """Recover ClassLabel name tables from ``datasets``' parquet schema metadata.
+
+    A parquet file produced by ``datasets`` (``ds.to_parquet``, hub shards)
+    embeds the features schema under the ``huggingface`` schema-metadata key as
+    ``{"info": {"features": {...}}}``. Returned keys are the label column name
+    for a top-level ClassLabel (``"label"``) and ``"objects.categories"`` /
+    ``"objects.category"`` for the OD list; values are the name tables indexed
+    by class id.
+    """
+    raw = (schema_metadata or {}).get(b"huggingface")
+    if not raw:
+        return {}
+    try:
+        info = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring malformed Hugging Face features schema in parquet %s: %s", path, exc)
+        return {}
+    features = info.get("info", {}).get("features") if isinstance(info, Mapping) else None
+    if not isinstance(features, Mapping):
+        return {}
+    tables: dict[str, tuple[str, ...]] = {}
+    for column in _LABEL_COLUMNS:
+        names = _classlabel_names(features.get(column))
+        if names is not None:
+            tables[column] = names
+    objects_feature = _unwrap_sequence(features.get(_OBJECTS_COLUMN))
+    if isinstance(objects_feature, Mapping):
+        for key in ("categories", "category"):
+            names = _classlabel_names(objects_feature.get(key))
+            if names is not None:
+                tables[f"{_OBJECTS_COLUMN}.{key}"] = names
+    return tables
+
+
+def _classlabel_names(node: Any) -> tuple[str, ...] | None:
+    node = _unwrap_sequence(node)
+    if isinstance(node, Mapping) and node.get("_type") == "ClassLabel":
+        names = node.get("names")
+        if isinstance(names, list) and names and all(isinstance(name, str) for name in names):
+            return tuple(names)
+    return None
+
+
+def _unwrap_sequence(node: Any) -> Any:
+    """Unwrap ``Sequence``/``List``-style feature wrappers to the inner feature node."""
+    while True:
+        if isinstance(node, list) and len(node) == 1:  # legacy list-of-one Sequence serialization
+            node = node[0]
+            continue
+        if isinstance(node, Mapping) and node.get("_type") in {"Sequence", "List", "LargeList"} and "feature" in node:
+            node = node["feature"]
+            continue
+        return node
+
+
+def _classlabel_index(value: Any) -> int | None:
+    """The ClassLabel integer index of a metadata label value, or ``None``."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _decode_classlabel(value: Any, names: tuple[str, ...]) -> str | None:
+    index = _classlabel_index(value)
+    if index is None or not 0 <= index < len(names):
+        return None
+    return names[index]
 
 
 # ---------------------------------------------------------------------------
@@ -794,11 +962,31 @@ def _split_from_parts(parts: tuple[str, ...]) -> str | None:
     return _infer_split(parts[0]) if parts else None
 
 
-def _label_from_metadata(row: Mapping[str, Any], *, path: Path, row_number: int) -> str | None:
+def _label_from_metadata(
+    row: Mapping[str, Any],
+    *,
+    path: Path,
+    row_number: int,
+    class_tables: Mapping[str, tuple[str, ...]] | None = None,
+) -> str | None:
     for column in _LABEL_COLUMNS:
         if column not in row:
             continue
         value = row[column]
+        if class_tables and column in class_tables:
+            decoded = _decode_classlabel(value, class_tables[column])
+            if decoded is not None:
+                return decoded
+            if _classlabel_index(value) is not None:
+                logger.warning(
+                    "Hugging Face label %r in %s:%d column %r is outside its ClassLabel name table "
+                    "(%d name(s)); keeping the integer",
+                    value,
+                    path,
+                    row_number,
+                    column,
+                    len(class_tables[column]),
+                )
         label = _coerce_label(value)
         if label is not None:
             return label

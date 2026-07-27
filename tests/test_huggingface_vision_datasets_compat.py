@@ -101,3 +101,32 @@ class TestHuggingFaceDatasetsCompatibility:
         label_feature = split.features["label"]
         assert sorted(label_feature.names) == ["cat", "dog"]
         assert sorted(label_feature.int2str(value) for value in split["label"]) == ["cat", "dog"]
+
+    def test_classlabel_parquet_roundtrip_keeps_names(self, tmp_path: Path) -> None:
+        # HF -> datamaite -> HF must not lose ClassLabel names: `to_parquet`
+        # stores labels as ints with the name table in the parquet header;
+        # datamaite decodes it on load, and the IC writer re-emits class-name
+        # folders that `datasets` reads back as the same ClassLabel names.
+        from datamaite.loaders import get_loader
+
+        src = tmp_path / "src" / "train"
+        src.mkdir(parents=True)
+        for name in ("a.png", "b.png"):
+            (src / name).write_bytes(_PNG)
+        hf_ds = datasets.Dataset.from_dict(
+            {"file_name": ["a.png", "b.png"], "label": [0, 1]},
+            features=datasets.Features(
+                {"file_name": datasets.Value("string"), "label": datasets.ClassLabel(names=["cat", "dog"])}
+            ),
+        )
+        hf_ds.to_parquet(str(src / "metadata.parquet"))
+
+        loaded = get_loader("huggingface_vision", task=Task.IC).load(tmp_path / "src")
+        assert [label.category_name for sample in loaded.samples for label in sample.labels] == ["cat", "dog"]
+
+        dest = tmp_path / "dest"
+        get_writer("huggingface_vision", task=Task.IC).write(loaded, dest)
+        reloaded = _load_imagefolder(dest, tmp_path / "hf-cache-roundtrip")
+
+        label_feature = reloaded["train"].features["label"]
+        assert sorted(label_feature.names) == ["cat", "dog"]

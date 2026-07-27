@@ -381,3 +381,134 @@ class TestHuggingFaceVisionObjectDetection:
         assert [s.image_id for s in ds.samples] == ["train/img.jpg"]
         assert ds.samples[0].split == "train"
         assert len(ds.samples[0].detections) == 1
+
+
+class TestHuggingFaceVisionClassLabel:
+    """ClassLabel name tables recovered from ``datasets``' parquet schema metadata."""
+
+    @staticmethod
+    def _write_parquet(path: Path, columns: dict, features: dict) -> Path:
+        pa = pytest.importorskip("pyarrow")
+        pq = pytest.importorskip("pyarrow.parquet")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(columns)
+        table = table.replace_schema_metadata(
+            {b"huggingface": json.dumps({"info": {"features": features}}).encode("utf-8")}
+        )
+        pq.write_table(table, path)
+        return path
+
+    def test_ic_parquet_classlabel_ints_decode_to_names(self, tmp_path: Path) -> None:
+        # `ds.to_parquet()` stores ClassLabel labels as ints; the names live in
+        # the parquet header's features schema and must be decoded on load.
+        _touch_image(tmp_path / "train" / "a.jpg")
+        _touch_image(tmp_path / "train" / "b.jpg")
+        self._write_parquet(
+            tmp_path / "train" / "metadata.parquet",
+            {"file_name": ["a.jpg", "b.jpg"], "label": [0, 1]},
+            {
+                "file_name": {"dtype": "string", "_type": "Value"},
+                "label": {"names": ["cat", "dog"], "_type": "ClassLabel"},
+            },
+        )
+
+        ds = load_ic(tmp_path, dataset_format="huggingface_vision")
+
+        assert [(s.labels[0].category_id, s.labels[0].category_name) for s in ds.samples] == [
+            (0, "cat"),
+            (1, "dog"),
+        ]
+        taxonomy = ds.dataset_metadata.taxonomy
+        assert taxonomy is not None
+        assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "cat"), (1, "dog")]
+        assert taxonomy.ordered_names == ("cat", "dog")
+        assert taxonomy.id_density == "dense"
+
+    def test_ic_parquet_classlabel_keeps_unobserved_classes(self, tmp_path: Path) -> None:
+        # ClassLabel is the full label space: a class with no sample in this
+        # split must still appear in the taxonomy at its ClassLabel index.
+        _touch_image(tmp_path / "train" / "a.jpg")
+        self._write_parquet(
+            tmp_path / "train" / "metadata.parquet",
+            {"file_name": ["a.jpg"], "label": [2]},
+            {"label": {"names": ["cat", "dog", "fish"], "_type": "ClassLabel"}},
+        )
+
+        ds = load_ic(tmp_path, dataset_format="huggingface_vision")
+
+        assert ds.samples[0].labels[0].category_name == "fish"
+        assert ds.samples[0].labels[0].category_id == 2
+        taxonomy = ds.dataset_metadata.taxonomy
+        assert taxonomy is not None
+        assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "cat"), (1, "dog"), (2, "fish")]
+
+    def test_ic_parquet_out_of_range_label_keeps_int_with_warning(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        _touch_image(tmp_path / "train" / "a.jpg")
+        self._write_parquet(
+            tmp_path / "train" / "metadata.parquet",
+            {"file_name": ["a.jpg"], "label": [5]},
+            {"label": {"names": ["cat", "dog"], "_type": "ClassLabel"}},
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_ic(tmp_path, dataset_format="huggingface_vision")
+
+        assert ds.samples[0].labels[0].category_name == "5"
+        assert "outside its ClassLabel name table" in caplog.text
+
+    def test_od_parquet_classlabel_categories_decode_to_names(self, tmp_path: Path) -> None:
+        _touch_image(tmp_path / "train" / "a.jpg")
+        self._write_parquet(
+            tmp_path / "train" / "metadata.parquet",
+            {
+                "file_name": ["a.jpg"],
+                "objects": [{"bbox": [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], "categories": [1, 0]}],
+            },
+            {
+                "objects": {
+                    "bbox": {
+                        "feature": {"feature": {"dtype": "float32", "_type": "Value"}, "_type": "Sequence"},
+                        "_type": "Sequence",
+                    },
+                    "categories": {"feature": {"names": ["person", "dog"], "_type": "ClassLabel"}, "_type": "Sequence"},
+                }
+            },
+        )
+
+        ds = load_od(tmp_path, dataset_format="huggingface_vision")
+
+        detections = ds.samples[0].detections
+        assert [(d.category_id, d.category_name, d.source_category_id) for d in detections] == [
+            (1, "dog", 1),
+            (0, "person", 0),
+        ]
+        taxonomy = ds.dataset_metadata.taxonomy
+        assert taxonomy is not None
+        assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "person"), (1, "dog")]
+
+    def test_classlabel_tables_handles_wrapper_shapes(self) -> None:
+        # Pure schema parsing: no parquet needed. Covers the modern List wrapper
+        # and the legacy list-of-one Sequence serialization.
+        from datamaite._formats.huggingface_vision.loader import _classlabel_tables
+
+        features = {
+            "label": {"names": ["a", "b"], "_type": "ClassLabel"},
+            "objects": {
+                "categories": {"feature": {"names": ["x"], "_type": "ClassLabel"}, "_type": "List"},
+            },
+        }
+        metadata = {b"huggingface": json.dumps({"info": {"features": features}}).encode("utf-8")}
+        tables = _classlabel_tables(metadata, path=Path("metadata.parquet"))
+        assert tables == {"label": ("a", "b"), "objects.categories": ("x",)}
+
+        legacy = {"objects": [{"category": [{"names": ["y", "z"], "_type": "ClassLabel"}]}]}
+        metadata = {b"huggingface": json.dumps({"info": {"features": legacy}}).encode("utf-8")}
+        tables = _classlabel_tables(metadata, path=Path("metadata.parquet"))
+        assert tables == {"objects.category": ("y", "z")}
+
+    def test_malformed_features_schema_is_ignored(self) -> None:
+        from datamaite._formats.huggingface_vision.loader import _classlabel_tables
+
+        assert _classlabel_tables(None, path=Path("m.parquet")) == {}
+        assert _classlabel_tables({b"huggingface": b"not json"}, path=Path("m.parquet")) == {}
+        assert _classlabel_tables({b"huggingface": b'{"info": {"features": 3}}'}, path=Path("m.parquet")) == {}

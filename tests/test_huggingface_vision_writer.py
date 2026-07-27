@@ -483,3 +483,75 @@ class TestHuggingFaceVisionObjectDetectionWriter:
 
         with pytest.raises(FileExistsError):
             write(dataset, dest, output_format="huggingface_vision")
+
+
+class TestHuggingFaceVisionODWriterTaxonomyNames:
+    """Id-only detections resolve their names through the dataset taxonomy (like the IC writer)."""
+
+    def test_taxonomy_resolves_names_for_id_only_detections(self, tmp_path: Path) -> None:
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id=0, name="person"), CategoryEntry(source_id=1, name="dog")),
+            source_dataset="test",
+            id_density="dense",
+        )
+        sample = ImageObjectDetectionSample(
+            image_id="img.jpg",
+            image_bytes=_JPEG,
+            file_name="img.jpg",
+            split="train",
+            detections=(
+                ObjectDetectionAnnotation(bbox=(10.0, 20.0, 30.0, 40.0), category_id=0),
+                ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1),
+            ),
+        )
+        dest = tmp_path / "dest"
+
+        get_writer("huggingface_vision", task=Task.OD).write(
+            ObjectDetectionDataset(samples=(sample,), dataset_metadata=DatasetMetadata(taxonomy=taxonomy)), dest
+        )
+
+        rows = [json.loads(line) for line in (dest / "train" / "metadata.jsonl").read_text().splitlines()]
+        assert rows[0]["objects"]["categories"] == ["person", "dog"]
+
+    def test_dense_positional_fallback_and_unresolved_id_stays_int(self, tmp_path: Path) -> None:
+        # source ids are strings, so by_source_id misses int 1; a dense taxonomy
+        # falls back to positional lookup (mirrors the IC writer). An id with no
+        # taxonomy entry at all keeps the bare int.
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id="a", name="cat"), CategoryEntry(source_id="b", name="dog")),
+            source_dataset="test",
+            id_density="dense",
+        )
+        sample = ImageObjectDetectionSample(
+            image_id="img.jpg",
+            image_bytes=_JPEG,
+            file_name="img.jpg",
+            split="train",
+            detections=(
+                ObjectDetectionAnnotation(bbox=(10.0, 20.0, 30.0, 40.0), category_id=1),
+                ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=7),
+            ),
+        )
+        dest = tmp_path / "dest"
+
+        get_writer("huggingface_vision", task=Task.OD).write(
+            ObjectDetectionDataset(samples=(sample,), dataset_metadata=DatasetMetadata(taxonomy=taxonomy)), dest
+        )
+
+        rows = [json.loads(line) for line in (dest / "train" / "metadata.jsonl").read_text().splitlines()]
+        assert rows[0]["objects"]["categories"] == ["dog", 7]
+
+    def test_without_taxonomy_int_ids_are_written_as_before(self, tmp_path: Path) -> None:
+        sample = ImageObjectDetectionSample(
+            image_id="img.jpg",
+            image_bytes=_JPEG,
+            file_name="img.jpg",
+            split="train",
+            detections=(ObjectDetectionAnnotation(bbox=(10.0, 20.0, 30.0, 40.0), category_id=3),),
+        )
+        dest = tmp_path / "dest"
+
+        get_writer("huggingface_vision", task=Task.OD).write(ObjectDetectionDataset(samples=(sample,)), dest)
+
+        rows = [json.loads(line) for line in (dest / "train" / "metadata.jsonl").read_text().splitlines()]
+        assert rows[0]["objects"]["categories"] == [3]

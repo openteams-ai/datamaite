@@ -155,8 +155,8 @@ class HuggingFaceVisionObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             "segmentation": "the objects column stores bbox/categories lists only",
             "iscrowd": "the objects column stores bbox/categories lists only",
             "source_category_id": "the objects categories list holds one value per box; when a detection "
-            "has a category name the name is written (so reloads keep it) and the numeric id is rebuilt "
-            "from the reload-side taxonomy",
+            "has a category name (or the dataset taxonomy resolves its id to one) the name is written "
+            "(so reloads keep it) and the numeric id is rebuilt from the reload-side taxonomy",
         },
     )
 
@@ -209,6 +209,7 @@ class HuggingFaceVisionObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         """
         fallback_split = _normalize_optional_split(split)
         metadata_format = _validate_metadata_format(metadata_format)
+        taxonomy = dataset.dataset_metadata.taxonomy
         dest_path = Path(dest)
         dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -234,7 +235,7 @@ class HuggingFaceVisionObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             parts = PurePosixPath(rel_path).parts
             dir_name, dir_relative = parts[0], PurePosixPath(*parts[1:]).as_posix()
             rows_by_dir.setdefault(dir_name, []).append(
-                _od_metadata_row(sample, file_name=dir_relative, metadata_format=metadata_format)
+                _od_metadata_row(sample, file_name=dir_relative, metadata_format=metadata_format, taxonomy=taxonomy)
             )
 
         if rows_by_dir:
@@ -399,18 +400,19 @@ def _od_metadata_row(
     *,
     file_name: str,
     metadata_format: str,
+    taxonomy: Taxonomy | None = None,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {"file_name": file_name}
     if sample.width is not None:
         row["width"] = sample.width
     if sample.height is not None:
         row["height"] = sample.height
-    objects = _objects_value(sample)
+    objects = _objects_value(sample, taxonomy=taxonomy)
     row["objects"] = json.dumps(objects, sort_keys=True) if metadata_format == "csv" else objects
     return row
 
 
-def _objects_value(sample: ImageObjectDetectionSample) -> dict[str, Any]:
+def _objects_value(sample: ImageObjectDetectionSample, *, taxonomy: Taxonomy | None = None) -> dict[str, Any]:
     """Build the parallel-list ``objects`` value, dropping unrepresentable fields loudly."""
     bboxes: list[list[float]] = []
     categories: list[int | str | None] = []
@@ -420,7 +422,7 @@ def _objects_value(sample: ImageObjectDetectionSample) -> dict[str, Any]:
     dropped_lossy = 0
     for detection in sample.detections:
         bboxes.append([float(value) for value in detection.bbox])
-        categories.append(_category_value(detection))
+        categories.append(_category_value(detection, taxonomy))
         ids.append(detection.source_annotation_id if isinstance(detection.source_annotation_id, (int, str)) else None)
         areas.append(float(detection.area) if detection.area is not None else None)
         if detection.score is not None:
@@ -448,7 +450,7 @@ def _objects_value(sample: ImageObjectDetectionSample) -> dict[str, Any]:
     return objects
 
 
-def _category_value(detection: ObjectDetectionAnnotation) -> int | str | None:
+def _category_value(detection: ObjectDetectionAnnotation, taxonomy: Taxonomy | None) -> int | str | None:
     """One wire value per box: the category name when known, else the source id.
 
     The ``objects`` convention has a single ``categories`` list and no side
@@ -457,13 +459,21 @@ def _category_value(detection: ObjectDetectionAnnotation) -> int | str | None:
     ``category_id=0`` and ``category_name="person"`` can keep only one.
     Writing the name keeps reloads meaningful ("person", not "0"); the
     numeric id is rebuilt by the reload-side taxonomy (declared in
-    ``lossy_without``).
+    ``lossy_without``). A detection carrying only an id is resolved through
+    the dataset taxonomy (mirroring the IC writer's ``_ic_class_name``), so
+    names the dataset *knows* are not silently downgraded to ints.
     """
     if detection.category_name is not None:
         return detection.category_name
     source_id = detection.source_category_id if detection.source_category_id is not None else detection.category_id
     if isinstance(source_id, bool):
         return None
+    if taxonomy is not None and source_id is not None:
+        entry = taxonomy.by_source_id(source_id)
+        if entry is not None:
+            return entry.name
+        if taxonomy.id_density == "dense" and isinstance(source_id, int) and 0 <= source_id < len(taxonomy.entries):
+            return taxonomy.entries[source_id].name
     if isinstance(source_id, (int, str)):
         return source_id
     return None
