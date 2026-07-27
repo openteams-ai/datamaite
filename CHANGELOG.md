@@ -7,14 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.3.1] - 2026-07-24
 
-- PEP 561 `py.typed` marker: `datamaite` now ships a `py.typed` file in the
-  wheel and sdist, declaring the package as typed. Downstream type checkers
-  (e.g. a `pyright --verifytypes` run in a `py.typed` consumer such as
-  `dataeval_flow`) can now use `datamaite`'s inline annotations instead of
-  resolving public types like `ImageClassificationDataset` /
-  `ObjectDetectionDataset` to `Unknown` (#83).
+### Added
 
 - Native IC/OD datasets now implement the MAITE `FieldwiseDataset` protocol
   (`get_input`/`get_target`/`get_metadata`) in addition to `__getitem__`.
@@ -38,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attributes. `target.scores` still carries ground-truth
   confidence; the raw VisDrone score stays a distinct `visdrone_score` factor
   (#80).
+
+### Fixed
+
+- PEP 561 `py.typed` marker: `datamaite` now ships a `py.typed` file in the
+  wheel and sdist, declaring the package as typed. Without the marker the
+  package was treated as untyped under PEP 561, so `py.typed` consumers (e.g. a
+  `pyright --verifytypes` run in `dataeval_flow`) could not use `datamaite`'s
+  inline annotations and resolved public types like `ImageClassificationDataset`
+  / `ObjectDetectionDataset` to `Unknown` (#83).
 
 ## [0.3.0] - 2026-07-23
 
