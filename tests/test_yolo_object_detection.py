@@ -651,3 +651,235 @@ class TestYoloObjectDetectionWriter:
         assert files == []
         assert "unsafe file name" in caplog.text
         assert not (tmp_path.parent / "escape.png").exists()
+
+
+class TestYoloOdLoaderOptions:
+    """#78: native split / yaml_file / ann_dir options (no temp symlink staging)."""
+
+    def test_split_selects_single_split(self, tmp_path: Path) -> None:
+        _od_dataset(tmp_path)
+        ds = load_od(tmp_path, dataset_format="yolo", split="train")
+        assert ds.dataset_metadata.splits == ("train",)
+        assert ds.sample_count == 1
+        assert ds.samples[0].file_name == "a.png"
+        assert ds.samples[0].split == "train"
+
+    def test_split_alias_validation_selects_val(self, tmp_path: Path) -> None:
+        _od_dataset(tmp_path)
+        ds = load_od(tmp_path, dataset_format="yolo", split="validation")
+        assert ds.dataset_metadata.splits == ("val",)
+        assert ds.sample_count == 1
+        assert ds.samples[0].file_name == "b.png"
+
+    def test_absent_split_warns_and_returns_empty(self, tmp_path: Path, caplog) -> None:
+        _od_dataset(tmp_path)  # only train/val exist
+        with caplog.at_level(logging.WARNING):
+            ds = load_od(tmp_path, dataset_format="yolo", split="test")
+        assert ds.sample_count == 0
+        assert "No YOLO object-detection images found" in caplog.text
+
+    def test_arbitrary_yaml_file_supplies_class_names(self, tmp_path: Path) -> None:
+        # No conventional data.yaml; names come only from the explicit yaml_file.
+        _write_image(tmp_path / "images" / "train" / "a.png", width=100, height=50)
+        (tmp_path / "labels" / "train").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "labels" / "train" / "a.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "custom.yaml").write_text(
+            "path: .\ntrain: images/train\nnames: ['widget', 'gadget']\n", encoding="utf-8"
+        )
+        ds = load_od(tmp_path, dataset_format="yolo", yaml_file="custom.yaml")
+        assert ds.sample_count == 1
+        assert ds.samples[0].detections[0].category_name == "widget"  # from custom.yaml
+
+    def test_ann_dir_override_locates_labels(self, tmp_path: Path) -> None:
+        _write_image(tmp_path / "images" / "train" / "a.png", width=100, height=50)
+        (tmp_path / "annotations").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "annotations" / "a.txt").write_text("1 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "data.yaml").write_text("path: .\ntrain: images/train\nnames: ['cat', 'dog']\n", encoding="utf-8")
+        # No conventional labels/ tree -> without the override there is no label.
+        control = load_od(tmp_path, dataset_format="yolo")
+        assert control.num_detections == 0
+
+        ds = load_od(tmp_path, dataset_format="yolo", ann_dir="annotations")
+        assert ds.num_detections == 1
+        assert ds.samples[0].detections[0].category_name == "dog"
+
+    def test_defaults_unchanged(self, tmp_path: Path) -> None:
+        _od_dataset(tmp_path)
+        ds = load_od(tmp_path, dataset_format="yolo")
+        assert ds.dataset_metadata.splits == ("train", "val")
+        assert ds.sample_count == 2
+
+
+class TestYoloOdLoaderOptionSafety:
+    """An option that fails to resolve must narrow the load, never widen it.
+
+    Each case here silently returned *more* data than the caller asked for
+    (review findings on !71) -- the dangerous direction for an eval split.
+    """
+
+    @pytest.mark.parametrize("selection", ["bogus", [], ["nope", "alsonope"]])
+    def test_unresolvable_split_selection_loads_nothing(self, tmp_path: Path, selection: Any) -> None:
+        # Previously these normalized to "no filter" and loaded every split,
+        # which can leak training data into an evaluation run.
+        _od_dataset(tmp_path)
+        ds = load_od(tmp_path, dataset_format="yolo", split=selection)
+        assert ds.sample_count == 0
+        assert ds.dataset_metadata.splits == ()
+
+    def test_partially_recognized_split_keeps_known_and_warns(self, tmp_path: Path, caplog) -> None:
+        _od_dataset(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(tmp_path, dataset_format="yolo", split=["train", "bogus"])
+        assert ds.dataset_metadata.splits == ("train",)
+        assert ds.sample_count == 1
+        assert "unrecognized split(s) 'bogus'" in caplog.text
+
+    def test_missing_yaml_file_does_not_fall_back_to_root_yaml(self, tmp_path: Path, caplog) -> None:
+        # A typo'd yaml_file used to load the root's own data.yaml instead.
+        _od_dataset(tmp_path)  # root data.yaml names cat/dog over images/train + images/val
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(tmp_path, dataset_format="yolo", yaml_file="typo.yaml")
+        assert ds.sample_count == 0
+        assert "yaml_file not found" in caplog.text
+
+    def test_explicit_yaml_with_dead_source_does_not_scan_root(self, tmp_path: Path, caplog) -> None:
+        _od_dataset(tmp_path)
+        (tmp_path / "custom.yaml").write_text("path: .\ntrain: nonexistent/dir\nnames: ['widget']\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(tmp_path, dataset_format="yolo", yaml_file="custom.yaml")
+        assert ds.sample_count == 0
+        assert "source does not exist" in caplog.text
+
+    def test_explicit_yaml_without_requested_split_does_not_scan_root(self, tmp_path: Path) -> None:
+        # The YAML declares a source, just not for the selected split. That is
+        # authoritative: root discovery must not supply an undeclared val set.
+        root = tmp_path / "root"
+        _write_image(root / "images" / "val" / "v.png")
+        (root / "labels" / "val").mkdir(parents=True, exist_ok=True)
+        (root / "labels" / "val" / "v.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (root / "custom.yaml").write_text("train: elsewhere/train\nnames: ['widget']\n", encoding="utf-8")
+
+        ds = load_od(root, dataset_format="yolo", yaml_file="custom.yaml", split="val")
+
+        assert ds.sample_count == 0
+
+    def test_nonmapping_explicit_yaml_does_not_masquerade_as_names_only(self, tmp_path: Path) -> None:
+        root = tmp_path / "root"
+        _write_image(root / "images" / "val" / "v.png")
+        (root / "labels" / "val").mkdir(parents=True, exist_ok=True)
+        (root / "labels" / "val" / "v.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (root / "bad.yaml").write_text("[]\n", encoding="utf-8")
+
+        ds = load_od(root, dataset_format="yolo", yaml_file="bad.yaml", split="val")
+
+        assert ds.sample_count == 0
+
+    def test_explicit_yaml_without_sources_still_discovers_conventionally(self, tmp_path: Path) -> None:
+        # A names-only yaml_file declares no images, so there is no typo to mask
+        # and conventional discovery stays in charge.
+        _write_image(tmp_path / "images" / "train" / "a.png")
+        (tmp_path / "labels" / "train").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "labels" / "train" / "a.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "names.yaml").write_text("names: ['widget']\n", encoding="utf-8")
+
+        ds = load_od(tmp_path, dataset_format="yolo", yaml_file="names.yaml")
+
+        assert ds.sample_count == 1
+        assert ds.samples[0].detections[0].category_name == "widget"
+
+    def test_nested_yaml_without_path_resolves_against_its_own_directory(self, tmp_path: Path) -> None:
+        # 'train: images/train' in configs/custom.yaml means configs/images/train,
+        # matching Ultralytics (and checkmaite's loader), not <root>/images/train.
+        _write_image(tmp_path / "configs" / "images" / "train" / "a.png")
+        (tmp_path / "configs" / "labels" / "train").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "configs" / "labels" / "train" / "a.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "configs" / "custom.yaml").write_text("train: images/train\nnames: ['widget']\n", encoding="utf-8")
+
+        ds = load_od(tmp_path, dataset_format="yolo", yaml_file="configs/custom.yaml")
+
+        assert ds.sample_count == 1
+        assert ds.samples[0].detections[0].category_name == "widget"
+
+    def test_ann_dir_works_without_any_conventional_labels_dir(self, tmp_path: Path) -> None:
+        # images/ tree + a separate annotation dir, no labels/ and no data.yaml:
+        # standard discovery used to require labels/ and returned zero samples.
+        _write_image(tmp_path / "images" / "train" / "a.png")
+        (tmp_path / "annotations").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "annotations" / "a.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+
+        ds = load_od(tmp_path, dataset_format="yolo", ann_dir="annotations")
+
+        assert ds.sample_count == 1
+        assert ds.num_detections == 1
+
+    def test_ann_dir_split_subdirectories_keep_same_named_images_distinct(self, tmp_path: Path) -> None:
+        _write_image(tmp_path / "images" / "train" / "same.png")
+        _write_image(tmp_path / "images" / "val" / "same.png")
+        for split, class_id in (("train", "0"), ("val", "1")):
+            (tmp_path / "ann" / split).mkdir(parents=True, exist_ok=True)
+            (tmp_path / "ann" / split / "same.txt").write_text(f"{class_id} 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "data.yaml").write_text(
+            "path: .\ntrain: images/train\nval: images/val\nnames: ['cat', 'dog']\n", encoding="utf-8"
+        )
+
+        ds = load_od(tmp_path, dataset_format="yolo", ann_dir="ann")
+
+        by_split = {sample.split: [det.category_name for det in sample.detections] for sample in ds.samples}
+        assert by_split == {"train": ["cat"], "val": ["dog"]}
+
+    def test_flat_ann_dir_contested_by_two_splits_labels_neither(self, tmp_path: Path, caplog) -> None:
+        # A flat <ann_dir>/<stem>.txt cannot describe both train/same.png and
+        # val/same.png; assigning it to both would copy one image's boxes onto
+        # the other, so neither takes it.
+        _write_image(tmp_path / "images" / "train" / "same.png")
+        _write_image(tmp_path / "images" / "val" / "same.png")
+        (tmp_path / "ann").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "ann" / "same.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "data.yaml").write_text(
+            "path: .\ntrain: images/train\nval: images/val\nnames: ['cat']\n", encoding="utf-8"
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(tmp_path, dataset_format="yolo", ann_dir="ann")
+
+        assert ds.sample_count == 2
+        assert ds.num_detections == 0
+        assert "claimed by 2 images" in caplog.text
+
+    def test_flat_ann_dir_collision_from_absolute_yaml_sources_labels_neither(self, tmp_path: Path, caplog) -> None:
+        # Absolute source directories are outside the loader root, so both
+        # same-named images directly resolve to the flat ann/same.txt path.
+        # Already-resolved paths must participate in collision detection too.
+        root = tmp_path / "root"
+        train_images = tmp_path / "external-train"
+        val_images = tmp_path / "external-val"
+        _write_image(train_images / "same.png")
+        _write_image(val_images / "same.png")
+        (root / "ann").mkdir(parents=True, exist_ok=True)
+        (root / "ann" / "same.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (root / "custom.yaml").write_text(
+            f"train: {train_images.as_posix()}\nval: {val_images.as_posix()}\nnames: ['cat']\n",
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(root, dataset_format="yolo", yaml_file="custom.yaml", ann_dir="ann")
+
+        assert ds.sample_count == 2
+        assert ds.num_detections == 0
+        assert "claimed by 2 images" in caplog.text
+
+    def test_flat_ann_dir_is_unambiguous_for_a_single_split(self, tmp_path: Path) -> None:
+        # checkmaite's historical ann_dir shape: one split, flat <stem>.txt.
+        _write_image(tmp_path / "images" / "train" / "same.png")
+        _write_image(tmp_path / "images" / "val" / "same.png")
+        (tmp_path / "ann").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "ann" / "same.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+        (tmp_path / "data.yaml").write_text(
+            "path: .\ntrain: images/train\nval: images/val\nnames: ['cat']\n", encoding="utf-8"
+        )
+
+        ds = load_od(tmp_path, dataset_format="yolo", ann_dir="ann", split="train")
+
+        assert ds.sample_count == 1
+        assert [det.category_name for det in ds.samples[0].detections] == ["cat"]

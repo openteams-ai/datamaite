@@ -20,12 +20,13 @@ import logging
 import math
 import struct
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 from datamaite._formats.yolo._common import (
     IMAGE_EXTENSIONS,
+    SPLIT_ALIASES,
     infer_split,
     normalize_extensions,
     ordered_unique,
@@ -155,6 +156,9 @@ class YoloObjectDetectionLoader(Loader):
         root: str | Path,
         *,
         image_extensions: Collection[str] | str | None = None,
+        split: str | Collection[str] | None = None,
+        yaml_file: str | Path | None = None,
+        ann_dir: str | Path | None = None,
         **_: Any,
     ) -> ObjectDetectionDataset:
         """Read a YOLO detection dataset root.
@@ -169,6 +173,31 @@ class YoloObjectDetectionLoader(Loader):
         declares split paths, for image discovery. Labels are standard YOLO
         ``class cx cy w h`` rows with normalized center boxes; a sixth value is
         accepted as a confidence score for prediction-style TXT files.
+
+        Options (defaults preserve the previous whole-root behavior):
+
+        * ``split`` -- load only the given split(s) (``"train"``/``"val"``/
+          ``"test"`` or a collection; aliases like ``"validation"`` normalise).
+          Following datamaite's loader contract, an unknown or absent split
+          warns and yields an empty dataset rather than raising. A selection
+          that matches nothing selects nothing -- it never widens back to all
+          splits.
+        * ``yaml_file`` -- an explicit ``data.yaml`` path (relative to ``root``
+          or absolute) instead of the conventional-name discovery at the root.
+          It is authoritative: if it is missing, or declares image sources that
+          yield nothing, the result is an empty dataset rather than a fallback
+          scan of ``root``. Relative paths inside it resolve against ``path:``,
+          or against the YAML's own directory when ``path:`` is absent.
+        * ``ann_dir`` -- a label/annotation directory override (relative to
+          ``root`` or absolute), for label trees kept outside the conventional
+          ``labels/`` sibling of ``images/``; supplying it also removes the need
+          for a conventional ``labels/`` directory to exist. The image's
+          structure below ``root`` is mirrored under ``ann_dir`` minus any
+          ``images`` component, so ``images/train/a.png`` reads
+          ``<ann_dir>/train/a.txt`` and equally-named images in different splits
+          stay distinct. A flat ``<ann_dir>/<stem>.txt`` layout is also honoured
+          where exactly one image claims a given file; contested names are left
+          unlabelled with a warning.
         """
         root_path = Path(root)
         if not root_path.is_dir():
@@ -176,9 +205,23 @@ class YoloObjectDetectionLoader(Loader):
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
 
         extensions = normalize_extensions(image_extensions)
-        yaml_path = _find_yolo_yaml(root_path)
+        yaml_path = _resolve_yaml_path(root_path, yaml_file)
+        if yaml_file is not None and yaml_path is None:
+            # Requested config is missing; loading the root's own data.yaml here
+            # would quietly hand back a different dataset than the caller asked for.
+            return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
         yaml_data = _read_data_yaml(yaml_path) if yaml_path is not None else {}
-        records = _discover_od_records(root_path, extensions, yaml_data=yaml_data, yaml_path=yaml_path)
+        selected_splits = _normalize_split_selection(split)
+        labels_base = (root_path / Path(ann_dir)).resolve() if ann_dir is not None else None
+        records = _discover_od_records(
+            root_path,
+            extensions,
+            yaml_data=yaml_data,
+            yaml_path=yaml_path,
+            splits=selected_splits,
+            labels_base=labels_base,
+            yaml_is_explicit=yaml_file is not None,
+        )
         if not records:
             logger.warning("No YOLO object-detection images found in %s", root_path)
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
@@ -189,11 +232,15 @@ class YoloObjectDetectionLoader(Loader):
         samples: list[ImageObjectDetectionSample] = []
         for record in records:
             width, height = _read_image_size(record.image_path)
-            detections = _load_label_file(
-                record.label_path,
-                image_width=width,
-                image_height=height,
-                names_by_id=names_by_id,
+            detections = (
+                ()
+                if record.label_ambiguous
+                else _load_label_file(
+                    record.label_path,
+                    image_width=width,
+                    image_height=height,
+                    names_by_id=names_by_id,
+                )
             )
             samples.append(
                 ImageObjectDetectionSample(
@@ -308,6 +355,7 @@ class _OdRecord:
     label_path: Path
     split: str | None
     file_name: str
+    label_ambiguous: bool = False
 
 
 def _looks_like_yolo_od_root(root: Path, extensions: frozenset[str]) -> bool:
@@ -327,6 +375,56 @@ def _find_yolo_yaml(root: Path) -> Path | None:
     return None
 
 
+def _resolve_yaml_path(root: Path, yaml_file: str | Path | None) -> Path | None:
+    """Resolve an explicit ``yaml_file`` (relative to ``root`` or absolute).
+
+    An explicit ``yaml_file`` is authoritative: when it does not exist this
+    returns ``None`` rather than falling back to conventional discovery, so a
+    typo yields an empty dataset instead of silently loading whatever
+    ``data.yaml`` happens to sit at ``root``. Conventional-name discovery still
+    applies when no ``yaml_file`` was requested.
+    """
+    if yaml_file is None:
+        return _find_yolo_yaml(root)
+    candidate = Path(yaml_file)
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    if candidate.is_file():
+        return candidate
+    logger.warning("YOLO OD yaml_file not found: %s", candidate)
+    return None
+
+
+def _normalize_split_selection(split: str | Collection[str] | None) -> frozenset[str] | None:
+    """Normalize the requested split(s) to canonical keys.
+
+    Returns ``None`` only when no selection was requested (load every split). An
+    explicit selection always returns a (possibly empty) set: a selection that
+    resolves to nothing must select *nothing*, never everything -- silently
+    widening ``split="bogus"`` or ``split=[]`` back to all splits would leak
+    training data into an evaluation run.
+    """
+    if split is None:
+        return None
+    raw = [split] if isinstance(split, str) else list(split)
+    resolved: set[str] = set()
+    unknown: list[str] = []
+    for value in raw:
+        canonical = infer_split(str(value))
+        if canonical is None:
+            unknown.append(str(value))
+        else:
+            resolved.add(canonical)
+    if unknown:
+        logger.warning(
+            "YOLO OD: ignoring unrecognized split(s) %s; recognized values are %s",
+            ", ".join(repr(value) for value in unknown),
+            ", ".join(sorted(SPLIT_ALIASES)),
+        )
+    if not resolved:
+        logger.warning("YOLO OD: split selection %r matched no known split; loading no images", split)
+    return frozenset(resolved)
+
+
 def _discover_od_records(
     root: Path,
     extensions: frozenset[str],
@@ -334,28 +432,110 @@ def _discover_od_records(
     yaml_data: Mapping[str, Any],
     yaml_path: Path | None,
     limit: int | None = None,
+    splits: frozenset[str] | None = None,
+    labels_base: Path | None = None,
+    yaml_is_explicit: bool = False,
 ) -> list[_OdRecord]:
     records: list[_OdRecord] = []
     seen: set[Path] = set()
 
-    if yaml_path is not None:
-        base = _yaml_dataset_base(root, yaml_path, yaml_data)
-        for split in _OD_SPLIT_KEYS:
-            for source in _yaml_split_sources(yaml_data.get(split), base=base, yaml_path=yaml_path):
-                for record in _records_from_image_source(
-                    source,
-                    root=root,
-                    split=split,
-                    extensions=extensions,
-                ):
-                    if _append_unique_record(records, record, seen=seen, limit=limit):
-                        return records
+    _selected_sources, hit_limit = _collect_yaml_records(
+        records,
+        seen=seen,
+        root=root,
+        extensions=extensions,
+        yaml_data=yaml_data,
+        yaml_path=yaml_path,
+        limit=limit,
+        splits=splits,
+        labels_base=labels_base,
+    )
+    if hit_limit:
+        return records
 
-    if not records:
-        for record in _records_from_standard_od_layouts(root, extensions):
+    # Source authority is determined from the whole explicit YAML, before split
+    # filtering. If it declares only `train` while the caller requests `val`,
+    # falling back to root discovery would load a val set the YAML never named.
+    declared_sources = _yaml_declares_image_sources(yaml_data)
+    names_only = bool(_names_from_yaml(yaml_data.get("names"))) and not declared_sources
+    if yaml_is_explicit and declared_sources:
+        if not records:
+            logger.warning(
+                "YOLO OD: yaml_file %s declares image sources but none of the selected sources yielded images; "
+                "not falling back to root discovery",
+                yaml_path,
+            )
+    elif yaml_is_explicit and not names_only:
+        # Keep the deliberate names-only carve-out narrow. An unreadable,
+        # malformed, non-mapping, or empty explicit config also produces no
+        # sources, but must fail closed rather than masquerade as names-only.
+        logger.warning(
+            "YOLO OD: yaml_file %s declares neither usable image sources nor class names; "
+            "not falling back to root discovery",
+            yaml_path,
+        )
+    elif not records:
+        for record in _records_from_standard_od_layouts(root, extensions, splits=splits, labels_base=labels_base):
             if _append_unique_record(records, record, seen=seen, limit=limit):
                 return records
-    return sorted(records, key=lambda record: (split_sort_key(record.split), record.file_name, record.image_path.name))
+
+    records = sorted(
+        records, key=lambda record: (split_sort_key(record.split), record.file_name, record.image_path.name)
+    )
+    if labels_base is not None:
+        records = _resolve_ann_dir_labels(records, labels_base=labels_base)
+    return records
+
+
+def _yaml_declares_image_sources(yaml_data: Mapping[str, Any]) -> bool:
+    """Whether any split key contains a source declaration, valid or not.
+
+    Invalid source values still count as declarations for fail-closed behavior:
+    an explicit ``train: 3`` must not silently turn into a root scan.
+    """
+    for split in _OD_SPLIT_KEYS:
+        if split not in yaml_data:
+            continue
+        value = yaml_data[split]
+        if value is None or value == "" or value == [] or value == ():
+            continue
+        return True
+    return False
+
+
+def _collect_yaml_records(
+    records: list[_OdRecord],
+    *,
+    seen: set[Path],
+    root: Path,
+    extensions: frozenset[str],
+    yaml_data: Mapping[str, Any],
+    yaml_path: Path | None,
+    limit: int | None,
+    splits: frozenset[str] | None,
+    labels_base: Path | None,
+) -> tuple[bool, bool]:
+    """Append records for the YAML-declared splits; return (declared_any, hit_limit)."""
+    if yaml_path is None:
+        return False, False
+    base = _yaml_dataset_base(yaml_path, yaml_data)
+    declared = False
+    for split in _OD_SPLIT_KEYS:
+        if splits is not None and split not in splits:
+            continue
+        for source in _yaml_split_sources(yaml_data.get(split), base=base, yaml_path=yaml_path):
+            declared = True
+            for record in _records_from_image_source(
+                source,
+                root=root,
+                split=split,
+                extensions=extensions,
+                labels_base=labels_base,
+                warn_missing=limit is None,
+            ):
+                if _append_unique_record(records, record, seen=seen, limit=limit):
+                    return declared, True
+    return declared, False
 
 
 def _append_unique_record(
@@ -376,12 +556,21 @@ def _append_unique_record(
     return limit is not None and len(records) >= limit
 
 
-def _yaml_dataset_base(root: Path, yaml_path: Path, yaml_data: Mapping[str, Any]) -> Path:
+def _yaml_dataset_base(yaml_path: Path, yaml_data: Mapping[str, Any]) -> Path:
+    """Base directory that a data.yaml's relative split paths resolve against.
+
+    Ultralytics resolves ``path:`` relative to the YAML's own directory, and
+    split paths relative to ``path:`` -- or to the YAML directory when ``path``
+    is absent. For a conventional ``data.yaml`` sitting at the dataset root the
+    YAML directory *is* the root, so this only differs for a ``yaml_file``
+    pointing somewhere nested (``configs/custom.yaml``), where resolving against
+    the root would look in the wrong place.
+    """
     raw_path = yaml_data.get("path")
     if isinstance(raw_path, str) and raw_path.strip():
         candidate = Path(raw_path.strip())
         return candidate if candidate.is_absolute() else yaml_path.parent / candidate
-    return root
+    return yaml_path.parent
 
 
 def _yaml_split_sources(raw_value: Any, *, base: Path, yaml_path: Path) -> list[Path]:
@@ -425,19 +614,30 @@ def _read_image_list(path: Path, *, base: Path, yaml_path: Path) -> list[Path]:
     return sources
 
 
-def _records_from_standard_od_layouts(root: Path, extensions: frozenset[str]) -> list[_OdRecord]:
+def _records_from_standard_od_layouts(
+    root: Path,
+    extensions: frozenset[str],
+    *,
+    splits: frozenset[str] | None = None,
+    labels_base: Path | None = None,
+) -> list[_OdRecord]:
     records: list[_OdRecord] = []
     images_dir = root / "images"
     labels_dir = root / "labels"
-    if images_dir.is_dir() and labels_dir.is_dir():
+    # An ann_dir override supplies the labels, so the conventional labels/ tree
+    # is no longer required for the layout to be recognized -- otherwise a valid
+    # images/ tree plus a separate annotation dir would load zero samples.
+    if images_dir.is_dir() and (labels_dir.is_dir() or labels_base is not None):
         for image_path in _iter_images(images_dir, extensions=extensions, root=root):
             rel = image_path.relative_to(images_dir)
             split = infer_split(rel.parts[0]) if len(rel.parts) > 1 else None
+            if splits is not None and split not in splits:
+                continue
             file_name = PurePosixPath(*rel.parts[1:]).as_posix() if split is not None else rel.as_posix()
             records.append(
                 _OdRecord(
                     image_path=image_path,
-                    label_path=labels_dir / rel.with_suffix(".txt"),
+                    label_path=_label_path_for(image_path, images_dir, root=root, labels_base=labels_base),
                     split=split,
                     file_name=file_name,
                 )
@@ -447,21 +647,91 @@ def _records_from_standard_od_layouts(root: Path, extensions: frozenset[str]) ->
         split = infer_split(child.name)
         if split is None or not child.is_dir():
             continue
+        if splits is not None and split not in splits:
+            continue
         split_images = child / "images"
         split_labels = child / "labels"
-        if not split_images.is_dir() or not split_labels.is_dir():
+        if not split_images.is_dir() or not (split_labels.is_dir() or labels_base is not None):
             continue
         for image_path in _iter_images(split_images, extensions=extensions, root=root):
             rel = image_path.relative_to(split_images)
             records.append(
                 _OdRecord(
                     image_path=image_path,
-                    label_path=split_labels / rel.with_suffix(".txt"),
+                    label_path=_label_path_for(image_path, split_images, root=root, labels_base=labels_base),
                     split=split,
                     file_name=rel.as_posix(),
                 )
             )
     return records
+
+
+def _label_path_for(image_path: Path, image_base: Path, *, root: Path, labels_base: Path | None) -> Path:
+    """Resolve the label ``.txt`` path for an image.
+
+    With ``labels_base`` (an ``ann_dir`` override) the image's structure below
+    the dataset root is mirrored under the override, minus any ``images``
+    component -- so ``images/train/a.png`` looks for ``<ann_dir>/train/a.txt``
+    and images of the same name in different splits stay distinct. A flat
+    ``<ann_dir>/<stem>.txt`` layout is still honoured, but only where it is
+    unambiguous; see :func:`_resolve_ann_dir_labels`. Without an override, the
+    conventional ``images`` -> ``labels`` swap is used.
+    """
+    if labels_base is not None:
+        return (labels_base / _ann_relative_path(image_path, image_base, root)).with_suffix(".txt")
+    return _infer_label_path(image_path, root=root)
+
+
+def _ann_relative_path(image_path: Path, image_base: Path, root: Path) -> Path:
+    """Structure to mirror under an ``ann_dir``, most split-preserving first."""
+    for base in (root, image_base):
+        try:
+            rel = image_path.relative_to(base)
+        except ValueError:
+            continue
+        parts = [part for part in rel.parts if part != "images"]
+        if parts:
+            return Path(*parts)
+    return Path(image_path.name)
+
+
+def _resolve_ann_dir_labels(records: list[_OdRecord], *, labels_base: Path) -> list[_OdRecord]:
+    """Resolve label candidates while refusing every multiply-claimed file.
+
+    checkmaite's historical ``ann_dir`` is a flat directory of ``<stem>.txt``
+    files for a *single* split, so that layout must keep working. A structured
+    path is preferred; otherwise the flat path is considered. Claims include
+    already-resolved structured paths as well as flat fallbacks: absolute YAML
+    sources outside ``root`` can otherwise map two same-named images directly to
+    the same existing ``<ann_dir>/<stem>.txt`` and bypass collision detection.
+    """
+    claims: dict[Path, list[int]] = {}
+    for index, record in enumerate(records):
+        candidate = record.label_path
+        if not candidate.is_file():
+            flat = labels_base / f"{record.image_path.stem}.txt"
+            if not flat.is_file():
+                continue
+            candidate = flat
+        claims.setdefault(candidate, []).append(index)
+    if not claims:
+        return records
+    resolved = list(records)
+    for candidate, indices in claims.items():
+        if len(indices) == 1:
+            resolved[indices[0]] = replace(records[indices[0]], label_path=candidate)
+            continue
+        for index in indices:
+            resolved[index] = replace(records[index], label_path=candidate, label_ambiguous=True)
+        logger.warning(
+            "YOLO OD: ann_dir label %s is claimed by %d images (%s); leaving them unlabelled rather "
+            "than assigning the same annotations to each -- give ann_dir per-split subdirectories, "
+            "or load one split at a time with split=",
+            candidate,
+            len(indices),
+            ", ".join(sorted(f"{records[index].split or '-'}/{records[index].file_name}" for index in indices)),
+        )
+    return resolved
 
 
 def _records_from_image_source(
@@ -470,16 +740,17 @@ def _records_from_image_source(
     root: Path,
     split: str,
     extensions: frozenset[str],
+    labels_base: Path | None = None,
+    warn_missing: bool = False,
 ) -> list[_OdRecord]:
     if source.is_dir():
-        label_dir = _infer_label_dir(source)
         records: list[_OdRecord] = []
         for image_path in _iter_images(source, extensions=extensions, root=root):
             rel = image_path.relative_to(source)
             records.append(
                 _OdRecord(
                     image_path=image_path,
-                    label_path=label_dir / rel.with_suffix(".txt"),
+                    label_path=_label_path_for(image_path, source, root=root, labels_base=labels_base),
                     split=split,
                     file_name=rel.as_posix(),
                 )
@@ -489,11 +760,13 @@ def _records_from_image_source(
         return [
             _OdRecord(
                 image_path=source,
-                label_path=_infer_label_path(source, root=root),
+                label_path=_label_path_for(source, source.parent, root=root, labels_base=labels_base),
                 split=split,
                 file_name=_relative_image_file_name(source, root=root, split=split),
             )
         ]
+    if warn_missing and not source.exists():
+        logger.warning("YOLO OD: data.yaml %s source does not exist: %s", split, source)
     return []
 
 
@@ -581,7 +854,7 @@ def _build_od_taxonomy(names: Sequence[tuple[int, str]], records: Sequence[_OdRe
 def _scan_label_class_ids(records: Sequence[_OdRecord]) -> set[int]:
     class_ids: set[int] = set()
     for record in records:
-        if not record.label_path.is_file():
+        if record.label_ambiguous or not record.label_path.is_file():
             continue
         try:
             lines = record.label_path.read_text(encoding="utf-8").splitlines()
@@ -733,8 +1006,11 @@ def _read_data_yaml(path: Path | None) -> dict[str, Any]:
             data = yaml.safe_load(text)
         except Exception as exc:
             logger.warning("Could not parse YOLO data YAML %s with PyYAML: %s", path, exc)
-        else:
-            return dict(data) if isinstance(data, dict) else {}
+            return {}
+        if not isinstance(data, dict):
+            logger.warning("YOLO data YAML %s must contain a mapping", path)
+            return {}
+        return dict(data)
     return _parse_simple_yaml(text)
 
 

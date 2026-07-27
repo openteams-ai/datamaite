@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- YOLO object-detection loader gains native `split`, `yaml_file`, and `ann_dir`
+  options (no temporary symlink/YAML staging): `split` loads only the given
+  split(s) (aliases like `"validation"` normalise); `yaml_file` points at an
+  explicit `data.yaml` path; `ann_dir` overrides the label/annotation directory.
+  Defaults preserve the previous whole-root behavior, and an unknown/absent
+  split warns and returns an empty dataset (datamaite's loader contract) rather
+  than raising. Each option fails *closed*: a split selection matching nothing
+  loads nothing rather than widening back to every split; an explicit
+  `yaml_file` is authoritative, so a missing file or dead image source yields an
+  empty dataset instead of silently falling back to a root scan; and a flat
+  `ann_dir` label contested by images from several splits is left unassigned
+  rather than copied onto each. `ann_dir` also removes the need for a
+  conventional `labels/` directory to exist, and mirrors the image's structure
+  below the root (minus any `images` component) so equally-named images in
+  different splits stay distinct. Relative paths in a nested `yaml_file`
+  resolve against the YAML's own directory when it declares no `path:`,
+  matching Ultralytics (#78).
+
 ## [0.3.1] - 2026-07-24
 
 ### Added
@@ -30,9 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (dataeval, which expands list-valued datum-metadata keys into per-object bias
   factors) can read them. This surfaces VisDrone `truncation`/`occlusion`/
   `visdrone_score` and other entries that detection records retain in their
-  attributes. `target.scores` still carries ground-truth
-  confidence; the raw VisDrone score stays a distinct `visdrone_score` factor
-  (#80).
+  attributes. `target.scores` still carries ground-truth confidence; the raw
+  VisDrone score stays a distinct `visdrone_score` factor (#80).
 
 ### Fixed
 
