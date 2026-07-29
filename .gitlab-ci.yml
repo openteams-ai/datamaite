@@ -2,7 +2,11 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_COMMIT_TAG
+    # Only release-shaped tags get a pipeline: suffixes are limited to the
+    # forms uv-dynamic-versioning can actually build (rc/alpha/beta, .post,
+    # .dev). A v-prefixed or arbitrary tag (docs-2026) never starts a doomed
+    # pipeline, and never sees protected variables.
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-(rc|alpha|beta)\d+|\.(post|dev)\d+)?$/'
 
 default:
   # Only retry on infrastructure failures, never on test/lint failures --
@@ -85,7 +89,10 @@ variables:
     - key:
         files:
           - poetry.lock
-        prefix: "venv-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
+        # No ref-slug: every tag is a fresh ref, so a per-ref key made release
+        # pipelines rebuild all venvs cold. poetry.lock fingerprints content,
+        # and protected/unprotected cache separation isolates release caches.
+        prefix: "venv-${CI_JOB_NAME}"
       paths:
         - .venv/
     - key: pip-downloads
@@ -164,7 +171,7 @@ build:
       from packaging.utils import parse_sdist_filename, parse_wheel_filename
       from packaging.version import Version
 
-      expected = Version(sys.argv[1].removeprefix("v"))
+      expected = Version(sys.argv[1])
       matched = 0
       for artifact in Path("dist").iterdir():
           if artifact.suffix == ".whl":
@@ -209,7 +216,11 @@ build:
 .publish-python-package:
   stage: publish
   image: python:3.13-slim
-  retry: 0
+  # Auto-retry infrastructure failures only (autoscaled runners die sometimes);
+  # upload idempotency (--skip-existing + digest verify) makes that safe.
+  retry:
+    max: 1
+    when: runner_system_failure
   interruptible: false
   resource_group: pypi-publish
   timeout: 20m
@@ -224,8 +235,13 @@ build:
   before_script:
     - apt-get update -qq && apt-get install -y -qq git
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
-    - pip install --quiet --upgrade pip
+    # No pip self-upgrade here: the publish toolchain must not float between a
+    # release and its recovery re-run (digest verification requires the retry
+    # rebuild to be byte-identical).
     - pip install --quiet "poetry==${POETRY_PIN}" "twine==6.2.0" "check-wheel-contents==0.6.3"
+    # Pin the PEP 517 isolated build env deps too (hatchling's helpers);
+    # pip-based build isolation honors PIP_CONSTRAINT.
+    - export PIP_CONSTRAINT="$CI_PROJECT_DIR/scripts/publish-build-constraints.txt"
     - python --version
     - poetry --version
     - twine --version
@@ -235,8 +251,10 @@ build:
       set -euo pipefail
 
       RELEASE_TAG="$CI_COMMIT_TAG"
-      if ! [[ "$RELEASE_TAG" =~ ^[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.]+)?$ ]]; then
-        echo "Tag '$RELEASE_TAG' must match X.Y.Z with no 'v' prefix."
+      # Defense in depth: same shape the workflow rule admits (X.Y.Z plus the
+      # suffixes uv-dynamic-versioning can build).
+      if ! [[ "$RELEASE_TAG" =~ ^[0-9]+[.][0-9]+[.][0-9]+(-(rc|alpha|beta)[0-9]+|[.](post|dev)[0-9]+)?$ ]]; then
+        echo "Tag '$RELEASE_TAG' must match X.Y.Z (optionally -rcN/-alphaN/-betaN/.postN/.devN), no 'v' prefix."
         exit 1
       fi
 
@@ -395,6 +413,9 @@ publish-pypi:
   environment:
     name: pypi-production
     url: https://pypi.org/project/datamaite/
+  variables:
+    PYPI_ENVIRONMENT_NAME: "PyPI"
+    TWINE_REPOSITORY_URL: "https://upload.pypi.org/legacy/"
   needs: [publish-testpypi]
   rules:
     # The one human decision in a release: approve the production upload from
@@ -430,11 +451,20 @@ gitlab-release:
       python - "$CI_COMMIT_TAG" <<'PY'
       import json
       import os
+      import re
       import sys
       import urllib.error
       import urllib.request
 
       tag = sys.argv[1]
+      # PEP 440 canonical form for the PyPI URL: pre-release tags like
+      # 0.5.0-rc1 / 0.5.0-alpha1 / 0.5.0-beta1 live at 0.5.0rc1 / 0.5.0a1 /
+      # 0.5.0b1 on PyPI ( .postN / .devN are already canonical).
+      pypi_version = re.sub(
+          r"-(rc|alpha|beta)(\d+)$",
+          lambda m: {"rc": "rc", "alpha": "a", "beta": "b"}[m.group(1)] + m.group(2),
+          tag,
+      )
       api = f"{os.environ['CI_API_V4_URL']}/projects/{os.environ['CI_PROJECT_ID']}/releases"
       auth = {"JOB-TOKEN": os.environ["CI_JOB_TOKEN"]}
 
@@ -448,7 +478,7 @@ gitlab-release:
               raise
 
       notes = os.environ["NOTES"].strip() + (
-          f"\n\nPublished to PyPI: https://pypi.org/project/datamaite/{tag}/"
+          f"\n\nPublished to PyPI: https://pypi.org/project/datamaite/{pypi_version}/"
       )
       payload = json.dumps({"tag_name": tag, "name": tag, "description": notes}).encode()
       request = urllib.request.Request(
@@ -472,6 +502,10 @@ pages:
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
     - poetry install --extras docs
+    # Reinstall the root project through the hatchling backend: poetry's own
+    # develop-install registers the [tool.poetry] placeholder 0.0.0, which the
+    # executed tutorial notebooks would print into the published docs.
+    - poetry run pip install --quiet --no-deps -e .
     - poetry run sphinx-build -b html docs public
   artifacts:
     paths:
@@ -493,6 +527,10 @@ pages-preview:
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
     - poetry install --extras docs
+    # Reinstall the root project through the hatchling backend: poetry's own
+    # develop-install registers the [tool.poetry] placeholder 0.0.0, which the
+    # executed tutorial notebooks would print into the published docs.
+    - poetry run pip install --quiet --no-deps -e .
     - poetry run sphinx-build -b html docs public
   artifacts:
     expose_as: "Documentation Preview"

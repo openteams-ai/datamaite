@@ -42,5 +42,35 @@ there is no version-bump commit. A release is three steps:
    changelog section as its notes.
 
 Every publish step is idempotent (`--skip-existing` + digest comparison), so
-re-running a failed or interrupted pipeline is always safe. A `.devN`/`+dirty`
-version derivation fails the build before anything uploads.
+re-running a failed or interrupted publish job is safe — retrying the failed
+job is the sanctioned move for infra or index flakes. Only release-shaped tags
+(`X.Y.Z`, optionally `-rcN`/`-alphaN`/`-betaN`/`.postN`/`.devN`) start a
+pipeline at all, and a wrong version derivation fails the build before
+anything uploads.
+
+### Recovery runbook
+
+- **Tagged too early / wrong SHA, nothing published yet** (changelog-check or
+  tests failed — publishing never ran): protected tags cannot be deleted while
+  protected. Order matters: Settings → Repository → unprotect `*.*.*` →
+  `git push --delete origin X.Y.Z` → **re-protect `*.*.*`** → re-tag. If you
+  re-tag before re-protecting, the pipeline runs on an unprotected ref, the
+  PyPI tokens don't flow, and publish fails with a token error.
+- **Wrong content already on TestPyPI** (auto-publish ran before the mistake
+  was caught): that version's filenames are burned on TestPyPI forever — the
+  index never allows filename reuse, so the corrected build's digest check
+  will fail permanently. Bump the patch version and release that instead.
+  PyPI itself is untouched (the manual gate never ran).
+- **Digest mismatch on PyPI** (partial upload, then a differing rebuild):
+  never hand-upload over it. Yank the bad file on PyPI if it is wrong, bump
+  the patch version, release again. The publish toolchain and the PEP 517
+  build env are pinned (`scripts/publish-build-constraints.txt`) precisely so
+  retry rebuilds stay byte-identical and this stays rare.
+- **`gitlab-release` failed after PyPI succeeded**: retry just that job as a
+  Maintainer, or create the Release by hand — the notes are
+  `python scripts/release_notes.py extract X.Y.Z`.
+- **Abandoned release** (tag pushed, PyPI gate never approved): cancel the
+  blocked pipeline. GitLab's "prevent outdated deployment jobs" setting stops
+  a stale gate from publishing an older version after a newer one shipped; a
+  deliberate out-of-order/backport release needs a fresh pipeline run on the
+  tag (CI/CD → Pipelines → Run pipeline → select the tag).

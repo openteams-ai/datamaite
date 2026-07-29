@@ -55,8 +55,21 @@ def main(argv: list[str]) -> int:
 
     if mode == "extract":
         print(body)
-    else:
-        print(f"CHANGELOG.md has a non-empty section for {version}.")
+        return 0
+
+    print(f"CHANGELOG.md has a non-empty section for {version}.")
+    # A non-empty Unreleased section at tag time usually means the changelog
+    # move was incomplete (or entries landed after the release-prep MR): those
+    # changes ARE in the tagged artifacts but would be missing from the
+    # release notes. Warn loudly; do not fail, because leaving genuinely
+    # unreleased work in Unreleased while backporting is legitimate.
+    leftover = section_for("Unreleased", CHANGELOG.read_text(encoding="utf-8"))
+    if leftover is not None:
+        print(
+            f"WARNING: '## [Unreleased]' is non-empty at tag time; entries there are in the "
+            f"{version} artifacts but absent from its release notes:\n{leftover}",
+            file=sys.stderr,
+        )
     return 0
 
 
