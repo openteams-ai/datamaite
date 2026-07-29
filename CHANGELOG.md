@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-28
+
 ### Added
 
 - YOLO object-detection loader gains native `split`, `yaml_file`, and `ann_dir`
@@ -29,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hugging Face Vision loader/writer no longer lose `ClassLabel` names on
+  round trips. The loader now decodes the int→name tables embedded in
+  `metadata.parquet` feature schemas (top-level label columns and the OD
+  `objects.categories` lists), and the OD writer resolves a detection carrying
+  only `category_id` through the dataset taxonomy instead of writing the bare
+  int — so HF → datamaite → HF preserves `ClassLabel(names=["cat", "dog"])`
+  rather than degrading it to stringified ints. CSV/JSONL metadata files carry
+  no name table, so integer labels loaded from those remain name-less (!75).
 - YOLO image-classification loader: empty class directories (a class folder
   present on disk but containing no images) are now included in the taxonomy.
   Previously the taxonomy was derived only from classes that contained samples,
