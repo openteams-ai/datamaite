@@ -27,14 +27,11 @@ stages:
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
-  # Full clone history. Version is static (see [project].version); this is
-  # retained for the publish job, which inspects and checks out release tags.
+  # Full clone history + tags: uv-dynamic-versioning derives the package
+  # version from the git tag (#85), so every build needs real history.
   GIT_DEPTH: "0"
   # Pin Poetry to avoid silent drift.
   POETRY_PIN: "2.4.1"
-  RELEASE_TAG:
-    value: ""
-    description: "Tag to publish to TestPyPI/PyPI from a manually triggered default-branch web pipeline."
 
 # Clone the shared example-datasets repo to one canonical location used by every
 # job that needs it (docs build + e2e integration matrix), and export
@@ -106,6 +103,23 @@ variables:
 # ---------------------------------------------------------------------------
 # Lint
 # ---------------------------------------------------------------------------
+# First gate of every release (#85): a tag with no matching, non-empty
+# CHANGELOG.md section fails here, before anything is built or published.
+# The same section later becomes the GitLab Release notes (gitlab-release).
+changelog-check:
+  stage: lint
+  image: python:3.13-slim
+  timeout: 5m
+  interruptible: true
+  needs: []
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: on_success
+    - when: never
+  script:
+    - python scripts/release_notes.py check "$CI_COMMIT_TAG"
+
 lint:
   extends: .shared-setup
   stage: lint
@@ -182,11 +196,16 @@ build:
       - dist/
     expire_in: 1 week
 
-# Build and publish the distribution for an existing release tag. PyPI and
-# TestPyPI use API tokens because PyPI/TestPyPI have not yet onboarded
-# gitlab.jatic.net as a trusted self-managed GitLab issuer.
-# Run from CI/CD -> Pipelines -> Run pipeline on the default branch with
-# RELEASE_TAG set, publishing to TestPyPI first and then PyPI.
+# Publish the tagged release to TestPyPI/PyPI (#85). Pushing a tag X.Y.Z runs
+# the full validation pipeline (lint/typecheck/build/test + changelog-check) on
+# the tag, then publishes to TestPyPI automatically; publish-pypi is a manual
+# approval gate in the same tag pipeline; gitlab-release then records the
+# release from the changelog. There is no web form and no version-bump commit:
+# the tag is the single source of truth (uv-dynamic-versioning) and the build
+# fails on any .devN/+dirty derivation, so #58 cannot recur silently.
+# PyPI and TestPyPI use API tokens because PyPI/TestPyPI have not yet onboarded
+# gitlab.jatic.net as a trusted self-managed GitLab issuer; the tag pipeline is
+# shaped so swapping token auth for OIDC later is a one-job change (#62).
 .publish-python-package:
   stage: publish
   image: python:3.13-slim
@@ -194,7 +213,7 @@ build:
   interruptible: false
   resource_group: pypi-publish
   timeout: 20m
-  # Publish jobs build release artifacts from the checked-out tag and should not
+  # Publish jobs build release artifacts from the tag checkout and should not
   # download artifacts from earlier stages; those reports make the worktree dirty.
   dependencies: []
   artifacts:
@@ -215,66 +234,45 @@ build:
     - |
       set -euo pipefail
 
-      if [ -z "${RELEASE_TAG:-}" ]; then
-        echo "RELEASE_TAG must be set in the 'Run pipeline' form (CI/CD -> Pipelines -> Run pipeline)."
-        exit 1
-      fi
-
-      RELEASE_TAG="$(printf '%s' "$RELEASE_TAG" | tr -d '[:space:]')"
+      RELEASE_TAG="$CI_COMMIT_TAG"
       if ! [[ "$RELEASE_TAG" =~ ^[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.]+)?$ ]]; then
-        echo "RELEASE_TAG '$RELEASE_TAG' must match X.Y.Z with no 'v' prefix."
+        echo "Tag '$RELEASE_TAG' must match X.Y.Z with no 'v' prefix."
         exit 1
       fi
 
       if [ "${PYPI_ENVIRONMENT_NAME}" = "TestPyPI" ]; then
         if [ -z "${TEST_PYPI_API_TOKEN:-}" ]; then
-          echo "TEST_PYPI_API_TOKEN is not available; add a masked/protected TestPyPI API token in GitLab CI/CD variables."
+          echo "TEST_PYPI_API_TOKEN is not available; add a masked/protected TestPyPI API token in GitLab CI/CD variables (and protect the X.Y.Z tag pattern so protected variables reach tag pipelines)."
           exit 1
         fi
         export TWINE_USERNAME="__token__"
         export TWINE_PASSWORD="$TEST_PYPI_API_TOKEN"
       else
         if [ -z "${PYPI_API_TOKEN:-}" ]; then
-          echo "PYPI_API_TOKEN is not available; add a masked/protected PyPI API token in GitLab CI/CD variables."
+          echo "PYPI_API_TOKEN is not available; add a masked/protected PyPI API token in GitLab CI/CD variables (and protect the X.Y.Z tag pattern so protected variables reach tag pipelines)."
           exit 1
         fi
         export TWINE_USERNAME="__token__"
         export TWINE_PASSWORD="$PYPI_API_TOKEN"
       fi
 
-      echo "Publish to ${PYPI_ENVIRONMENT_NAME} triggered by ${GITLAB_USER_LOGIN:-unknown} (${GITLAB_USER_EMAIL:-unknown}) at $(date -u +%FT%TZ)."
+      echo "Publish of ${RELEASE_TAG} to ${PYPI_ENVIRONMENT_NAME} triggered by ${GITLAB_USER_LOGIN:-tag-push} at $(date -u +%FT%TZ)."
 
+      # A release records what main shipped: refuse tags on side branches.
       git fetch --no-tags origin "+refs/heads/${CI_DEFAULT_BRANCH}:refs/remotes/origin/${CI_DEFAULT_BRANCH}"
-
-      REMOTE_TAG_OBJECT="$(git ls-remote --tags --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NF {print $1; exit}')"
-      if [ -z "$REMOTE_TAG_OBJECT" ]; then
-        echo "RELEASE_TAG '$RELEASE_TAG' not found on origin."
+      if ! git merge-base --is-ancestor "$CI_COMMIT_SHA" "origin/${CI_DEFAULT_BRANCH}"; then
+        echo "Tag ${RELEASE_TAG} (${CI_COMMIT_SHA}) is not on origin/${CI_DEFAULT_BRANCH}."
         exit 1
       fi
 
-      if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
-        LOCAL_TAG_OBJECT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}")"
-        if [ "$LOCAL_TAG_OBJECT" != "$REMOTE_TAG_OBJECT" ]; then
-          echo "Tag '$RELEASE_TAG' on origin ($REMOTE_TAG_OBJECT) does not match local ($LOCAL_TAG_OBJECT); refusing to publish."
-          exit 1
-        fi
-      else
-        git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-      fi
-
-      TAG_COMMIT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
-      echo "Publishing ${RELEASE_TAG} (${TAG_COMMIT}) to ${PYPI_ENVIRONMENT_NAME}."
-
-      if ! git merge-base --is-ancestor "$TAG_COMMIT" "origin/${CI_DEFAULT_BRANCH}"; then
-        echo "RELEASE_TAG ${RELEASE_TAG} (${TAG_COMMIT}) is not on origin/${CI_DEFAULT_BRANCH}."
-        exit 1
-      fi
-
+      # The pipeline already checked out the tag; build straight from it.
       rm -rf dist/
-      git checkout --detach "$TAG_COMMIT"
       poetry build
       twine check dist/*
       check-wheel-contents dist/*.whl
+
+      # Exact-match version assertion (#58 guardrail): the derived version must
+      # equal the tag -- any .devN / +dirty / +g<sha> suffix fails the release.
       python - "$RELEASE_TAG" <<'PY'
       import sys
       from pathlib import Path
@@ -306,7 +304,75 @@ build:
         printf '%s\n' "$status"
         exit 1
       fi
-      twine upload --non-interactive --disable-progress-bar --skip-existing dist/*
+
+      # A repository can accept one artifact and then lose the response, leaving
+      # the release partially published. Bound the network wait and make retries
+      # continue past artifacts the index has already accepted.
+      timeout --signal=TERM --kill-after=30s 5m \
+        twine upload --non-interactive --disable-progress-bar --skip-existing dist/*
+
+      # Do not let --skip-existing hide a conflicting artifact. Wait for the
+      # package index to become consistent, then compare every remote digest
+      # with the artifact built from the release tag (checkmaite !610 pattern).
+      python - "$PYPI_ENVIRONMENT_NAME" "$RELEASE_TAG" <<'PY'
+      import hashlib
+      import json
+      import sys
+      import time
+      import urllib.error
+      import urllib.request
+      from pathlib import Path
+
+      from packaging.version import Version
+
+      attempts = 12
+      request_timeout_seconds = 5
+      retry_interval_seconds = 5
+      maximum_wait_seconds = (
+          attempts * request_timeout_seconds + (attempts - 1) * retry_interval_seconds
+      )
+
+      environment, version = sys.argv[1:]
+      host = "https://test.pypi.org" if environment == "TestPyPI" else "https://pypi.org"
+      release_url = f"{host}/pypi/datamaite/{Version(version)}/json"
+      local_digests = {
+          artifact.name: hashlib.sha256(artifact.read_bytes()).hexdigest()
+          for artifact in Path("dist").iterdir()
+          if artifact.suffix == ".whl" or artifact.name.endswith(".tar.gz")
+      }
+
+      remote_digests = {}
+      for attempt in range(attempts):
+          try:
+              with urllib.request.urlopen(release_url, timeout=request_timeout_seconds) as response:
+                  release = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404 and exc.code < 500:
+                  raise
+          except (urllib.error.URLError, TimeoutError):
+              pass
+          else:
+              remote_digests = {item["filename"]: item["digests"]["sha256"] for item in release["urls"]}
+              if local_digests.keys() <= remote_digests.keys():
+                  break
+          if attempt + 1 < attempts:
+              time.sleep(retry_interval_seconds)
+      else:
+          missing = sorted(local_digests.keys() - remote_digests.keys())
+          raise SystemExit(
+              f"Published release did not expose all artifacts after {attempts} attempts "
+              f"(up to {maximum_wait_seconds} seconds): {missing}"
+          )
+
+      mismatched = sorted(
+          filename
+          for filename, digest in local_digests.items()
+          if remote_digests[filename] != digest
+      )
+      if mismatched:
+          raise SystemExit(f"Published artifact digest mismatch: {mismatched}")
+      print(f"Verified {len(local_digests)} published artifact digest(s) for {version}.")
+      PY
 
 publish-testpypi:
   extends: .publish-python-package
@@ -318,9 +384,10 @@ publish-testpypi:
     PYPI_ENVIRONMENT_NAME: "TestPyPI"
     TWINE_REPOSITORY_URL: "https://test.pypi.org/legacy/"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-      when: manual
-      allow_failure: false
+    # Automatic on every release tag, after the tag pipeline's validation
+    # stages (lint/typecheck/build/test + changelog-check) succeed.
+    - if: $CI_COMMIT_TAG
+      when: on_success
     - when: never
 
 publish-pypi:
@@ -328,46 +395,41 @@ publish-pypi:
   environment:
     name: pypi-production
     url: https://pypi.org/project/datamaite/
-  variables:
-    PYPI_ENVIRONMENT_NAME: "PyPI"
-    TWINE_REPOSITORY_URL: "https://upload.pypi.org/legacy/"
+  needs: [publish-testpypi]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    # The one human decision in a release: approve the production upload from
+    # the same tag pipeline once TestPyPI is verified.
+    - if: $CI_COMMIT_TAG
       when: manual
       allow_failure: false
     - when: never
 
-# Create the GitLab Release for RELEASE_TAG once publish-pypi succeeds, so the
-# Releases page records exactly what shipped to PyPI. The notes are the tag's
-# section of CHANGELOG.md (present on the default branch via the release-prep
-# commit; the publish job already enforces that the tag is on the default
-# branch). Idempotent: an existing release is left untouched, so retrying the
-# pipeline never fails here.
+# Create the GitLab Release once publish-pypi succeeds, so the Releases page
+# records exactly what shipped to PyPI. The notes are the tag's CHANGELOG.md
+# section (guaranteed non-empty by changelog-check at the top of this same
+# pipeline). Idempotent: an existing release is left untouched, so retrying
+# the pipeline never fails here.
 gitlab-release:
   stage: release
   image: python:3.13-slim
   timeout: 10m
-  # Reads only CHANGELOG.md from the checkout; no artifacts from earlier stages.
+  # Reads only the checkout; no artifacts from earlier stages.
   dependencies: []
   needs: [publish-pypi]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: $CI_COMMIT_TAG
       when: on_success
     - when: never
   script:
     - |
       set -euo pipefail
 
-      RELEASE_TAG="$(printf '%s' "${RELEASE_TAG:-}" | tr -d '[:space:]')"
-      if [ -z "$RELEASE_TAG" ]; then
-        echo "RELEASE_TAG must be set (this job only runs in the manual publish pipeline)."
-        exit 1
-      fi
+      NOTES="$(python scripts/release_notes.py extract "$CI_COMMIT_TAG")"
+      export NOTES
 
-      python - "$RELEASE_TAG" <<'PY'
+      python - "$CI_COMMIT_TAG" <<'PY'
       import json
       import os
-      import re
       import sys
       import urllib.error
       import urllib.request
@@ -385,16 +447,7 @@ gitlab-release:
           if exc.code != 404:
               raise
 
-      changelog = open("CHANGELOG.md", encoding="utf-8").read()
-      match = re.search(
-          rf"^## \[{re.escape(tag)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
-          changelog,
-          re.MULTILINE | re.DOTALL,
-      )
-      if not match or not match.group(1).strip():
-          raise SystemExit(f"CHANGELOG.md has no section for {tag}; add one before releasing.")
-
-      notes = match.group(1).strip() + (
+      notes = os.environ["NOTES"].strip() + (
           f"\n\nPublished to PyPI: https://pypi.org/project/datamaite/{tag}/"
       )
       payload = json.dumps({"tag_name": tag, "name": tag, "description": notes}).encode()

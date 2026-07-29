@@ -1,8 +1,8 @@
 """Package version.
 
-The version string is declared statically in ``[project].version`` in
-``pyproject.toml`` (the single source of truth) and baked into the
-distribution metadata at build time. Here we resolve it at runtime via
+The version string is derived from the git tag at build time
+(uv-dynamic-versioning; the tag is the single source of truth, #85) and baked
+into the distribution metadata. Here we resolve it at runtime via
 ``importlib.metadata`` so ``datamaite.__version__`` always reflects the
 installed package, including editable installs. Exposes ``__version__``
 and ``__version_tuple__``.
