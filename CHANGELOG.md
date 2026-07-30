@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation, publishes to TestPyPI automatically with digest verification, gates PyPI behind one manual approval in the same pipeline, and creates the GitLab Release from this changelog's section for the tag. The package version is derived from the git tag (uv-dynamic-versioning); `[project].version` and the version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline is retired.
 
+## [0.4.1.dev1] - 2026-07-30
+
+### Changed
+
+- Throwaway section for a release-pipeline smoke test of the tag-driven flow
+  (#85). This tag is never published; the publish job's not-on-main guard is
+  expected to stop it.
+
 ## [0.4.0] - 2026-07-28
 
 ### Added
