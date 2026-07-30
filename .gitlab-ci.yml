@@ -426,6 +426,11 @@ test-py313:
   variables:
     VERSION: "3.13"
 
+test-py314:
+  extends: .test-base
+  variables:
+    VERSION: "3.14"
+
 # ---------------------------------------------------------------------------
 # Integration (e2e): cross-format conversion matrix against the shared example-data
 # repo (jatic/orchestration-interoperability/datamaite-example-datasets). Loads

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Python 3.14 support (#82): `requires-python` widens to `<3.15` and CI tests
+  the full suite on 3.14. Dependency floors now mirror wheel availability per
+  interpreter (numpy 2.3.2+ and pydantic 2.12+ on 3.14; av 15.1+ on 3.14);
+  OpenCV needs no split -- its abi3 wheels install on every supported version.
+
 ## [0.4.0] - 2026-07-28
 
 ### Added

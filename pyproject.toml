@@ -26,12 +26,21 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10,<3.15"
 
+# The python_version splits mirror wheel availability (#82, same rationale as
+# modelmaite): numpy ships cp313 wheels from 2.1 and cp314 from 2.3.2, and
+# pydantic's compiled core supports 3.14 from pydantic 2.12. Without the
+# markers, a metadata-driven resolver (poetry; uv universal locks) could pick
+# an uninstallable version on the newest interpreters.
 dependencies = [
-    "pydantic>=2.0",
-    "numpy>=1.24",
+    "pydantic>=2.0; python_version < '3.14'",
+    "pydantic>=2.12; python_version >= '3.14'",
+    "numpy>=1.24; python_version < '3.13'",
+    "numpy>=2.1; python_version == '3.13'",
+    "numpy>=2.3.2; python_version >= '3.14'",
     # 2024.5.0 is universal-pathlib 0.3.8's own declared floor (verified via
     # importlib.metadata.requires("universal_pathlib")); pinning below that
     # lets pip resolve an fsspec too old for the UPath surface we depend on.
@@ -42,9 +51,14 @@ dependencies = [
 [project.optional-dependencies]
 # Task-oriented extras. Core stays lean (pydantic + numpy) and every optional
 # native/media stack is pulled by the task that needs pixels.
+# opencv-python-headless ships abi3 wheels, so it installs on every supported
+# interpreter including 3.14 (its own numpy metadata steers old releases away
+# from numpy-2 environments). av ships per-version wheels; cp314 exists only
+# from av 15.1, hence the marker split (#82).
 fmv = [
     "opencv-python-headless>=4.8",
-    "av>=11",
+    "av>=11; python_version < '3.14'",
+    "av>=15.1; python_version >= '3.14'",
 ]
 od = [
     "opencv-python-headless>=4.8",
@@ -54,7 +68,8 @@ ic = [
 ]
 all = [
     "opencv-python-headless>=4.8",
-    "av>=11",
+    "av>=11; python_version < '3.14'",
+    "av>=15.1; python_version >= '3.14'",
 ]
 # Cloud object-storage backends for loading datasets from s3:// / gs:// / az://
 # URLs. Core ships fsspec + universal-pathlib; each provider's filesystem is
@@ -88,8 +103,11 @@ notebook = [
 # conformance (isinstance + a maite.tasks.predict round-trip).
 maite = [
     "maite>=0.9",
-    "numpy>=1.24",
-    "av>=11",
+    "numpy>=1.24; python_version < '3.13'",
+    "numpy>=2.1; python_version == '3.13'",
+    "numpy>=2.3.2; python_version >= '3.14'",
+    "av>=11; python_version < '3.14'",
+    "av>=15.1; python_version >= '3.14'",
 ]
 dev = [
     "pre-commit>=3.6",
@@ -106,8 +124,9 @@ dev = [
 # so docs lists those runtime packages directly.
 docs = [
     "maite>=0.9", # maite
-    "numpy>=1.24",# maite
-    "av>=11",     # maite/fmv/all
+    "numpy>=1.24",# maite; core dependency supplies the per-interpreter floor
+    "av>=11; python_version < '3.14'",     # maite/fmv/all
+    "av>=15.1; python_version >= '3.14'",  # maite/fmv/all
     "ipykernel>=7.2", # notebook
     "opencv-python-headless>=4.8", # fmv/od/ic/all
     "sphinx>=7.0",
