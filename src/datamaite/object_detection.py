@@ -126,9 +126,14 @@ def load_od(
     # Imported here, not at module level: loaders -> model -> this module is
     # the import chain that builds the VisionDataset union, so a module-level
     # import back into loaders would be circular.
-    from datamaite.loaders import _require_dataset_root, _warn_if_empty, get_loader
+    from datamaite.loaders import _reject_remote_non_hmie, _require_dataset_root, _warn_if_empty, get_loader
 
-    _require_dataset_root(root)
+    _require_dataset_root(root, options.get("storage_options"))
+    # Cloud roots are supported for the HMIE (MOT) format only; no OD/IC format
+    # has been validated against object storage, so fail loudly here exactly
+    # like load()/load_mot()/load_vc() do instead of misbehaving deep inside a
+    # loader with local-filesystem assumptions (#87).
+    _reject_remote_non_hmie(root, dataset_format, options.get("storage_options"))
     try:
         loader = get_loader(dataset_format, task=Task.OD, variant=registry_variant)
     except ValueError as task_error:

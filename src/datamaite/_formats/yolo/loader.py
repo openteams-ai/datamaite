@@ -76,6 +76,7 @@ class YoloImageClassificationLoader(Loader):
         root: str | Path,
         *,
         image_extensions: Collection[str] | str | None = None,
+        split: str | Collection[str] | None = None,
         **_: Any,
     ) -> ImageClassificationDataset:
         """Read a YOLO classification dataset root.
@@ -85,6 +86,15 @@ class YoloImageClassificationLoader(Loader):
         indices are derived from the sorted class-folder names; an existing
         ``data.yaml`` is not consulted -- the on-disk folder layout is the
         source of truth for class names and order.
+
+        ``split`` (#86) loads only the given split(s), with the same alias
+        handling and selection semantics as the OD loader's option (#78):
+        ``"validation"``/``"valid"`` normalise to ``val``, ``"training"`` to
+        ``train``, and an explicit selection that matches nothing selects
+        nothing -- it warns and yields an empty dataset, never widening back
+        to all splits. The taxonomy is built from the selected splits' class
+        directories (including empty ones, #81), so it is split-local exactly
+        as if the split directory had been loaded as its own root.
         """
         root_path = Path(root)
         if not root_path.is_dir():
@@ -92,7 +102,9 @@ class YoloImageClassificationLoader(Loader):
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
 
         extensions = normalize_extensions(image_extensions)
-        records, class_name_list = _discover_classification_records(root_path, extensions)
+        records, class_name_list = _discover_classification_records(
+            root_path, extensions, splits=_normalize_split_selection(split)
+        )
         if not records:
             logger.warning("No YOLO image-classification images found in %s", root_path)
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
@@ -307,13 +319,19 @@ def _is_classification_split_dir(child: Path, extensions: frozenset[str]) -> boo
 
 
 def _discover_classification_records(
-    root: Path, extensions: frozenset[str]
+    root: Path, extensions: frozenset[str], *, splits: frozenset[str] | None = None
 ) -> tuple[list[tuple[Path, str | None, str, str]], list[str]]:
     """Return ``(rows, class_names)`` where each row is ``(image_path, split, class_name, rel_path)``.
 
     ``class_names`` is the sorted union of every class subdirectory seen across
-    all splits, including class dirs that contain no images -- so an empty class
-    in one split does not shift dense label indices relative to another (#81).
+    the selected splits, including class dirs that contain no images -- so an
+    empty class in one split does not shift dense label indices relative to
+    another (#81).
+
+    ``splits`` restricts discovery to the given canonical split names (#86);
+    ``None`` means no selection (load every split). An explicit selection never
+    widens: a flat (split-less) layout under an explicit selection matches
+    nothing, mirroring the OD loader's contract.
     """
     child_dirs = [child for child in safe_children(root) if child.is_dir()]
     # Deciding split-vs-flat layout stays structural: a split must hold at least
@@ -327,11 +345,13 @@ def _discover_classification_records(
         # including one whose class dirs are all empty. Requiring each split to
         # contain an image would drop its declared classes from the union (#81).
         split_dirs = [(child, split) for child in child_dirs if (split := infer_split(child.name)) is not None]
+        if splits is not None:
+            split_dirs = [(child, split) for child, split in split_dirs if split in splits]
         for split_dir, split in sorted(split_dirs, key=lambda item: (split_sort_key(item[1]), item[0].name)):
             recs, names = _classification_records_from_class_dirs(root, split_dir, split=split, extensions=extensions)
             records.extend(recs)
             class_names.update(names)
-    else:
+    elif splits is None:
         recs, names = _classification_records_from_class_dirs(root, root, split=None, extensions=extensions)
         records.extend(recs)
         class_names.update(names)
@@ -444,7 +464,7 @@ def _normalize_split_selection(split: str | Collection[str] | None) -> frozenset
             resolved.add(canonical)
     if unknown:
         logger.warning(
-            "YOLO OD: ignoring unrecognized split(s) %s; recognized values are %s",
+            "YOLO: ignoring unrecognized split(s) %s; recognized values are %s",
             ", ".join(repr(value) for value in unknown),
             ", ".join(sorted(SPLIT_ALIASES)),
         )

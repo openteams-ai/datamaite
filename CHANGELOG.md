@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- YOLO image-classification loader gains a native `split` option (#86), matching
+  the OD loader's semantics (#78): `load_ic(root, dataset_format="yolo",
+  split="validation")` loads only that split, aliases (`validation`/`valid` →
+  `val`, `training` → `train`) normalise, and an explicit selection that matches
+  nothing selects nothing — it never widens back to all splits. The taxonomy is
+  split-local to the selection and still includes empty class directories (#81).
+
+### Fixed
+
+- `load_od` and `load_ic` now reject cloud (remote URL) dataset roots with the
+  same loud error as `load`/`load_mot`/`load_vc` (#87); previously an `s3://`
+  root fell through into loaders with local-filesystem assumptions.
+
 ## [0.4.1] - 2026-07-31
 
 ### Added

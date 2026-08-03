@@ -68,6 +68,59 @@ class TestYoloImageClassificationLoader:
             ("val", "cat"),
         ]
 
+    def test_split_option_loads_only_selected_split(self, tmp_path: Path) -> None:
+        # (#86) Parity with the OD loader's split option.
+        _dataset(tmp_path)
+
+        ds = load_ic(tmp_path, dataset_format="yolo", split="train")
+
+        assert ds.sample_count == 2
+        assert all(sample.split == "train" for sample in ds.samples)
+        assert ds.dataset_metadata.splits == ("train",)
+        assert ds.index2label() == {0: "cat", 1: "dog"}
+
+    def test_split_option_normalizes_aliases(self, tmp_path: Path) -> None:
+        _dataset(tmp_path)
+
+        ds = load_ic(tmp_path, dataset_format="yolo", split="validation")
+
+        assert ds.sample_count == 1
+        assert ds.samples[0].split == "val"
+        # Taxonomy is split-local: val/ declares only cat, so dog is absent —
+        # exactly as if val/ had been loaded as its own root.
+        assert ds.index2label() == {0: "cat"}
+
+    def test_split_option_includes_empty_class_dirs_of_selected_split(self, tmp_path: Path) -> None:
+        # (#81 interplay) An empty class dir in the selected split still enters
+        # the taxonomy so dense label indices stay stable.
+        _dataset(tmp_path)
+        (tmp_path / "train" / "zebra").mkdir()
+
+        ds = load_ic(tmp_path, dataset_format="yolo", split="train")
+
+        assert ds.index2label() == {0: "cat", 1: "dog", 2: "zebra"}
+        assert ds.sample_count == 2
+
+    def test_split_option_unknown_selection_selects_nothing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _dataset(tmp_path)
+
+        with caplog.at_level(logging.WARNING):
+            ds = load_ic(tmp_path, dataset_format="yolo", split="bogus")
+
+        assert ds.sample_count == 0
+        assert any("ignoring unrecognized split" in record.message for record in caplog.records)
+
+    def test_split_option_on_flat_layout_selects_nothing(self, tmp_path: Path) -> None:
+        # Flat (split-less) class dirs under an explicit selection must not
+        # silently widen back to the whole dataset.
+        _write_image(tmp_path / "cat" / "a.jpg", b"cat-a")
+        _write_image(tmp_path / "dog" / "b.jpg", b"dog-b")
+
+        assert load_ic(tmp_path, dataset_format="yolo").sample_count == 2
+        assert load_ic(tmp_path, dataset_format="yolo", split="train").sample_count == 0
+
     def test_generic_load_can_disambiguate_with_task(self, tmp_path: Path) -> None:
         _dataset(tmp_path)
 

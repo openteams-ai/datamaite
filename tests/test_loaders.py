@@ -262,6 +262,19 @@ class TestCloudRoots:
         with pytest.raises(ValueError, match="HMIE format only"):
             load_mot(str(root), dataset_format="motchallenge")
 
+    def test_load_od_and_load_ic_reject_cloud_roots(self, memory_root) -> None:
+        # (#87) The task-first OD/IC entry points share the HMIE-only cloud
+        # policy of load()/load_mot()/load_vc(); no OD/IC format is validated
+        # against object storage.
+        from datamaite import load_ic, load_od
+
+        root = memory_root / "x"
+        root.mkdir()
+        with pytest.raises(ValueError, match="HMIE format only"):
+            load_od(str(root), dataset_format="coco")
+        with pytest.raises(ValueError, match="HMIE format only"):
+            load_ic(str(root), dataset_format="yolo")
+
     def test_load_mot_hmie_cloud_still_works(self, memory_root) -> None:
         single_video_dataset(
             memory_root,
