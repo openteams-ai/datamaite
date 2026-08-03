@@ -961,7 +961,6 @@ wheels = [
 
 [[package]]
 name = "datamaite"
-version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "fsspec" },
@@ -990,6 +989,7 @@ cloud = [
 ]
 dev = [
     { name = "bandit", extra = ["toml"] },
+    { name = "dunamai" },
     { name = "maite" },
     { name = "pre-commit" },
     { name = "pyright" },
@@ -1056,6 +1056,7 @@ requires-dist = [
     { name = "av", marker = "python_full_version < '3.14' and extra == 'fmv'", specifier = ">=11" },
     { name = "av", marker = "python_full_version < '3.14' and extra == 'maite'", specifier = ">=11" },
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7" },
+    { name = "dunamai", marker = "extra == 'dev'", specifier = ">=1.19" },
     { name = "fsspec", specifier = ">=2024.5.0" },
     { name = "gcsfs", marker = "extra == 'cloud'", specifier = ">=2023.1.0" },
     { name = "gcsfs", marker = "extra == 'gcs'", specifier = ">=2023.1.0" },
@@ -1094,7 +1095,7 @@ requires-dist = [
     { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=0.9" },
     { name = "universal-pathlib", specifier = ">=0.3.8" },
 ]
-provides-extras = ["fmv", "od", "ic", "all", "aws", "gcs", "azure", "cloud", "notebook", "maite", "dev", "docs"]
+provides-extras = ["all", "aws", "azure", "cloud", "dev", "docs", "fmv", "gcs", "ic", "maite", "notebook", "od"]
 
 [[package]]
 name = "debugpy"
@@ -1177,6 +1178,18 @@ resolution-markers = [
 sdist = { url = "https://files.pythonhosted.org/packages/ae/b6/03bb70946330e88ffec97aefd3ea75ba575cb2e762061e0e62a213befee8/docutils-0.22.4.tar.gz", hash = "sha256:4db53b1fde9abecbb74d91230d32ab626d94f6badfc575d6db9194a49df29968", size = 2291750, upload-time = "2025-12-18T19:00:26.443Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl", hash = "sha256:d0013f540772d1420576855455d050a2180186c91c15779301ac2ccb3eeb68de", size = 633196, upload-time = "2025-12-18T19:00:18.077Z" },
+]
+
+[[package]]
+name = "dunamai"
+version = "1.26.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/18/020d3b27a10450ddb11429f637404e8ea67ecf4d9fd999d4f1d553f25506/dunamai-1.26.2.tar.gz", hash = "sha256:84ea45eddf9bb4b40df7610b1b22a03137365e6257dbf9d7b72128fdccca564c", size = 46536, upload-time = "2026-08-02T03:32:50.276Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/31/2aaabe7d03f395c7b6d955f09a4d1440a2c49920abea42fde88cacc2ef97/dunamai-1.26.2-py3-none-any.whl", hash = "sha256:4234be3a90c3ec13ecf75d94a2248068e5a3018e8112892fcd9f3a1f287c9c32", size = 27478, upload-time = "2026-08-02T03:32:49.348Z" },
 ]
 
 [[package]]

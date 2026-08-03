@@ -2,7 +2,15 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_COMMIT_TAG
+    # Only release-shaped tags get a pipeline: suffixes are limited to the
+    # forms uv-dynamic-versioning can actually build (rc/alpha/beta, .post,
+    # .dev). A v-prefixed or arbitrary tag (docs-2026) never starts a doomed
+    # pipeline, and never sees protected variables. Numeric components reject
+    # leading zeros ((0|[1-9]\d*)): a tag like 01.02.03 would build artifacts
+    # canonicalized to 1.2.3 -- passing the exact-version guard via PEP 440
+    # equality while the tag/changelog/Release say 01.02.03, and colliding
+    # with a later genuine 1.2.3.
+    - if: '$CI_COMMIT_TAG =~ /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(rc|alpha|beta)(0|[1-9]\d*)|\.(post|dev)(0|[1-9]\d*))?$/'
 
 default:
   # Only retry on infrastructure failures, never on test/lint failures --
@@ -22,18 +30,16 @@ stages:
   - pages
   - publish-test
   - publish
+  - release
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
-  # Full clone history. Version is static (see [project].version); this is
-  # retained for the publish job, which inspects and checks out release tags.
+  # Full clone history + tags: uv-dynamic-versioning derives the package
+  # version from the git tag (#85), so every build needs real history.
   GIT_DEPTH: "0"
   # Pin Poetry to avoid silent drift.
   POETRY_PIN: "2.4.1"
-  RELEASE_TAG:
-    value: ""
-    description: "Tag to publish to TestPyPI/PyPI from a manually triggered default-branch web pipeline."
 
 # Clone the shared example-datasets repo to one canonical location used by every
 # job that needs it (docs build + e2e integration matrix), and export
@@ -87,7 +93,10 @@ variables:
     - key:
         files:
           - poetry.lock
-        prefix: "venv-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
+        # No ref-slug: every tag is a fresh ref, so a per-ref key made release
+        # pipelines rebuild all venvs cold. poetry.lock fingerprints content,
+        # and protected/unprotected cache separation isolates release caches.
+        prefix: "venv-${CI_JOB_NAME}"
       paths:
         - .venv/
     - key: pip-downloads
@@ -105,6 +114,23 @@ variables:
 # ---------------------------------------------------------------------------
 # Lint
 # ---------------------------------------------------------------------------
+# First gate of every release (#85): a tag with no matching, non-empty
+# CHANGELOG.md section fails here, before anything is built or published.
+# The same section later becomes the GitLab Release notes (gitlab-release).
+changelog-check:
+  stage: lint
+  image: python:3.13-slim
+  timeout: 5m
+  interruptible: true
+  needs: []
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: on_success
+    - when: never
+  script:
+    - python scripts/release_notes.py check "$CI_COMMIT_TAG"
+
 lint:
   extends: .shared-setup
   stage: lint
@@ -149,7 +175,7 @@ build:
       from packaging.utils import parse_sdist_filename, parse_wheel_filename
       from packaging.version import Version
 
-      expected = Version(sys.argv[1].removeprefix("v"))
+      expected = Version(sys.argv[1])
       matched = 0
       for artifact in Path("dist").iterdir():
           if artifact.suffix == ".whl":
@@ -181,19 +207,28 @@ build:
       - dist/
     expire_in: 1 week
 
-# Build and publish the distribution for an existing release tag. PyPI and
-# TestPyPI use API tokens because PyPI/TestPyPI have not yet onboarded
-# gitlab.jatic.net as a trusted self-managed GitLab issuer.
-# Run from CI/CD -> Pipelines -> Run pipeline on the default branch with
-# RELEASE_TAG set, publishing to TestPyPI first and then PyPI.
+# Publish the tagged release to TestPyPI/PyPI (#85). Pushing a tag X.Y.Z runs
+# the full validation pipeline (lint/typecheck/build/test + changelog-check) on
+# the tag, then publishes to TestPyPI automatically; publish-pypi is a manual
+# approval gate in the same tag pipeline; gitlab-release then records the
+# release from the changelog. There is no web form and no version-bump commit:
+# the tag is the single source of truth (uv-dynamic-versioning) and the build
+# fails on any .devN/+dirty derivation, so #58 cannot recur silently.
+# PyPI and TestPyPI use API tokens because PyPI/TestPyPI have not yet onboarded
+# gitlab.jatic.net as a trusted self-managed GitLab issuer; the tag pipeline is
+# shaped so swapping token auth for OIDC later is a one-job change (#62).
 .publish-python-package:
   stage: publish
   image: python:3.13-slim
-  retry: 0
+  # Auto-retry infrastructure failures only (autoscaled runners die sometimes);
+  # upload idempotency (--skip-existing + digest verify) makes that safe.
+  retry:
+    max: 1
+    when: runner_system_failure
   interruptible: false
   resource_group: pypi-publish
   timeout: 20m
-  # Publish jobs build release artifacts from the checked-out tag and should not
+  # Publish jobs build release artifacts from the tag checkout and should not
   # download artifacts from earlier stages; those reports make the worktree dirty.
   dependencies: []
   artifacts:
@@ -204,8 +239,13 @@ build:
   before_script:
     - apt-get update -qq && apt-get install -y -qq git
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
-    - pip install --quiet --upgrade pip
+    # No pip self-upgrade here: the publish toolchain must not float between a
+    # release and its recovery re-run (digest verification requires the retry
+    # rebuild to be byte-identical).
     - pip install --quiet "poetry==${POETRY_PIN}" "twine==6.2.0" "check-wheel-contents==0.6.3"
+    # Pin the PEP 517 isolated build env deps too (hatchling's helpers);
+    # pip-based build isolation honors PIP_CONSTRAINT.
+    - export PIP_CONSTRAINT="$CI_PROJECT_DIR/scripts/publish-build-constraints.txt"
     - python --version
     - poetry --version
     - twine --version
@@ -214,66 +254,50 @@ build:
     - |
       set -euo pipefail
 
-      if [ -z "${RELEASE_TAG:-}" ]; then
-        echo "RELEASE_TAG must be set in the 'Run pipeline' form (CI/CD -> Pipelines -> Run pipeline)."
-        exit 1
-      fi
-
-      RELEASE_TAG="$(printf '%s' "$RELEASE_TAG" | tr -d '[:space:]')"
-      if ! [[ "$RELEASE_TAG" =~ ^[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.]+)?$ ]]; then
-        echo "RELEASE_TAG '$RELEASE_TAG' must match X.Y.Z with no 'v' prefix."
+      RELEASE_TAG="$CI_COMMIT_TAG"
+      # Defense in depth: same shape the workflow rule admits (X.Y.Z plus the
+      # suffixes uv-dynamic-versioning can build). Leading zeros are rejected
+      # everywhere a number appears: Version("01.02.03") == Version("1.2.3"),
+      # so a non-canonical tag would slip past the exact-version assert below
+      # while publishing under a different spelling than the tag.
+      if ! [[ "$RELEASE_TAG" =~ ^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-(rc|alpha|beta)(0|[1-9][0-9]*)|[.](post|dev)(0|[1-9][0-9]*))?$ ]]; then
+        echo "Tag '$RELEASE_TAG' must match X.Y.Z (optionally -rcN/-alphaN/-betaN/.postN/.devN), no 'v' prefix, no leading zeros."
         exit 1
       fi
 
       if [ "${PYPI_ENVIRONMENT_NAME}" = "TestPyPI" ]; then
         if [ -z "${TEST_PYPI_API_TOKEN:-}" ]; then
-          echo "TEST_PYPI_API_TOKEN is not available; add a masked/protected TestPyPI API token in GitLab CI/CD variables."
+          echo "TEST_PYPI_API_TOKEN is not available; add a masked/protected TestPyPI API token in GitLab CI/CD variables (and protect the X.Y.Z tag pattern so protected variables reach tag pipelines)."
           exit 1
         fi
         export TWINE_USERNAME="__token__"
         export TWINE_PASSWORD="$TEST_PYPI_API_TOKEN"
       else
         if [ -z "${PYPI_API_TOKEN:-}" ]; then
-          echo "PYPI_API_TOKEN is not available; add a masked/protected PyPI API token in GitLab CI/CD variables."
+          echo "PYPI_API_TOKEN is not available; add a masked/protected PyPI API token in GitLab CI/CD variables (and protect the X.Y.Z tag pattern so protected variables reach tag pipelines)."
           exit 1
         fi
         export TWINE_USERNAME="__token__"
         export TWINE_PASSWORD="$PYPI_API_TOKEN"
       fi
 
-      echo "Publish to ${PYPI_ENVIRONMENT_NAME} triggered by ${GITLAB_USER_LOGIN:-unknown} (${GITLAB_USER_EMAIL:-unknown}) at $(date -u +%FT%TZ)."
+      echo "Publish of ${RELEASE_TAG} to ${PYPI_ENVIRONMENT_NAME} triggered by ${GITLAB_USER_LOGIN:-tag-push} at $(date -u +%FT%TZ)."
 
+      # A release records what main shipped: refuse tags on side branches.
       git fetch --no-tags origin "+refs/heads/${CI_DEFAULT_BRANCH}:refs/remotes/origin/${CI_DEFAULT_BRANCH}"
-
-      REMOTE_TAG_OBJECT="$(git ls-remote --tags --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NF {print $1; exit}')"
-      if [ -z "$REMOTE_TAG_OBJECT" ]; then
-        echo "RELEASE_TAG '$RELEASE_TAG' not found on origin."
+      if ! git merge-base --is-ancestor "$CI_COMMIT_SHA" "origin/${CI_DEFAULT_BRANCH}"; then
+        echo "Tag ${RELEASE_TAG} (${CI_COMMIT_SHA}) is not on origin/${CI_DEFAULT_BRANCH}."
         exit 1
       fi
 
-      if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
-        LOCAL_TAG_OBJECT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}")"
-        if [ "$LOCAL_TAG_OBJECT" != "$REMOTE_TAG_OBJECT" ]; then
-          echo "Tag '$RELEASE_TAG' on origin ($REMOTE_TAG_OBJECT) does not match local ($LOCAL_TAG_OBJECT); refusing to publish."
-          exit 1
-        fi
-      else
-        git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-      fi
-
-      TAG_COMMIT="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
-      echo "Publishing ${RELEASE_TAG} (${TAG_COMMIT}) to ${PYPI_ENVIRONMENT_NAME}."
-
-      if ! git merge-base --is-ancestor "$TAG_COMMIT" "origin/${CI_DEFAULT_BRANCH}"; then
-        echo "RELEASE_TAG ${RELEASE_TAG} (${TAG_COMMIT}) is not on origin/${CI_DEFAULT_BRANCH}."
-        exit 1
-      fi
-
+      # The pipeline already checked out the tag; build straight from it.
       rm -rf dist/
-      git checkout --detach "$TAG_COMMIT"
       poetry build
       twine check dist/*
       check-wheel-contents dist/*.whl
+
+      # Exact-match version assertion (#58 guardrail): the derived version must
+      # equal the tag -- any .devN / +dirty / +g<sha> suffix fails the release.
       python - "$RELEASE_TAG" <<'PY'
       import sys
       from pathlib import Path
@@ -305,7 +329,75 @@ build:
         printf '%s\n' "$status"
         exit 1
       fi
-      twine upload --non-interactive --disable-progress-bar --skip-existing dist/*
+
+      # A repository can accept one artifact and then lose the response, leaving
+      # the release partially published. Bound the network wait and make retries
+      # continue past artifacts the index has already accepted.
+      timeout --signal=TERM --kill-after=30s 5m \
+        twine upload --non-interactive --disable-progress-bar --skip-existing dist/*
+
+      # Do not let --skip-existing hide a conflicting artifact. Wait for the
+      # package index to become consistent, then compare every remote digest
+      # with the artifact built from the release tag (checkmaite !610 pattern).
+      python - "$PYPI_ENVIRONMENT_NAME" "$RELEASE_TAG" <<'PY'
+      import hashlib
+      import json
+      import sys
+      import time
+      import urllib.error
+      import urllib.request
+      from pathlib import Path
+
+      from packaging.version import Version
+
+      attempts = 12
+      request_timeout_seconds = 5
+      retry_interval_seconds = 5
+      maximum_wait_seconds = (
+          attempts * request_timeout_seconds + (attempts - 1) * retry_interval_seconds
+      )
+
+      environment, version = sys.argv[1:]
+      host = "https://test.pypi.org" if environment == "TestPyPI" else "https://pypi.org"
+      release_url = f"{host}/pypi/datamaite/{Version(version)}/json"
+      local_digests = {
+          artifact.name: hashlib.sha256(artifact.read_bytes()).hexdigest()
+          for artifact in Path("dist").iterdir()
+          if artifact.suffix == ".whl" or artifact.name.endswith(".tar.gz")
+      }
+
+      remote_digests = {}
+      for attempt in range(attempts):
+          try:
+              with urllib.request.urlopen(release_url, timeout=request_timeout_seconds) as response:
+                  release = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404 and exc.code < 500:
+                  raise
+          except (urllib.error.URLError, TimeoutError):
+              pass
+          else:
+              remote_digests = {item["filename"]: item["digests"]["sha256"] for item in release["urls"]}
+              if local_digests.keys() <= remote_digests.keys():
+                  break
+          if attempt + 1 < attempts:
+              time.sleep(retry_interval_seconds)
+      else:
+          missing = sorted(local_digests.keys() - remote_digests.keys())
+          raise SystemExit(
+              f"Published release did not expose all artifacts after {attempts} attempts "
+              f"(up to {maximum_wait_seconds} seconds): {missing}"
+          )
+
+      mismatched = sorted(
+          filename
+          for filename, digest in local_digests.items()
+          if remote_digests[filename] != digest
+      )
+      if mismatched:
+          raise SystemExit(f"Published artifact digest mismatch: {mismatched}")
+      print(f"Verified {len(local_digests)} published artifact digest(s) for {version}.")
+      PY
 
 publish-testpypi:
   extends: .publish-python-package
@@ -317,9 +409,10 @@ publish-testpypi:
     PYPI_ENVIRONMENT_NAME: "TestPyPI"
     TWINE_REPOSITORY_URL: "https://test.pypi.org/legacy/"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-      when: manual
-      allow_failure: false
+    # Automatic on every release tag, after the tag pipeline's validation
+    # stages (lint/typecheck/build/test + changelog-check) succeed.
+    - if: $CI_COMMIT_TAG
+      when: on_success
     - when: never
 
 publish-pypi:
@@ -330,11 +423,80 @@ publish-pypi:
   variables:
     PYPI_ENVIRONMENT_NAME: "PyPI"
     TWINE_REPOSITORY_URL: "https://upload.pypi.org/legacy/"
+  needs: [publish-testpypi]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    # The one human decision in a release: approve the production upload from
+    # the same tag pipeline once TestPyPI is verified.
+    - if: $CI_COMMIT_TAG
       when: manual
       allow_failure: false
     - when: never
+
+# Create the GitLab Release once publish-pypi succeeds, so the Releases page
+# records exactly what shipped to PyPI. The notes are the tag's CHANGELOG.md
+# section (guaranteed non-empty by changelog-check at the top of this same
+# pipeline). Idempotent: an existing release is left untouched, so retrying
+# the pipeline never fails here.
+gitlab-release:
+  stage: release
+  image: python:3.13-slim
+  timeout: 10m
+  # Reads only the checkout; no artifacts from earlier stages.
+  dependencies: []
+  needs: [publish-pypi]
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: on_success
+    - when: never
+  script:
+    - |
+      set -euo pipefail
+
+      NOTES="$(python scripts/release_notes.py extract "$CI_COMMIT_TAG")"
+      export NOTES
+
+      python - "$CI_COMMIT_TAG" <<'PY'
+      import json
+      import os
+      import re
+      import sys
+      import urllib.error
+      import urllib.request
+
+      tag = sys.argv[1]
+      # PEP 440 canonical form for the PyPI URL: pre-release tags like
+      # 0.5.0-rc1 / 0.5.0-alpha1 / 0.5.0-beta1 live at 0.5.0rc1 / 0.5.0a1 /
+      # 0.5.0b1 on PyPI ( .postN / .devN are already canonical).
+      pypi_version = re.sub(
+          r"-(rc|alpha|beta)(\d+)$",
+          lambda m: {"rc": "rc", "alpha": "a", "beta": "b"}[m.group(1)] + m.group(2),
+          tag,
+      )
+      api = f"{os.environ['CI_API_V4_URL']}/projects/{os.environ['CI_PROJECT_ID']}/releases"
+      auth = {"JOB-TOKEN": os.environ["CI_JOB_TOKEN"]}
+
+      # Idempotency: a retried pipeline must not fail on the existing release.
+      try:
+          with urllib.request.urlopen(urllib.request.Request(f"{api}/{tag}", headers=auth)):
+              print(f"Release {tag} already exists; nothing to do.")
+              raise SystemExit(0)
+      except urllib.error.HTTPError as exc:
+          if exc.code != 404:
+              raise
+
+      notes = os.environ["NOTES"].strip() + (
+          f"\n\nPublished to PyPI: https://pypi.org/project/datamaite/{pypi_version}/"
+      )
+      payload = json.dumps({"tag_name": tag, "name": tag, "description": notes}).encode()
+      request = urllib.request.Request(
+          api,
+          data=payload,
+          method="POST",
+          headers={**auth, "Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(request) as response:
+          print(f"Created release {tag}: {json.load(response)['_links']['self']}")
+      PY
 
 # Builds Sphinx HTML and publishes to GitLab Pages on every push to the default branch.
 pages:
@@ -347,6 +509,10 @@ pages:
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
     - poetry install --extras docs
+    # Reinstall the root project through the hatchling backend: poetry's own
+    # develop-install registers the [tool.poetry] placeholder 0.0.0, which the
+    # executed tutorial notebooks would print into the published docs.
+    - poetry run pip install --quiet --no-deps -e .
     - poetry run sphinx-build -b html docs public
   artifacts:
     paths:
@@ -368,6 +534,10 @@ pages-preview:
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
     - poetry install --extras docs
+    # Reinstall the root project through the hatchling backend: poetry's own
+    # develop-install registers the [tool.poetry] placeholder 0.0.0, which the
+    # executed tutorial notebooks would print into the published docs.
+    - poetry run pip install --quiet --no-deps -e .
     - poetry run sphinx-build -b html docs public
   artifacts:
     expose_as: "Documentation Preview"

@@ -1,0 +1,18 @@
+# Constraints for the PEP 517 isolated build environment used by the publish
+# jobs (exported as PIP_CONSTRAINT in .gitlab-ci.yml). Release recovery must
+# be able to rebuild a tag's artifacts byte-identically for the post-upload
+# digest verification to converge, so the backend's transitive deps cannot
+# float between a release and its re-run (#85).
+#
+# Regenerate after bumping the build-system pins in pyproject.toml:
+#   printf 'hatchling==1.31.0\nuv-dynamic-versioning==0.14.0\n' | uv pip compile -
+dunamai==1.26.1
+hatchling==1.31.0
+jinja2==3.1.6
+markupsafe==3.0.3
+packaging==26.2
+pathspec==1.1.1
+pluggy==1.6.0
+tomlkit==0.15.1
+trove-classifiers==2026.6.1.19
+uv-dynamic-versioning==0.14.0

@@ -16,11 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing selects nothing — it never widens back to all splits. The taxonomy is
   split-local to the selection and still includes empty class directories (#81).
 
+### Changed
+
+- Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation, publishes to TestPyPI automatically with digest verification, gates PyPI behind one manual approval in the same pipeline, and creates the GitLab Release from this changelog's section for the tag. The package version is derived from the git tag (uv-dynamic-versioning); `[project].version` and the version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline is retired. Release tags must be canonically spelled — leading zeros in any numeric component (`01.02.03`, `0.5.0-rc01`) are rejected so the published version can never differ from the tag. In Poetry development environments (where `poetry install` registers the `0.0.0` placeholder), `datamaite.__version__` now falls back to the git-derived version via dunamai (added to the `dev` extra).
+
 ### Fixed
 
 - `load_od` and `load_ic` now reject cloud (remote URL) dataset roots with the
   same loud error as `load`/`load_mot`/`load_vc` (#87); previously an `s3://`
   root fell through into loaders with local-filesystem assumptions.
+
 
 ## [0.4.1] - 2026-07-31
 
