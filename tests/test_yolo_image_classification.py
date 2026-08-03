@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -137,17 +138,109 @@ class TestYoloImageClassificationLoader:
         _write_image(tmp_path / "train" / "cat" / "a.jpg")
         assert YoloImageClassificationLoader.sniff(tmp_path)
 
-    def test_load_matches_shallow_sniff_nested_images_ignored(self, tmp_path: Path) -> None:
-        # An image nested below the class dir is not a class member: load must
-        # agree with sniff (which only looks one level deep), not silently pull
-        # it in via a recursive walk.
+    def test_nested_images_are_discovered_recursively(self, tmp_path: Path) -> None:
+        # (#90) Images anywhere below a class dir belong to that class: the
+        # top-level directory stays the label, the nested relative path stays
+        # in the datum ID, and nested dirs never become classes of their own.
         _write_image(tmp_path / "train" / "cat" / "a.jpg", b"cat-a")
         _write_image(tmp_path / "train" / "cat" / "nested" / "deep.jpg", b"deep")
+        _write_image(tmp_path / "train" / "cat" / "nested" / "deeper" / "deepest.jpg", b"deepest")
+        _write_image(tmp_path / "train" / "dog" / "b.jpg", b"dog-b")
 
         ds = load_ic(tmp_path, dataset_format="yolo")
 
-        assert ds.sample_count == 1
+        assert ds.index2label() == {0: "cat", 1: "dog"}
+        assert [(sample.image_id, sample.labels[0].category_name) for sample in ds.samples] == [
+            ("train/cat/a.jpg", "cat"),
+            ("train/cat/nested/deep.jpg", "cat"),
+            ("train/cat/nested/deeper/deepest.jpg", "cat"),
+            ("train/dog/b.jpg", "dog"),
+        ]
+
+    def test_nested_only_split_is_not_empty(self, tmp_path: Path) -> None:
+        # (#90) The checkmaite regression scenario: a split whose class dirs
+        # hold only nested images used to load as an empty dataset.
+        _write_image(tmp_path / "train" / "cat" / "roll-01" / "a.jpg", b"cat-a")
+        _write_image(tmp_path / "train" / "dog" / "roll-02" / "b.jpg", b"dog-b")
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        assert ds.sample_count == 2
+        assert ds.index2label() == {0: "cat", 1: "dog"}
+        assert [sample.file_name for sample in ds.samples] == [
+            "train/cat/roll-01/a.jpg",
+            "train/dog/roll-02/b.jpg",
+        ]
+
+    def test_nested_non_images_and_hidden_entries_are_ignored(self, tmp_path: Path) -> None:
+        _write_image(tmp_path / "train" / "cat" / "nested" / "a.jpg", b"cat-a")
+        (tmp_path / "train" / "cat" / "nested" / "notes.txt").write_text("not an image", encoding="utf-8")
+        _write_image(tmp_path / "train" / "cat" / "nested" / ".hidden.jpg", b"hidden")
+        _write_image(tmp_path / "train" / "cat" / ".thumbnails" / "b.jpg", b"thumb")
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        assert [sample.file_name for sample in ds.samples] == ["train/cat/nested/a.jpg"]
+
+    def test_nested_empty_dirs_add_no_classes_or_samples(self, tmp_path: Path) -> None:
+        # (#81 interplay) Only direct children of the split declare classes;
+        # empty nested dirs neither extend the taxonomy nor break discovery.
+        _write_image(tmp_path / "train" / "cat" / "a.jpg", b"cat-a")
+        (tmp_path / "train" / "cat" / "empty" / "deeper").mkdir(parents=True)
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        assert ds.index2label() == {0: "cat"}
         assert [sample.file_name for sample in ds.samples] == ["train/cat/a.jpg"]
+
+    def test_split_option_selects_nested_images(self, tmp_path: Path) -> None:
+        # (#86 interplay) Nested discovery composes with the split option.
+        _write_image(tmp_path / "train" / "cat" / "roll" / "a.jpg", b"cat-a")
+        _write_image(tmp_path / "val" / "cat" / "roll" / "b.jpg", b"cat-b")
+
+        ds = load_ic(tmp_path, dataset_format="yolo", split="val")
+
+        assert [sample.file_name for sample in ds.samples] == ["val/cat/roll/b.jpg"]
+
+    def test_nested_only_root_loads_but_does_not_sniff(self, tmp_path: Path) -> None:
+        # (#90) Deliberate load/sniff asymmetry: recursive discovery serves an
+        # explicit dataset_format="yolo", while sniff stays shallow so nested
+        # trees (e.g. MOT-style video frames) don't ambiguously autodetect.
+        _write_image(tmp_path / "train" / "cat" / "roll" / "a.jpg", b"cat-a")
+
+        assert not YoloImageClassificationLoader.sniff(tmp_path)
+        assert load_ic(tmp_path, dataset_format="yolo").sample_count == 1
+
+    def test_nested_symlinked_directory_is_not_descended(self, tmp_path: Path) -> None:
+        # A symlinked dir below a class dir is not traversed (matching rglob's
+        # ** semantics): it can neither smuggle an outside tree into the class
+        # nor recurse forever via a link cycle.
+        outside = tmp_path / "outside"
+        _write_image(outside / "secret.jpg", b"secret")
+        root = tmp_path / "dataset"
+        _write_image(root / "train" / "cat" / "real.jpg", b"cat-real")
+        os.symlink(outside, root / "train" / "cat" / "evil", target_is_directory=True)
+        os.symlink(root / "train", root / "train" / "cat" / "cycle", target_is_directory=True)
+
+        ds = load_ic(root, dataset_format="yolo")
+
+        assert [sample.file_name for sample in ds.samples] == ["train/cat/real.jpg"]
+
+    def test_nested_symlinked_image_escaping_root_is_skipped(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The escape guard applies at every depth, not just to direct children.
+        secret = tmp_path / "outside" / "secret.bin"
+        _write_image(secret, b"top secret")
+        root = tmp_path / "dataset"
+        _write_image(root / "train" / "cat" / "nested" / "real.jpg", b"cat-real")
+        os.symlink(secret, root / "train" / "cat" / "nested" / "evil.jpg")
+
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
+            ds = load_ic(root, dataset_format="yolo")
+
+        assert [sample.file_name for sample in ds.samples] == ["train/cat/nested/real.jpg"]
+        assert "escaping the dataset root" in caplog.text
 
     def test_data_yaml_order_is_ignored_folder_names_win(self, tmp_path: Path) -> None:
         # data.yaml deliberately disagrees with the alphabetical folder order;
@@ -191,7 +284,7 @@ class TestYoloImageClassificationLoader:
         # The symlink pointing outside the dataset root is dropped, not ingested
         # (and so never copied through on a later write).
         assert [sample.file_name for sample in ds.samples] == ["train/cat/real.jpg"]
-        assert "symlinked image escaping" in caplog.text
+        assert "escaping the dataset root" in caplog.text
 
     def test_in_root_symlink_is_loaded(self, tmp_path: Path) -> None:
         # The containment guard must not over-reach: a symlink resolving to a
@@ -202,6 +295,129 @@ class TestYoloImageClassificationLoader:
         ds = load_ic(tmp_path, dataset_format="yolo")
 
         assert [sample.file_name for sample in ds.samples] == ["train/cat/alias.jpg", "train/cat/real.jpg"]
+
+    def test_symlinked_class_dir_is_not_descended(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # (!83 review P1) A class directory that is itself a symlink pointing
+        # outside the root previously slipped past the escape guard: its child
+        # images are not symlinks, so the per-file check never fired. Split and
+        # class dir symlinks now follow the same no-descend policy as nested
+        # ones: skipped entirely, no taxonomy entry.
+        outside = tmp_path / "outside"
+        _write_image(outside / "secret.jpg", b"secret")
+        root = tmp_path / "dataset"
+        _write_image(root / "train" / "dog" / "real.jpg", b"dog-real")
+        os.symlink(outside, root / "train" / "cat", target_is_directory=True)
+
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
+            ds = load_ic(root, dataset_format="yolo")
+
+        assert [sample.file_name for sample in ds.samples] == ["train/dog/real.jpg"]
+        assert ds.index2label() == {0: "dog"}
+        assert "symlinked directory" in caplog.text
+
+    def test_symlinked_only_class_dir_loads_nothing_and_does_not_sniff(self, tmp_path: Path) -> None:
+        # The exact !83 review repro: dataset/train/cat -> /outside with
+        # /outside/secret.jpg used to load the outside image.
+        outside = tmp_path / "outside"
+        _write_image(outside / "secret.jpg", b"secret")
+        root = tmp_path / "dataset"
+        (root / "train").mkdir(parents=True)
+        os.symlink(outside, root / "train" / "cat", target_is_directory=True)
+
+        assert not YoloImageClassificationLoader.sniff(root)
+        assert load_ic(root, dataset_format="yolo").sample_count == 0
+
+    def test_symlinked_split_dir_is_not_descended(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # A whole split symlinked to an outside tree is skipped, not followed.
+        outside = tmp_path / "outside"
+        _write_image(outside / "cat" / "secret.jpg", b"secret")
+        root = tmp_path / "dataset"
+        _write_image(root / "val" / "cat" / "real.jpg", b"cat-real")
+        os.symlink(outside, root / "train", target_is_directory=True)
+
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
+            ds = load_ic(root, dataset_format="yolo")
+
+        assert [sample.file_name for sample in ds.samples] == ["val/cat/real.jpg"]
+        assert ds.dataset_metadata.splits == ("val",)
+        assert "symlinked directory" in caplog.text
+
+    def test_ambiguous_nested_split_named_class_warns_and_flat_layout_resolves(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # (!83 review P1) A flat root whose "train" class nests all its images
+        # is structurally identical to a split layout, so auto reads it as one
+        # -- silently dropping car/ before this fix. Auto now warns, naming the
+        # dropped directories and the layout="flat" override that resolves it.
+        _write_image(tmp_path / "train" / "roll-01" / "a.jpg", b"a")
+        _write_image(tmp_path / "car" / "b.jpg", b"b")
+
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
+            auto = load_ic(tmp_path, dataset_format="yolo")
+
+        assert auto.index2label() == {0: "roll-01"}
+        assert "car" in caplog.text
+        assert 'layout="flat"' in caplog.text
+
+        flat = load_ic(tmp_path, dataset_format="yolo", layout="flat")
+
+        assert flat.sample_count == 2
+        assert flat.index2label() == {0: "car", 1: "train"}
+        assert [(sample.file_name, sample.labels[0].category_name) for sample in flat.samples] == [
+            ("car/b.jpg", "car"),
+            ("train/roll-01/a.jpg", "train"),
+        ]
+        assert all(sample.split is None for sample in flat.samples)
+
+    def test_layout_flat_treats_split_named_dirs_as_classes(self, tmp_path: Path) -> None:
+        _dataset(tmp_path)
+
+        ds = load_ic(tmp_path, dataset_format="yolo", layout="flat")
+
+        assert ds.sample_count == 3
+        assert ds.index2label() == {0: "train", 1: "val"}
+        assert all(sample.split is None for sample in ds.samples)
+
+    def test_layout_split_forces_split_interpretation(self, tmp_path: Path) -> None:
+        # On a proper split root, layout="split" matches auto; on a flat root
+        # it finds no split-named directories and loads nothing rather than
+        # silently reinterpreting.
+        _dataset(tmp_path)
+        assert load_ic(tmp_path, dataset_format="yolo", layout="split").sample_count == 3
+
+        flat_root = tmp_path / "flat"
+        _write_image(flat_root / "cat" / "a.jpg", b"a")
+        assert load_ic(flat_root, dataset_format="yolo", layout="split").sample_count == 0
+
+    def test_layout_rejects_unknown_value(self, tmp_path: Path) -> None:
+        _dataset(tmp_path)
+
+        with pytest.raises(ValueError, match="layout"):
+            load_ic(tmp_path, dataset_format="yolo", layout="deep")
+
+    def test_each_directory_is_listed_once_per_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # (!83 review P2) The layout discriminator and record building share
+        # one memoized scan, so no directory tree is listed twice per load.
+        import datamaite._formats.yolo.loader as yolo_loader
+
+        _write_image(tmp_path / "train" / "cat" / "roll-01" / "a.jpg", b"a")
+        _write_image(tmp_path / "train" / "dog" / "b.jpg", b"b")
+        _write_image(tmp_path / "val" / "cat" / "roll-02" / "c.jpg", b"c")
+
+        counts: Counter[Path] = Counter()
+        original = yolo_loader.safe_children
+
+        def counting(path: Path) -> list[Path]:
+            counts[path] += 1
+            return original(path)
+
+        monkeypatch.setattr(yolo_loader, "safe_children", counting)
+
+        ds = load_ic(tmp_path, dataset_format="yolo")
+
+        assert ds.sample_count == 3
+        assert counts
+        assert max(counts.values()) == 1
 
 
 class TestYoloImageClassificationWriter:

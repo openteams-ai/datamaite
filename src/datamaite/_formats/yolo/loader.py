@@ -3,7 +3,9 @@
 Two task variants are registered under the shared ``DatasetFormat.YOLO`` family:
 
 * ``Task.IC``: the ImageFolder-style classification layout
-  (``train/cat/0001.jpg`` or ``cat/0001.jpg``).
+  (``train/cat/0001.jpg`` or ``cat/0001.jpg``); images may also nest below the
+  class directory (``train/cat/sub/0001.jpg``) without the subdirectory
+  becoming a class (#90).
 * ``Task.OD``: the standard YOLO detection layout with image files mirrored by
   ``.txt`` label files (``images/train/0001.jpg`` + ``labels/train/0001.txt``),
   including the common ``train/images`` + ``train/labels`` variant.
@@ -19,7 +21,7 @@ import ast
 import logging
 import math
 import struct
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -77,15 +79,30 @@ class YoloImageClassificationLoader(Loader):
         *,
         image_extensions: Collection[str] | str | None = None,
         split: str | Collection[str] | None = None,
+        layout: str = "auto",
         **_: Any,
     ) -> ImageClassificationDataset:
         """Read a YOLO classification dataset root.
 
-        Images are discovered directly under each class folder (the documented
-        flat ``<split>/<class>/<image>`` layout), matching :meth:`sniff`. Class
-        indices are derived from the sorted class-folder names; an existing
-        ``data.yaml`` is not consulted -- the on-disk folder layout is the
-        source of truth for class names and order.
+        Images are discovered recursively below each class folder (#90):
+        ``<split>/<class>/**/<image>`` keeps the top-level directory as the
+        class, and the nested relative path is preserved in the datum ID, so
+        nested subdirectories never become classes. :meth:`sniff` deliberately
+        stays shallow -- a nested-only root will not autodetect and needs an
+        explicit ``dataset_format="yolo"``. Class indices are derived from the
+        sorted class-folder names; an existing ``data.yaml`` is not consulted
+        -- the on-disk folder layout is the source of truth for class names
+        and order.
+
+        ``layout`` selects the directory interpretation. ``"auto"`` (default)
+        keeps the structural discriminator: the root uses the split layout
+        when some split-named child holds a class subdirectory with an image
+        at any depth. A flat root whose class directory is named like a split
+        *and* nests its images (``train/roll-01/a.jpg``) is structurally
+        indistinguishable from a split, so auto reads it as one -- it warns
+        about every non-split sibling it drops. Pass ``layout="flat"`` to read
+        every top-level directory as a class, or ``layout="split"`` to force
+        the split interpretation.
 
         ``split`` (#86) loads only the given split(s), with the same alias
         handling and selection semantics as the OD loader's option (#78):
@@ -95,7 +112,13 @@ class YoloImageClassificationLoader(Loader):
         to all splits. The taxonomy is built from the selected splits' class
         directories (including empty ones, #81), so it is split-local exactly
         as if the split directory had been loaded as its own root.
+
+        Symlinked directories -- split, class, or nested -- are never
+        descended into, and every discovered image must resolve inside the
+        dataset root, so no symlink can smuggle outside files into a dataset.
         """
+        if layout not in ("auto", "split", "flat"):
+            raise ValueError(f'layout must be "auto", "split", or "flat", got {layout!r}')
         root_path = Path(root)
         if not root_path.is_dir():
             logger.warning("YOLO image-classification root is not a directory: %s", root_path)
@@ -103,7 +126,7 @@ class YoloImageClassificationLoader(Loader):
 
         extensions = normalize_extensions(image_extensions)
         records, class_name_list = _discover_classification_records(
-            root_path, extensions, splits=_normalize_split_selection(split)
+            root_path, extensions, splits=_normalize_split_selection(split), layout=layout
         )
         if not records:
             logger.warning("No YOLO image-classification images found in %s", root_path)
@@ -296,9 +319,17 @@ class YoloObjectDetectionLoader(Loader):
 
 
 def _looks_like_yolo_classification_root(root: Path, extensions: frozenset[str]) -> bool:
-    """Shallow, cheap sniff for split/class/image or class/image layouts."""
+    """Shallow, cheap sniff for split/class/image or class/image layouts.
+
+    Deliberately shallower than the recursive discovery in
+    :func:`_classification_records_from_class_dirs` (#90): treating any
+    directory with images somewhere below it as a class dir would make almost
+    any dataset root sniff as YOLO IC and break autodetect with ambiguous
+    matches. A nested-only root therefore requires an explicit
+    ``dataset_format="yolo"``.
+    """
     for child in safe_children(root):
-        if not child.is_dir():
+        if not child.is_dir() or child.is_symlink():
             continue
         if _is_classification_split_dir(child, extensions):
             return True
@@ -312,14 +343,90 @@ def _has_direct_image(path: Path, extensions: frozenset[str]) -> bool:
 
 
 def _is_classification_split_dir(child: Path, extensions: frozenset[str]) -> bool:
-    """Whether ``child`` is a split directory in the ``<split>/<class>/<image>`` layout."""
+    """Whether ``child`` is a split directory in the ``<split>/<class>/<image>`` layout.
+
+    Shallow (direct-child images only) -- this is the ``sniff`` contract. The
+    load-time layout discriminator goes deep via :class:`_ClassDirScan`
+    instead (#90).
+    """
     if infer_split(child.name) is None:
         return False
-    return any(sub.is_dir() and _has_direct_image(sub, extensions) for sub in safe_children(child))
+    return any(
+        sub.is_dir() and not sub.is_symlink() and _has_direct_image(sub, extensions) for sub in safe_children(child)
+    )
+
+
+class _ClassDirScan:
+    """One-pass, symlink-safe image discovery below class directories (#90).
+
+    Directory listings and per-class-dir image walks are memoized, so the
+    layout discriminator, the dropped-directory warning, and record building
+    together list each directory exactly once per load. Symlinked directories
+    are never descended into -- matching ``rglob``'s ``**`` semantics -- so a
+    link can neither smuggle an outside tree into a class nor form a cycle,
+    and every discovered image must itself resolve inside the dataset root,
+    whether or not its final path component is a symlink.
+    """
+
+    def __init__(self, root: Path, extensions: frozenset[str]) -> None:
+        self._root = root
+        self._extensions = extensions
+        self._children: dict[Path, list[Path]] = {}
+        self._images: dict[Path, tuple[Path, ...]] = {}
+
+    def children(self, path: Path) -> list[Path]:
+        cached = self._children.get(path)
+        if cached is None:
+            cached = self._children[path] = safe_children(path)
+        return cached
+
+    def images(self, class_dir: Path) -> tuple[Path, ...]:
+        """Every image below ``class_dir``, recursively, in listing order."""
+        cached = self._images.get(class_dir)
+        if cached is None:
+            cached = self._images[class_dir] = tuple(self._walk(class_dir))
+        return cached
+
+    def _walk(self, directory: Path) -> Iterator[Path]:
+        for child in self.children(directory):
+            if child.is_file():
+                if child.suffix.lower() not in self._extensions:
+                    continue
+                if not within(child, self._root):
+                    logger.warning("Skipping image escaping the dataset root: %s", child)
+                    continue
+                yield child
+            elif child.is_dir() and not child.is_symlink():
+                yield from self._walk(child)
+
+
+def _is_deep_split_dir(child: Path, scan: _ClassDirScan) -> bool:
+    """Load-time discriminator: a split holds a class subdir with an image at any depth (#90)."""
+    if infer_split(child.name) is None:
+        return False
+    return any(scan.images(sub) for sub in scan.children(child) if sub.is_dir() and not sub.is_symlink())
+
+
+def _real_child_dirs(base: Path, scan: _ClassDirScan) -> list[Path]:
+    """Child directories of ``base``, skipping symlinked ones with a warning.
+
+    Split and class directories follow the same no-descend symlink policy as
+    nested directories; ``scan``'s listing memo means the warning fires once
+    per directory per load.
+    """
+    child_dirs: list[Path] = []
+    for child in scan.children(base):
+        if not child.is_dir():
+            continue
+        if child.is_symlink():
+            logger.warning("Skipping symlinked directory (symlinked directories are not descended): %s", child)
+            continue
+        child_dirs.append(child)
+    return child_dirs
 
 
 def _discover_classification_records(
-    root: Path, extensions: frozenset[str], *, splits: frozenset[str] | None = None
+    root: Path, extensions: frozenset[str], *, splits: frozenset[str] | None = None, layout: str = "auto"
 ) -> tuple[list[tuple[Path, str | None, str, str]], list[str]]:
     """Return ``(rows, class_names)`` where each row is ``(image_path, split, class_name, rel_path)``.
 
@@ -332,12 +439,35 @@ def _discover_classification_records(
     ``None`` means no selection (load every split). An explicit selection never
     widens: a flat (split-less) layout under an explicit selection matches
     nothing, mirroring the OD loader's contract.
+
+    ``layout`` overrides the split-vs-flat discriminator (``"split"`` /
+    ``"flat"``); ``"auto"`` decides structurally and warns about non-split
+    directories the split interpretation drops.
     """
-    child_dirs = [child for child in safe_children(root) if child.is_dir()]
-    # Deciding split-vs-flat layout stays structural: a split must hold at least
-    # one class subdirectory with an image. A purely name-based test would misread
-    # a flat-layout class legitimately named "train" as the sole split.
-    uses_split_layout = any(_is_classification_split_dir(child, extensions) for child in child_dirs)
+    scan = _ClassDirScan(root, extensions)
+    child_dirs = _real_child_dirs(root, scan)
+    if layout == "split":
+        uses_split_layout = True
+    elif layout == "flat":
+        uses_split_layout = False
+    else:
+        # Deciding split-vs-flat layout stays structural: a split must hold at
+        # least one class subdirectory with an image (at any depth, #90). A
+        # purely name-based test would misread a flat-layout class legitimately
+        # named "train" as the sole split. The converse ambiguity -- a flat
+        # class named "train" whose images are all nested -- is structurally
+        # identical to a split, so it resolves as one; warn about anything that
+        # interpretation drops, and let layout="flat" override it.
+        uses_split_layout = any(_is_deep_split_dir(child, scan) for child in child_dirs)
+        if uses_split_layout:
+            dropped = [child.name for child in child_dirs if infer_split(child.name) is None and scan.images(child)]
+            if dropped:
+                logger.warning(
+                    "Reading %s as a split layout; ignoring non-split directories with images: %s. "
+                    'If these are class directories, pass layout="flat".',
+                    root,
+                    ", ".join(dropped),
+                )
     records: list[tuple[Path, str | None, str, str]] = []
     class_names: set[str] = set()
     if uses_split_layout:
@@ -348,11 +478,13 @@ def _discover_classification_records(
         if splits is not None:
             split_dirs = [(child, split) for child, split in split_dirs if split in splits]
         for split_dir, split in sorted(split_dirs, key=lambda item: (split_sort_key(item[1]), item[0].name)):
-            recs, names = _classification_records_from_class_dirs(root, split_dir, split=split, extensions=extensions)
+            recs, names = _classification_records_from_class_dirs(
+                root, _real_child_dirs(split_dir, scan), split=split, scan=scan
+            )
             records.extend(recs)
             class_names.update(names)
     elif splits is None:
-        recs, names = _classification_records_from_class_dirs(root, root, split=None, extensions=extensions)
+        recs, names = _classification_records_from_class_dirs(root, child_dirs, split=None, scan=scan)
         records.extend(recs)
         class_names.update(names)
     return sorted(records, key=lambda row: row[3]), sorted(class_names)
@@ -360,35 +492,28 @@ def _discover_classification_records(
 
 def _classification_records_from_class_dirs(
     root: Path,
-    base: Path,
+    class_dirs: list[Path],
     *,
     split: str | None,
-    extensions: frozenset[str],
+    scan: _ClassDirScan,
 ) -> tuple[list[tuple[Path, str | None, str, str]], list[str]]:
-    """Return ``(records, class_names)`` for one base dir.
+    """Return ``(records, class_names)`` for one base dir's class directories.
 
     ``class_names`` lists *every* class subdirectory, including empty ones (no
     images), so the taxonomy is the union of declared classes rather than only
     the classes that happen to contain samples. This keeps dense label indices
-    stable across splits when a class is empty in some split (#81).
+    stable across splits when a class is empty in some split (#81). Symlinked
+    class directories are already excluded (skipped entirely -- not descended,
+    no taxonomy entry): ``class_dirs`` comes from :func:`_real_child_dirs`.
     """
     records: list[tuple[Path, str | None, str, str]] = []
     class_names: list[str] = []
-    for class_dir in safe_children(base):
-        if not class_dir.is_dir():
-            continue
+    for class_dir in class_dirs:
         class_name = class_dir.name
         class_names.append(class_name)
-        # Direct children only -- the documented flat layout, and consistent with
-        # the shallow ``sniff``. (``rglob`` would silently flatten nested
-        # subdirectories into the class and diverge from autodetect.)
-        for image_path in safe_children(class_dir):
-            if not image_path.is_file() or image_path.suffix.lower() not in extensions:
-                continue
-            if image_path.is_symlink() and not within(image_path, root):
-                logger.warning("Skipping symlinked image escaping the dataset root: %s", image_path)
-                continue
-            records.append((image_path, split, class_name, relative_posix(image_path, root)))
+        records.extend(
+            (image_path, split, class_name, relative_posix(image_path, root)) for image_path in scan.images(class_dir)
+        )
     return records, class_names
 
 

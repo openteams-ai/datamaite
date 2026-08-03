@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- YOLO image-classification discovery is now recursive (#90): images anywhere
+  below a class directory (`<split>/<class>/**/<image>`) load with the
+  top-level directory as the class and the nested relative path preserved in
+  the datum ID — nested subdirectories never become classes. The split-vs-flat
+  layout discriminator recognises nested-only splits, so they no longer load
+  empty. Autodetect `sniff` deliberately stays shallow (a nested-only root
+  needs an explicit `dataset_format="yolo"`).
+- YOLO image-classification loader gains a `layout` option (`"auto"` /
+  `"split"` / `"flat"`, #90): a flat root whose class directory is named like
+  a split and nests all its images is structurally identical to a split
+  layout, so `"auto"` reads it as one — it now warns about every non-split
+  directory that interpretation drops, and `layout="flat"` (or `"split"`)
+  makes the intent explicit. Symlink policy is hardened and uniform: symlinked
+  directories — split, class, or nested — are never descended into (a
+  symlinked class directory could previously smuggle an outside tree in), and
+  every discovered image must resolve inside the dataset root whether or not
+  it is itself a symlink. Symlinking the dataset *root* still works; in-root
+  file symlinks still load. Discovery also lists each directory exactly once
+  per load (the discriminator and record building share one memoized scan).
 - YOLO image-classification loader gains a native `split` option (#86), matching
   the OD loader's semantics (#78): `load_ic(root, dataset_format="yolo",
   split="validation")` loads only that split, aliases (`validation`/`valid` →

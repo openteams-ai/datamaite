@@ -42,7 +42,7 @@ hold the exact rules.
 | `flat_mp4` | MOT | `load_mot(dataset_format="flat_mp4")` | a flat directory of `*.mp4` clips (no annotations) |
 | `coco` | OD | `load_od(dataset_format="coco")` | `annotations/instances.json` + image files |
 | `yolo` | OD | `load_od(dataset_format="yolo")` | `data.yaml` + `images/<split>/…` + `labels/<split>/…` (absent/empty label file ⇒ background image) |
-| `yolo` | IC | `load_ic(dataset_format="yolo")` | `<split>/<class>/*.{jpg,png,…}` folder tree — folder names become class labels |
+| `yolo` | IC | `load_ic(dataset_format="yolo")` | `<split>/<class>/**/*.{jpg,png,…}` folder tree — top-level folder names become class labels; images may nest deeper (autodetect stays shallow). `layout="flat"`/`"split"` overrides the split-vs-flat inference when a class is named like a split |
 | `visdrone` | OD / IC | `load_od` / `load_ic(dataset_format="visdrone")` | `images/*.jpg` + `annotations/*.txt` (VisDrone-DET layout) |
 | `huggingface_vision` | OD / IC | `load_od` / `load_ic(dataset_format="huggingface_vision")` | Hugging Face ImageFolder / parquet vision dataset |
 | `huggingface_video_classification` | VC | `load_vc(dataset_format="huggingface_video_classification")` | VideoFolder: `<split>/<class>/*.mp4` (+ optional metadata) |
