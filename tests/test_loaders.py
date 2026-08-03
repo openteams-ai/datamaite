@@ -157,6 +157,43 @@ class TestAutodetect:
         with pytest.raises(ValueError, match="autodetect"):
             load(tmp_path, dataset_format=None)
 
+    def test_autodetect_yolo_ic_warns_about_folder_labels(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Arbitrary named image subfolders match the YOLO IC layout; the guess
+        # must be loud so folder-names-as-class-labels never happens silently (#40).
+        for folder in ("vacation", "misc"):
+            (tmp_path / folder).mkdir()
+            (tmp_path / folder / "img.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+        with caplog.at_level("WARNING", logger="datamaite.loaders"):
+            dataset = load(tmp_path, dataset_format=None)
+
+        assert len(dataset) == 2
+        assert any("subfolder names will be used as class labels" in rec.message for rec in caplog.records)
+
+    def test_explicit_yolo_ic_does_not_warn(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # The warning is an autodetect concern only; asking for YOLO IC by name
+        # is unambiguous and stays quiet.
+        (tmp_path / "cat").mkdir()
+        (tmp_path / "cat" / "img.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+        with caplog.at_level("WARNING", logger="datamaite.loaders"):
+            load(tmp_path, dataset_format="yolo", task="ic")
+
+        assert not any("class labels" in rec.message for rec in caplog.records)
+
+
+class TestFileRoots:
+    def test_file_root_raises_not_a_directory(self, tmp_path: Path) -> None:
+        # datamaite reads directories only; a file root -- archive or otherwise --
+        # is a plain caller error with no format-specific handling (#40).
+        for name in ("dataset.zip", "notes.txt"):
+            stray = tmp_path / name
+            stray.write_bytes(b"data")
+            with pytest.raises(NotADirectoryError, match="dataset root is not a directory"):
+                load(stray, dataset_format=None)
+
 
 class TestEquivalenceWithLoadMot:
     def test_load_dispatch_matches_load_mot(self, tmp_path: Path) -> None:

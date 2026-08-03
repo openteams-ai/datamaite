@@ -412,6 +412,16 @@ def _detect_format(
             matches.append(key)
     if len(matches) == 1:
         key = matches[0]
+        if key.task is Task.IC and key.format is DatasetFormat.YOLO:
+            # Any folder of image-bearing subdirectories matches the YOLO IC
+            # layout, so this guess can silently mislabel arbitrary folders
+            # (folder names become class labels) — say so out loud (#40).
+            logger.warning(
+                "Autodetected %s as YOLO image-classification: subfolder names will be used as "
+                "class labels. If these folders are not class labels, move the images into a flat directory "
+                "and load it with dataset_format='flat_images'.",
+                root,
+            )
         return key.format, key.task, key.variant
     if matches:
         choices = ", ".join(f"{k.task.value}:{k.format.value}:{k.variant}" for k in matches)
