@@ -28,12 +28,12 @@ Neither replaces the other.
 
 ```bash
 # Default: hermetic suite only (e2e is deselected by the `integration` marker)
-poetry run pytest
+uv run pytest
 
 # e2e: point at an example-data checkout, then opt in via the marker
 git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite-example-datasets.git
 export DATAMAITE_DATASETS_ROOT=$PWD/datamaite-example-datasets/datasets
-poetry run pytest tests/e2e -m integration -s    # -s shows the summary table
+uv run pytest tests/e2e -m integration -s    # -s shows the summary table
 ```
 
 ## How the opt-in works
@@ -69,7 +69,7 @@ the tests at it. The image tag below must match the `MINIO_E2E_IMAGE`
 variable in the `e2e-s3` job in `.gitlab-ci.yml` — keep the two in sync:
 
 ```bash
-poetry install --extras dev --extras aws --extras fmv
+uv sync --extra dev --extra aws --extra fmv
 
 docker run -d --rm --name datamaite-minio-e2e -p 9123:9000 \
   -e MINIO_ROOT_USER=datamaite-e2e -e MINIO_ROOT_PASSWORD=datamaite-e2e-secret \
@@ -78,7 +78,7 @@ docker run -d --rm --name datamaite-minio-e2e -p 9123:9000 \
 export DATAMAITE_S3_E2E_ENDPOINT=http://127.0.0.1:9123
 export DATAMAITE_S3_E2E_KEY=datamaite-e2e
 export DATAMAITE_S3_E2E_SECRET=datamaite-e2e-secret
-poetry run pytest tests/e2e/test_s3_minio.py -m integration --no-cov -v
+uv run pytest tests/e2e/test_s3_minio.py -m integration --no-cov -v
 
 docker stop datamaite-minio-e2e
 ```

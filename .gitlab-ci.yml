@@ -33,13 +33,30 @@ stages:
   - release
 
 variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
+  # Cache under the project dir so GitLab can archive it, and on the same
+  # filesystem as .venv so uv hardlinks rather than copies.
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.cache/uv"
+  # Download-cache policy: every job reads it, exactly one job writes it (see
+  # `lint`). Eleven writers under one key would re-upload ~110MB each per
+  # pipeline, last-writer-wins, for no benefit.
+  UV_DOWNLOAD_CACHE_POLICY: "pull"
   # Full clone history + tags: uv-dynamic-versioning derives the package
   # version from the git tag (#85), so every build needs real history.
   GIT_DEPTH: "0"
-  # Pin Poetry to avoid silent drift.
-  POETRY_PIN: "2.4.1"
+  # Pin uv to avoid silent drift.
+  UV_PIN: "0.10.6"
+  # Never download a managed interpreter: each job runs on the Python that ships
+  # in its own python:${VERSION}-slim image, which is the only one present.
+  # Deliberately NOT paired with UV_PYTHON -- an environment-provided interpreter
+  # *name* is only a discovery preference and is silently ignored in favour of an
+  # existing .venv, so it cannot pin anything. The interpreter is pinned by
+  # putting ${VERSION} in the venv cache key instead (see `cache:` below), which
+  # stops a wrong-version .venv from being restored in the first place.
+  UV_PYTHON_DOWNLOADS: "never"
+  # Pin the PEP 517 build environment everywhere, not just in the release job:
+  # `uv sync` installs the root project through hatchling, so every job now
+  # resolves hatchling + uv-dynamic-versioning and their transitive closure.
+  UV_BUILD_CONSTRAINT: "$CI_PROJECT_DIR/scripts/publish-build-constraints.txt"
 
 # Clone the shared example-datasets repo to one canonical location used by every
 # job that needs it (docs build + e2e integration matrix), and export
@@ -77,31 +94,59 @@ variables:
     - apt-get update -qq && apt-get install -y -qq git git-lfs libatomic1
     # Trust the GitLab checkout for build backends that call git to derive package metadata.
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
-    - pip install --quiet --upgrade pip
-    - pip install --quiet "poetry==${POETRY_PIN}"
-    - poetry config virtualenvs.in-project true
+    # Acquire uv from PyPI, matching the publish job below and both sibling repos
+    # (checkmaite, modelmaite). Preferred over astral.sh's install script: that
+    # script performs no integrity check on the binary it downloads ("no
+    # checksums to verify"), and pins only a *name* on a GitHub release asset,
+    # which can be replaced in place -- whereas a PyPI filename is immutable.
+    # These jobs receive protected CI variables on tag pipelines.
+    - pip install --quiet "uv==${UV_PIN}"
     - python --version
-    - poetry --version
-    - poetry check
+    - uv --version
+    # Nothing else asserts the pin actually took effect. Exact match on the
+    # version field, not a substring: `uv --version` prints
+    # "uv <version> (<hash> <date>)", so the whole string never equals the pin.
+    - test "$(uv --version | cut -d' ' -f2)" = "${UV_PIN}"
+    # Fail fast if uv.lock has drifted from pyproject.toml (SR-3-H-4).
+    - uv lock --check
   cache:
-    # Key the venv cache per job (CI_JOB_NAME), not just per Python version.
-    # Jobs install different dependency extras (lint/typecheck/test use
-    # --extras dev; build runs `poetry build` with none), but they previously
-    # shared one key per Python version. Last-writer-wins then let a job
-    # restore a .venv another job had populated without the dev extra, so
-    # `poetry install --extras dev` no-op'd and `pre-commit` was missing.
+    # Keyed per job AND per interpreter version. The version in the key is
+    # load-bearing: a restored .venv silently wins over an environment-provided
+    # UV_PYTHON *name* request, so a key without ${VERSION} let a job bump its
+    # VERSION and keep running on the old interpreter, with `python --version`
+    # printing the new one and nothing checking .venv. Seven jobs have
+    # version-agnostic names, so CI_JOB_NAME alone does not encode it.
+    # The companion fix for stale *versions* is `[tool.uv] cache-keys` in
+    # pyproject.toml, which re-roots the project when the commit or tag moves --
+    # `uv sync` otherwise reuses the built editable wheel even after .venv is
+    # deleted, and the docs jobs would publish a stale version.
     - key:
         files:
-          - poetry.lock
+          - uv.lock
         # No ref-slug: every tag is a fresh ref, so a per-ref key made release
-        # pipelines rebuild all venvs cold. poetry.lock fingerprints content,
-        # and protected/unprotected cache separation isolates release caches.
-        prefix: "venv-${CI_JOB_NAME}"
+        # pipelines rebuild all venvs cold. uv.lock fingerprints content, and
+        # protected/unprotected cache separation isolates release caches.
+        prefix: "venv-${CI_JOB_NAME}-py${VERSION}"
       paths:
         - .venv/
-    - key: pip-downloads
+    # uv's download cache, with a deliberately STATIC key -- no `files:`. That is
+    # the point of it: the .venv entry above is fingerprinted on uv.lock, so any
+    # dependency change invalidates all 11 uv-using jobs' environments in the
+    # same pipeline, and this is the only entry that survives to serve that
+    # cold-venv case. Measured: cold .venv with this cache present rebuilds the
+    # whole environment via `uv sync --locked --offline` with zero network; with
+    # it absent the same sync must reach PyPI (which is how a PyPI outage turned
+    # a dependency bump into four manual retries). A warm .venv needs no
+    # downloads either way, so this earns its keep only on lock changes -- which
+    # is exactly when every job needs it at once.
+    #
+    # `uv cache prune --ci` is NOT used: it cuts 114MB to 1MB, but uv stores
+    # registry wheels unzipped, so pruning the unzipped form removes what an
+    # offline install needs. Size is bounded by the single-writer policy instead.
+    - key: uv-downloads
       paths:
-        - .cache/pip
+        - .cache/uv
+      policy: ${UV_DOWNLOAD_CACHE_POLICY}
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: on_success
@@ -137,9 +182,26 @@ lint:
   needs: []
   variables:
     VERSION: "3.11"
+    # The one job that writes the shared download cache; every other job pulls.
+    # `lint` is in the first stage, so a refreshed entry is available to the rest
+    # of the pipeline.
+    UV_DOWNLOAD_CACHE_POLICY: "pull-push"
   script:
-    - poetry install --extras dev --no-root
-    - poetry run pre-commit run --all-files
+    # --no-install-project mirrors the old --no-root: pre-commit lints the
+    # source tree and never imports datamaite. --no-sync then keeps `uv run`
+    # from re-syncing (and thus installing) the project it just skipped.
+    - uv sync --locked --extra dev --no-install-project
+    - uv run --no-sync pre-commit run --all-files
+    # requirements.txt is a generated SCA input for the dr-compliance component,
+    # which parses the tree and does not read uv.lock. Fail on drift so the scan
+    # can never silently go stale while uv.lock moves on.
+    - |
+      scripts/export-requirements.sh /tmp/requirements.expected
+      if ! diff -q requirements.txt /tmp/requirements.expected; then
+        echo "requirements.txt has drifted from uv.lock -- regenerate it with:"
+        echo "  scripts/export-requirements.sh"
+        exit 1
+      fi
 
 # ---------------------------------------------------------------------------
 # Type checking
@@ -153,8 +215,8 @@ pyright:
   script:
     # Task extras (all) + maite so cv2/numpy/av/maite resolve and pyright
     # stays at 0 warnings; dev for the toolchain.
-    - poetry install --extras dev --extras maite --extras all
-    - poetry run pyright src/
+    - uv sync --locked --extra dev --extra maite --extra all
+    - uv run --no-sync pyright src/
 
 # ---------------------------------------------------------------------------
 # Build
@@ -166,10 +228,10 @@ build:
   variables:
     VERSION: "3.13"
   script:
-    - poetry build
+    - uv build
     - |
       if [ -n "${CI_COMMIT_TAG:-}" ]; then
-      python - "$CI_COMMIT_TAG" <<'PY'
+      uv run --no-project --with "packaging==26.2" python - "$CI_COMMIT_TAG" <<'PY'
       import sys
       from pathlib import Path
       from packaging.utils import parse_sdist_filename, parse_wheel_filename
@@ -242,12 +304,24 @@ build:
     # No pip self-upgrade here: the publish toolchain must not float between a
     # release and its recovery re-run (digest verification requires the retry
     # rebuild to be byte-identical).
-    - pip install --quiet "poetry==${POETRY_PIN}" "twine==6.2.0" "check-wheel-contents==0.6.3"
-    # Pin the PEP 517 isolated build env deps too (hatchling's helpers);
-    # pip-based build isolation honors PIP_CONSTRAINT.
-    - export PIP_CONSTRAINT="$CI_PROJECT_DIR/scripts/publish-build-constraints.txt"
+    # uv builds. twine and check-wheel-contents only inspect and upload the
+    # finished artifacts, so they take no part in producing them and their
+    # versions cannot affect byte-identical rebuilds -- they stay pip-installed
+    # and pinned simply because one pinned install line covers all three.
+    # Moving them to `uv tool`/`uvx` is viable; it would trade a pinned install
+    # for an ephemeral resolve during a release upload.
+    # `packaging` is explicit: the three inline `python - <<PY` heredocs below
+    # (tag-version assert, post-upload digest verifier) import packaging.utils.
+    # `pip install poetry` used to supply it incidentally; the uv wheel has no
+    # dependencies, so without this it would arrive only as an unpinned
+    # transitive of twine -- and the digest verifier runs *after* twine upload,
+    # where losing it fails mid-release. Version matches the constraints file.
+    - pip install --quiet "uv==${UV_PIN}" "twine==6.2.0" "check-wheel-contents==0.6.3" "packaging==26.2"
+    # The PEP 517 build environment is pinned by UV_BUILD_CONSTRAINT in the
+    # top-level `variables:` block, which this job inherits -- uv resolves its
+    # own build env and never reads PIP_CONSTRAINT. Nothing to re-export here.
     - python --version
-    - poetry --version
+    - uv --version
     - twine --version
     - check-wheel-contents --version
   script:
@@ -292,7 +366,7 @@ build:
 
       # The pipeline already checked out the tag; build straight from it.
       rm -rf dist/
-      poetry build
+      uv build
       twine check dist/*
       check-wheel-contents dist/*.whl
 
@@ -508,12 +582,11 @@ pages:
     - *clone_example_data
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
-    - poetry install --extras docs
-    # Reinstall the root project through the hatchling backend: poetry's own
-    # develop-install registers the [tool.poetry] placeholder 0.0.0, which the
-    # executed tutorial notebooks would print into the published docs.
-    - poetry run pip install --quiet --no-deps -e .
-    - poetry run sphinx-build -b html docs public
+    # `uv sync` installs the root project through the hatchling backend, so the
+    # executed tutorial notebooks print the SCM-derived version -- no separate
+    # reinstall step is needed to dodge a develop-install placeholder.
+    - uv sync --locked --extra docs
+    - uv run --no-sync sphinx-build -b html docs public
   artifacts:
     paths:
       - public
@@ -533,12 +606,11 @@ pages-preview:
     - *clone_example_data
     # docs extra bundles the Sphinx toolchain and notebook/all/maite runtime
     # deps the tutorial notebooks import when myst-nb executes them.
-    - poetry install --extras docs
-    # Reinstall the root project through the hatchling backend: poetry's own
-    # develop-install registers the [tool.poetry] placeholder 0.0.0, which the
-    # executed tutorial notebooks would print into the published docs.
-    - poetry run pip install --quiet --no-deps -e .
-    - poetry run sphinx-build -b html docs public
+    # `uv sync` installs the root project through the hatchling backend, so the
+    # executed tutorial notebooks print the SCM-derived version -- no separate
+    # reinstall step is needed to dodge a develop-install placeholder.
+    - uv sync --locked --extra docs
+    - uv run --no-sync sphinx-build -b html docs public
   artifacts:
     expose_as: "Documentation Preview"
     paths:
@@ -553,7 +625,7 @@ pages-preview:
     - when: never
 
 # ---------------------------------------------------------------------------
-# Test matrix (Python 3.10, 3.11, 3.12, 3.13)
+# Test matrix (Python 3.10, 3.11, 3.12, 3.13, 3.14)
 # ---------------------------------------------------------------------------
 .test-base:
   extends: .shared-setup
@@ -562,8 +634,8 @@ pages-preview:
   script:
     # all (cv2/av) media decoders + maite extra (maite/numpy/av) so the
     # datamaite.maite tests run and count toward the 90% coverage gate; dev tooling.
-    - poetry install --extras dev --extras maite --extras all
-    - poetry run pytest tests -vvv --cov=datamaite --cov-report term-missing
+    - uv sync --locked --extra dev --extra maite --extra all
+    - uv run --no-sync pytest tests -vvv --cov=datamaite --cov-report term-missing
         --cov-report xml:coverage_report.xml --cov-fail-under=90
   coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
   artifacts:
@@ -627,10 +699,10 @@ integration:
     # Clones the default branch (main): the multi-format datasets/<format>/
     # layout and the counts this matrix asserts are merged there.
     - *clone_example_data
-    - poetry install --extras dev --extras maite --extras all
+    - uv sync --locked --extra dev --extra maite --extra all
     # -s so the end-of-run matrix summary table is shown in the job log.
     # Scope to tests/e2e (the e2e tier) and the `integration` marker.
-    - poetry run pytest tests/e2e -m integration -v -s --cov-fail-under=0
+    - uv run --no-sync pytest tests/e2e -m integration -v -s --cov-fail-under=0
 
 # ---------------------------------------------------------------------------
 # E2E: S3 object storage tier, against a real S3-API server (MinIO), not the
@@ -704,11 +776,11 @@ e2e-s3:
       fi
     # aws (s3fs) for the storage_options plumbing under test, fmv (opencv/av)
     # for the factory-built mp4s and video probing; dev for the toolchain.
-    - poetry install --extras dev --extras aws --extras fmv
+    - uv sync --locked --extra dev --extra aws --extra fmv
     # The slim image has no curl, so poll the MinIO health endpoint from
     # Python (~30 x 2s) and fail loudly if the service never comes up.
     - |
-      poetry run python -c '
+      uv run --no-sync python -c '
       import os, sys, time, urllib.request
       url = os.environ["DATAMAITE_S3_E2E_ENDPOINT"].rstrip("/") + "/minio/health/live"
       for attempt in range(30):
@@ -723,7 +795,7 @@ e2e-s3:
       else:
           sys.exit("MinIO service at %s never became ready" % url)
       '
-    - poetry run pytest tests/e2e/test_s3_minio.py -m integration --no-cov -q
+    - uv run --no-sync pytest tests/e2e/test_s3_minio.py -m integration --no-cov -q
 
 # ---------------------------------------------------------------------------
 # DR Compliance (JATIC program requirement)

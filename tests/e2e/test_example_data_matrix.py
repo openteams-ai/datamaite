@@ -10,7 +10,7 @@ directory of an example-data checkout and select the marker::
 
     git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite-example-datasets.git
     export DATAMAITE_DATASETS_ROOT=$PWD/datamaite-example-datasets/datasets
-    poetry run pytest -m integration -s     # -s shows the summary report
+    uv run pytest -m integration -s     # -s shows the summary report
 
 Skipped by default: the marker is deselected in ``pyproject.toml`` *and* every
 test skips when the env var is unset, so the hermetic unit suite and the 90%

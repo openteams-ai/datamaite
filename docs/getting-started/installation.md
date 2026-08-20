@@ -2,20 +2,41 @@
 
 `datamaite` ships as one package with task-oriented extras. The core install is
 kept deliberately small so annotation loading, conversion dispatch, and HMIE
-structure/annotation validation do not pull in native media stacks. `datamaite` supports Python 3.10–3.13.
+structure/annotation validation do not pull in native media stacks. `datamaite` supports Python 3.10–3.14.
 
-## From source with Poetry
+## With pip
+
+Released versions install from PyPI with pip, which is the supported path for
+consumers:
 
 ```bash
-git clone https://github.com/openteams-ai/datamaite.git
-cd datamaite
-poetry install --extras all
+pip install datamaite
+pip install 'datamaite[all]'
 ```
+
+The `datamaite` entry point lands on your PATH, so the CLI is `datamaite
+validate …` with no runner prefix.
+
+## From source with uv
+
+uv is the project's own toolchain and what CI runs, so a source checkout builds
+and tests exactly as the pipeline does:
+
+```bash
+git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite.git
+cd datamaite
+uv sync --extra all
+```
+
+`uv sync` creates `.venv` without activating it, so prefix commands with
+`uv run` (`uv run datamaite validate …`) or activate the venv yourself. See
+[README_DEV.md](https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite/-/blob/main/README_DEV.md)
+for the full developer workflow.
 
 ## Optional dependency extras
 
 Optional dependencies are exposed as PEP 621 extras; install only the ones you
-need with `--extras <name>` (repeat the flag to combine):
+need with `--extra <name>` (repeat the flag to combine):
 
 | Extra | Adds | Enables |
 |---|---|---|
@@ -37,5 +58,5 @@ It includes PyAV because the MOT MAITE view decodes video-backed sequences.
 For example, to install everything needed to run the tutorial notebooks:
 
 ```bash
-poetry install --extras all --extras maite --extras notebook
+uv sync --extra all --extra maite --extra notebook
 ```

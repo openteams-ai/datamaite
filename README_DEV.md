@@ -1,18 +1,64 @@
-# Alternative Package Managers
+# Development Workflow
 
-The primary workflow uses **Poetry** (required for CI). Two alternatives are
-available for local development:
-
-## uv (fast pip-based)
+The primary workflow uses **uv**, which is also what CI runs — a green local
+run is the same resolution CI gets.
 
 ```bash
 uv sync --all-extras
 uv run pytest
 uv run pre-commit run --all-files
 uv run pyright src/
+uv build
 ```
 
+`uv.lock` is the lock file of record. CI verifies it is in sync with
+`pyproject.toml` (`uv lock --check`), so run `uv lock` and commit the result
+whenever you change a dependency.
+
+A dependency change also needs the generated `requirements.txt` refreshed — it
+is the DR-compliance scanner's only readable input, since that component does
+not parse `uv.lock`. The `lint` job fails on drift:
+
+```bash
+scripts/export-requirements.sh
+```
+
+### Where dependencies are declared
+
+One place, with three consumers derived from it:
+
+| File | Role | Who maintains it |
+|---|---|---|
+| `pyproject.toml` `[project]` / `[project.optional-dependencies]` | **Source of truth** for runtime deps and every extra | edit by hand |
+| `uv.lock` | Lock file of record; pins the resolved graph with hashes | `uv lock` |
+| `requirements.txt` | Generated projection for DR-compliance dependency scanning only — never an install path | `scripts/export-requirements.sh` |
+| `pixi.toml` | Conda/pixi environment; carries its **own duplicated** dev-dependency list | edit by hand, see the caveat below |
+
+So: add or change a dependency in `pyproject.toml`, then run `uv lock` and
+`scripts/export-requirements.sh` and commit all three. pip consumes the same
+`pyproject.toml` metadata directly, so there is nothing extra to update for it.
+
+`pixi.toml` is the exception and the trap: it restates the dev toolchain
+(`pre-commit`, `pytest`, `pytest-cov`, `ruff`, `pyright`, `bandit`) instead of
+reading the `dev` extra. Add a dev tool to `pyproject.toml`, run `uv lock`, and
+CI goes green while `pixi run lint` / `pixi run typecheck` keep using the old
+toolchain — nothing detects the divergence, because no CI job exercises pixi.
+
 ## pixi (conda-forge based)
+
+> **Known broken, and not CI-verified.** `pixi run test` (and therefore
+> `pixi run check`) currently fails at collection: `pixi.toml` declares only
+> `python` and `pydantic`, while `universal-pathlib` and `fsspec` are core
+> runtime dependencies and `maite` is a dev dependency, and
+> `pixi run install` (`pip install -e . --no-deps`) fills none of them. Its
+> `python = ">=3.10,<3.14"` is also narrower than the project's
+> `requires-python`, so it cannot cover the 3.14 test matrix, and `pixi.lock` is
+> gitignored so the environment is unpinned. No CI job runs pixi.
+>
+> This is pre-existing drift rather than a regression from the uv migration
+> (#60), and it is deliberately left alone here: #89 proposes removing pixi in
+> favour of a conda-lock workflow, so fixing `pixi.toml` now would be work that
+> issue deletes. Use uv unless you specifically need conda-forge.
 
 Useful on machines where pip-installing opencv is difficult (e.g., SUNet).
 
@@ -29,22 +75,20 @@ Configuration lives in `pixi.toml` (separate from `pyproject.toml`).
 ## `datamaite.__version__` in development environments
 
 The version is derived from the git tag at build time and read back from the
-installed metadata at runtime. `poetry install` is the one path that bypasses
-the build backend: Poetry's develop-install registers the literal
-`[tool.poetry].version` placeholder (`0.0.0`) instead of building through
-hatchling + uv-dynamic-versioning. `_version.py` detects the placeholder and
-derives the version from git via dunamai (part of the `dev` extra), so a
-`poetry install --extras dev` environment still reports the SCM version. In a
-Poetry environment **without** the dev extra, `datamaite.__version__` reports
-`0.0.0`; reinstall the root project through the backend if that matters:
+installed metadata at runtime. `uv sync` installs the root project through
+hatchling + uv-dynamic-versioning, so an ordinary development environment
+reports the SCM-derived version with no extra step.
 
-```bash
-poetry run pip install --no-deps -e .
-```
+A clone without tags still gets a real version, just an unflattering one
+(`0.0.0.postN.devN+<sha>` — dunamai's no-tag serialization, not a `0.0.0`
+release). The literal `0.0.0` fallback appears only when the backend cannot use
+git at all, such as building from a tarball export.
 
-(The docs CI jobs do exactly this so executed notebooks don't print `0.0.0`.
-Note that a pip editable install bakes the version at install time — it goes
-stale as commits/tags land until you reinstall.)
+An editable install bakes the version at install time, so it would go stale as
+commits and tags land. `[tool.uv] cache-keys` in `pyproject.toml` declares the
+git commit and tags as cache keys for exactly that reason, so `uv sync` rebuilds
+the root when either moves — without it, `uv sync` reuses the cached editable
+wheel and reports a stale version even after you delete `.venv`.
 
 ## Releasing (#85)
 

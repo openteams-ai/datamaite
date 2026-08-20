@@ -37,7 +37,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation, publishes to TestPyPI automatically with digest verification, gates PyPI behind one manual approval in the same pipeline, and creates the GitLab Release from this changelog's section for the tag. The package version is derived from the git tag (uv-dynamic-versioning); `[project].version` and the version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline is retired. Release tags must be canonically spelled — leading zeros in any numeric component (`01.02.03`, `0.5.0-rc01`) are rejected so the published version can never differ from the tag. In Poetry development environments (where `poetry install` registers the `0.0.0` placeholder), `datamaite.__version__` now falls back to the git-derived version via dunamai (added to the `dev` extra).
+- Dependency management, CI, and the developer workflow now run on **uv**
+  instead of Poetry (#60). `uv.lock` is the lock file of record and CI fails if
+  it has drifted from `pyproject.toml` (`uv lock --check`); `poetry.lock` is
+  removed. Every lint / typecheck / build / test / docs job installs with
+  `uv sync --locked` and runs with `uv run`. Correctness of the per-job
+  interpreter comes from two things together: `UV_PYTHON_DOWNLOADS=never` leaves
+  each job only the Python shipped in its own image, and the venv cache key
+  carries `${VERSION}` so a wrong-interpreter environment is never restored in
+  the first place — an environment-provided interpreter *name* would not have
+  overridden one. The docs jobs' editable-reinstall workaround is likewise
+  replaced rather than simply unnecessary: `uv sync` installs the root through
+  hatchling, and `[tool.uv] cache-keys` re-roots it when the commit or tag moves,
+  so executed tutorial notebooks print the current version instead of a stale
+  baked one.
+  Developer commands are now `uv sync --extra …` /
+  `uv run …` / `uv build` throughout the README and docs. The release publish
+  job builds with `uv build` too. The PEP 517 build-environment pin is now set
+  globally as `UV_BUILD_CONSTRAINT` rather than only on the release job, because
+  installing the root through hatchling means *every* job resolves a build
+  environment (uv resolves its own and does not read `PIP_CONSTRAINT`); #85's
+  byte-identical recovery rebuilds still hold. `twine` and
+  `check-wheel-contents` stay pip-installed and pinned, and `packaging` is now
+  pinned explicitly wherever the inline release scripts import it. Poetry and
+  `[tool.poetry]` are gone entirely.
+- `README_DEV.md` now documents where dependencies are declared and which files
+  are derived from which (#60): `pyproject.toml` extras are the source,
+  `uv.lock` the lock of record, `requirements.txt` a generated compliance
+  projection, and `pixi.toml` a hand-maintained duplicate of the dev toolchain
+  that nothing in CI verifies. The pixi section is also flagged as known-broken
+  and left unrepaired, since #89 proposes removing pixi entirely.
+- A generated `requirements.txt` is committed as a dependency-scanning input
+  (#60). The DR-compliance component parses the checked-out tree and does not
+  understand `uv.lock`, so deleting `poetry.lock` dropped its SBOM from 201
+  packages to 0. The file is derived from `uv.lock`
+  (`uv export --all-extras --no-emit-project`), carries hashes, excludes the
+  project itself, and the `lint` job fails if the two disagree — so `uv.lock`
+  stays the single source of truth and the scan cannot silently go stale.
+  Verified in CI: Syft now catalogues 213 records / 201 unique packages, all
+  attributed to `requirements.txt` and none to `uv.lock`, restoring the same
+  201-package coverage the `poetry.lock` scan had. It is not an install path:
+  use `uv sync` for development and `pip install datamaite` as a consumer.
+- CI caching is fixed rather than removed (#60). A restored `.venv` had two
+  failure modes: it silently overrode the requested interpreter (an
+  environment-provided `UV_PYTHON` name is only a discovery preference), and it
+  was never re-rooted, so `uv sync` kept a stale baked version that the docs jobs
+  would publish. The venv cache key now carries the interpreter version
+  (`venv-${CI_JOB_NAME}-py${VERSION}`) so a wrong-version environment cannot be
+  restored, and `[tool.uv] cache-keys` re-roots the project when the commit or
+  tag moves. uv's download cache is kept under a deliberately static key — the
+  venv entries are fingerprinted on `uv.lock`, so a dependency change
+  invalidates every job's environment at once, and the download cache is what
+  lets those jobs rebuild offline instead of all hammering PyPI. Only one job
+  writes it (`policy: pull` everywhere, `pull-push` on `lint`), so it is
+  uploaded once per pipeline rather than eleven times.
+- `datamaite.__version__` no longer re-derives from git via dunamai when the
+  installed metadata reports the `0.0.0` fallback (#60), and `dunamai` is dropped
+  from the `dev` extra. That path existed for `poetry install`, which registered
+  the placeholder on every developer machine; on the uv path it cannot trigger (a
+  tagless clone bakes `0.0.0.postN.devN+<sha>`, not `0.0.0`), it read git
+  relative to the installed file — so a placeholder install inside an unrelated
+  repository reported *that* repository's tag — and it ran a `git` subprocess at
+  import time. Placeholder metadata is now reported as-is.
+- Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation, publishes to TestPyPI automatically with digest verification, gates PyPI behind one manual approval in the same pipeline, and creates the GitLab Release from this changelog's section for the tag. The package version is derived from the git tag (uv-dynamic-versioning); `[project].version` and the version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline is retired. Release tags must be canonically spelled — leading zeros in any numeric component (`01.02.03`, `0.5.0-rc01`) are rejected so the published version can never differ from the tag.
 
 ### Fixed
 

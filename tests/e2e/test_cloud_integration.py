@@ -4,7 +4,7 @@ Requires ``DATAMAITE_CLOUD_TEST_ROOT`` (an ``s3://`` or ``gs://`` URL of a
 small HMIE-layout tree with generic test content) plus provider credentials
 in the environment, and the matching backend extra installed. Run with:
 
-    DATAMAITE_CLOUD_TEST_ROOT=s3://bucket/prefix poetry run pytest -m integration tests/e2e/test_cloud_integration.py
+    DATAMAITE_CLOUD_TEST_ROOT=s3://bucket/prefix uv run pytest -m integration tests/e2e/test_cloud_integration.py
 """
 
 from __future__ import annotations

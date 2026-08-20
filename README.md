@@ -8,19 +8,19 @@ A unified framework for dataset loading, conversion, and quality validation.
 # Clone and install
 git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite.git
 cd datamaite
-poetry install --extras dev --extras all
+uv sync --extra dev --extra all
 
 # Validate a dataset
-datamaite validate /path/to/dataset
+uv run datamaite validate /path/to/dataset
 
 # Validate multiple batches at once
-datamaite validate /path/to/batches/
+uv run datamaite validate /path/to/batches/
 
 # Verbose output (individual findings)
-datamaite -v validate /path/to/dataset
+uv run datamaite -v validate /path/to/dataset
 
 # Save full report to file
-datamaite validate /path/to/dataset -o report.txt
+uv run datamaite validate /path/to/dataset -o report.txt
 ```
 
 ## Supported formats
@@ -66,7 +66,7 @@ yet.
 | COCO object detection | ✅ | — | ✅ |
 | YOLO object detection | ✅ | — | ✅ |
 
-See [docs/architecture.md](docs/architecture.md) for the loader / writer design
+See [docs/reference/architecture.md](docs/reference/architecture.md) for the loader / writer design
 and how to add a new loader or writer.
 
 ## Installation extras
@@ -98,7 +98,7 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 MAITE protocols structurally. The `maite` extra is available for consumers and
 conformance tests that want the MAITE package installed alongside the adapters;
 it includes PyAV because the MOT MAITE view decodes video-backed sequences.
-See [docs/packaging.md](docs/packaging.md) for the dependency contract.
+See [docs/getting-started/installation.md](docs/getting-started/installation.md) for the dependency contract.
 
 ### Cloud object storage
 
@@ -391,7 +391,7 @@ or `convert(..., input_format="yolo", output_format="yolo")` calls should pass
 that discriminator for you.
 
 For a full load → verify → export-ready walkthrough on synthetic data, see
-[docs/tool-usage/dataset_bridge_demo.ipynb](docs/tool-usage/dataset_bridge_demo.ipynb).
+[docs/tutorials/Working_with_FMV_datasets.ipynb](docs/tutorials/Working_with_FMV_datasets.ipynb).
 
 ## MAITE interoperability
 
@@ -520,7 +520,7 @@ the same box/category/frame content represented by `BoxTrackDataset`; VC/OD/IC
 routes preserve their task records within the constraints of each format (for
 example, YOLO OD stores normalized boxes and class indices, not COCO
 segmentation). Adding a new output format is a `Writer`
-subclass + `@register_writer` — see [docs/architecture.md](docs/architecture.md).
+subclass + `@register_writer` — see [docs/reference/architecture.md](docs/reference/architecture.md).
 
 ## CLI Usage
 
@@ -567,24 +567,24 @@ For HMIE/Scale, the validator runs four checks against each dataset:
 
 ```bash
 # Install with dev dependencies
-poetry install --extras dev --extras all
+uv sync --extra dev --extra all
 
 # Run tests
-poetry run pytest
+uv run pytest
 
 # Lint and type check
-poetry run pre-commit run --all-files
-poetry run pyright src/
+uv run pre-commit run --all-files
+uv run pyright src/
 
 # Build wheel
-poetry build
+uv build
 ```
 
-See [README_DEV.md](README_DEV.md) for alternative package managers (pixi, uv).
+See [README_DEV.md](README_DEV.md) for the developer workflow.
 
 For a walk-through of how the code is organized — project layout,
 reading order, and data-flow diagrams — see
-[docs/architecture.md](docs/architecture.md).
+[docs/reference/architecture.md](docs/reference/architecture.md).
 
 ## Dataset layout on disk
 

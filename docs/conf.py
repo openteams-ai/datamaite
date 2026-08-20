@@ -42,7 +42,7 @@ myst_heading_anchors = 3
 myst_fence_as_directive = ["mermaid"]
 
 # Notebook execution
-# Execute every notebook with the kernel available in the current (Poetry)
+# Execute every notebook with the kernel available in the current (uv)
 # environment instead of the kernel name baked into the notebook metadata
 # (e.g. "nebi-fmv-viewer-default"). The regex matches any saved kernel name
 # and remaps it to the local "python3" kernel provided by ipykernel.

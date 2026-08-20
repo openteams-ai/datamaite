@@ -25,7 +25,7 @@ quantify what they would have cost.
 ## Prerequisites
 
 ```bash
-poetry install --extras dev --extras aws --extras fmv
+uv sync --extra dev --extra aws --extra fmv
 ```
 
 `fmv` supplies OpenCV + PyAV for decoding; `aws` is what pulls in

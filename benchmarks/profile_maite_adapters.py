@@ -8,7 +8,7 @@ run touches the video file -- this shows the MOT path opens once per video
 (stream pass) plus one probe, regardless of length.
 
 Run:
-    poetry run python benchmarks/profile_maite_adapters.py
+    uv run python benchmarks/profile_maite_adapters.py
 """
 
 from __future__ import annotations

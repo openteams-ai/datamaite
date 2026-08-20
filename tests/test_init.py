@@ -8,8 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 
 def test_import() -> None:
     import datamaite
@@ -177,34 +175,28 @@ def test_version_tuple_parsing() -> None:
 
 
 def test_version_resolve_prefers_installed_metadata(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Real installed metadata wins; the SCM fallback is never consulted."""
+    """Installed distribution metadata is the version."""
     from datamaite import _version
 
     monkeypatch.setattr(_version, "_metadata_version", lambda _name: "0.4.0")
-    monkeypatch.setattr(_version, "_from_scm", lambda: pytest.fail("_from_scm must not be called"))
     assert _version._resolve() == "0.4.0"
 
 
-def test_version_resolve_placeholder_falls_back_to_scm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Poetry's develop-install registers 0.0.0; the SCM derivation replaces it."""
+def test_version_resolve_reports_placeholder_as_is(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A 0.0.0 fallback baked by the backend is reported, not re-derived (#60).
+
+    The dunamai re-derivation this used to trigger is gone: it could only fire
+    on exactly-0.0.0 metadata, which requires git to have been unusable at
+    build time -- and in that tree it was unusable at runtime too.
+    """
     from datamaite import _version
 
     monkeypatch.setattr(_version, "_metadata_version", lambda _name: "0.0.0")
-    monkeypatch.setattr(_version, "_from_scm", lambda: "0.4.0.post5.dev0+d17db17")
-    assert _version._resolve() == "0.4.0.post5.dev0+d17db17"
-
-
-def test_version_resolve_placeholder_without_scm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """No dunamai / no git checkout: the placeholder is reported as-is."""
-    from datamaite import _version
-
-    monkeypatch.setattr(_version, "_metadata_version", lambda _name: "0.0.0")
-    monkeypatch.setattr(_version, "_from_scm", lambda: None)
     assert _version._resolve() == "0.0.0"
 
 
-def test_version_resolve_not_installed_without_scm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Not installed and no SCM derivation available: the +unknown marker."""
+def test_version_resolve_not_installed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """No installed metadata (e.g. PYTHONPATH=src): the +unknown marker."""
     from importlib.metadata import PackageNotFoundError
 
     from datamaite import _version
@@ -213,51 +205,16 @@ def test_version_resolve_not_installed_without_scm(monkeypatch) -> None:  # type
         raise PackageNotFoundError(name)
 
     monkeypatch.setattr(_version, "_metadata_version", raise_not_found)
-    monkeypatch.setattr(_version, "_from_scm", lambda: None)
     assert _version._resolve() == "0.0.0+unknown"
 
 
-def test_from_scm_without_dunamai(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """dunamai is an optional (dev-extra) dependency; its absence is tolerated."""
-    from datamaite import _version
-
-    monkeypatch.setitem(sys.modules, "dunamai", None)
-    assert _version._from_scm() is None
-
-
-def test_from_scm_tolerates_git_failure(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """A missing git binary / non-repo checkout degrades to None, not an error."""
-    import types
-
-    from datamaite import _version
-
-    fake = types.ModuleType("dunamai")
-    fake.Pattern = types.SimpleNamespace(DefaultUnprefixed="default-unprefixed")  # type: ignore[attr-defined]
-
-    class _FailingVersion:
-        @staticmethod
-        def from_git(**_kwargs: object) -> object:
-            raise RuntimeError("git not available")
-
-    fake.Version = _FailingVersion  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "dunamai", fake)
-    assert _version._from_scm() is None
-
-
-def test_from_scm_returns_pep440_or_none() -> None:
-    """Exercise the real dunamai path.
-
-    In a dev environment (git checkout + dev extra) this derives a PEP 440
-    version from the tag; in an sdist-installed test run (no git metadata)
-    it returns None. Both are correct.
-    """
+def test_version_matches_installed_metadata() -> None:
+    """The real resolution path: __version__ is valid PEP 440."""
     from packaging.version import Version
 
-    from datamaite._version import _from_scm
+    import datamaite
 
-    derived = _from_scm()
-    if derived is not None:
-        Version(derived)  # raises InvalidVersion if malformed
+    Version(datamaite.__version__)
 
 
 def test_visdrone_static_enum_and_exports() -> None:

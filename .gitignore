@@ -72,8 +72,8 @@ ENV/
 env.bak/
 venv.bak/
 
-# Poetry
-# poetry.lock is committed for reproducibility
+# uv
+# uv.lock is committed for reproducibility
 
 # mkdocs documentation
 /site

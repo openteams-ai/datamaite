@@ -1,11 +1,19 @@
-# Constraints for the PEP 517 isolated build environment used by the publish
-# jobs (exported as PIP_CONSTRAINT in .gitlab-ci.yml). Release recovery must
+# Constraints for the PEP 517 isolated build environment. Set globally as
+# UV_BUILD_CONSTRAINT in .gitlab-ci.yml, because `uv sync` installs the root
+# through hatchling and so every job resolves a build env. Release recovery must
 # be able to rebuild a tag's artifacts byte-identically for the post-upload
 # digest verification to converge, so the backend's transitive deps cannot
 # float between a release and its re-run (#85).
 #
 # Regenerate after bumping the build-system pins in pyproject.toml:
-#   printf 'hatchling==1.31.0\nuv-dynamic-versioning==0.14.0\n' | uv pip compile -
+#   printf 'hatchling==1.31.0\nuv-dynamic-versioning==0.14.0\n' \
+#     | uv pip compile --universal --python-version 3.10 -
+# Both flags matter. --python-version 3.10 floors the resolution at the oldest
+# supported interpreter: hatchling requires tomli on python_full_version <
+# '3.11', so compiling from a newer ambient Python omits it entirely and the
+# test-py310 job resolves it unconstrained. --universal keeps the marker rather
+# than pinning tomli unconditionally, so the closure is valid on every
+# interpreter in the matrix at once.
 dunamai==1.26.1
 hatchling==1.31.0
 jinja2==3.1.6
@@ -13,6 +21,7 @@ markupsafe==3.0.3
 packaging==26.2
 pathspec==1.1.1
 pluggy==1.6.0
+tomli==2.4.1 ; python_full_version < '3.11'
 tomlkit==0.15.1
 trove-classifiers==2026.6.1.19
 uv-dynamic-versioning==0.14.0

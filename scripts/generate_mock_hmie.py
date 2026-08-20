@@ -9,7 +9,7 @@ git-LFS, JSON plain); this script itself stays in datamaite as the documented
 regenerator.
 
 Usage:
-    poetry run python scripts/generate_mock_hmie.py <output_dir>
+    uv run python scripts/generate_mock_hmie.py <output_dir>
 
 ``<output_dir>`` gets a ``datasets/<scenario>/`` tree per SCENARIOS below.
 All labels/names are generic placeholders -- no real ontology, batch, or
@@ -23,7 +23,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-# Reuse the in-repo factory; run from the datamaite repo root via poetry.
+# Reuse the in-repo factory; run from the datamaite repo root via uv.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests._hmie_factory import (
     AnnotationSpec,
