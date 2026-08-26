@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `val`, `training` → `train`) normalise, and an explicit selection that matches
   nothing selects nothing — it never widens back to all splits. The taxonomy is
   split-local to the selection and still includes empty class directories (#81).
+- CI installs the built wheel from published metadata on Python 3.10, 3.13,
+  and 3.14 (`test-wheel-py310` / `test-wheel-py313` / `test-wheel-py314`, #89),
+  so a broken entry point or a dependency floor that only fails off `uv.lock`
+  cannot ship undetected.
 
 ### Changed
 
@@ -80,10 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[tool.poetry]` are gone entirely.
 - `README_DEV.md` now documents where dependencies are declared and which files
   are derived from which (#60): `pyproject.toml` extras are the source,
-  `uv.lock` the lock of record, `requirements.txt` a generated compliance
-  projection, and `pixi.toml` a hand-maintained duplicate of the dev toolchain
-  that nothing in CI verifies. The pixi section is also flagged as known-broken
-  and left unrepaired, since #89 proposes removing pixi entirely.
+  `uv.lock` the lock of record, and `requirements.txt` a generated compliance
+  projection.
 - A generated `requirements.txt` is committed as a dependency-scanning input
   (#60). The DR-compliance component parses the checked-out tree and does not
   understand `uv.lock`, so deleting `poetry.lock` dropped its SBOM from 201
@@ -117,6 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository reported *that* repository's tag — and it ran a `git` subprocess at
   import time. Placeholder metadata is now reported as-is.
 - Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation, publishes to TestPyPI automatically with digest verification, gates PyPI behind one manual approval in the same pipeline, and creates the GitLab Release from this changelog's section for the tag. The package version is derived from the git tag (uv-dynamic-versioning); `[project].version` and the version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline is retired. Release tags must be canonically spelled — leading zeros in any numeric component (`01.02.03`, `0.5.0-rc01`) are rejected so the published version can never differ from the tag.
+
+### Removed
+
+- Pixi (`pixi.toml`, its `.gitignore` block, and the `README_DEV.md` section,
+  #89). It was an unverified duplicate of the dev toolchain; a conda-forge
+  feedstock will replace it.
 
 ### Fixed
 

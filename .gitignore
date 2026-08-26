@@ -119,10 +119,6 @@ artifacts/
 # gitlab-ci-local
 .gitlab-ci-local/
 
-# Pixi
-.pixi/
-pixi.lock
-
 # Beads issue tracker (local)
 .beads/
 AGENTS.md

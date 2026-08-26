@@ -2,7 +2,7 @@
 # Build system
 # ---------------------------------------------------------------------------
 # hatchling is the wheel build backend on every path: `pip install`,
-# `uv build`, `uv sync`, and `pixi run install`.
+# `uv build`, `uv sync`, and conda-forge (which pip-installs the sdist).
 # Pinned exactly (#85): release recovery must be able to rebuild a tag's
 # artifacts byte-identically, so the backend cannot float between builds.
 [build-system]

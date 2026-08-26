@@ -25,52 +25,17 @@ scripts/export-requirements.sh
 
 ### Where dependencies are declared
 
-One place, with three consumers derived from it:
+One place, with two files derived from it:
 
 | File | Role | Who maintains it |
 |---|---|---|
 | `pyproject.toml` `[project]` / `[project.optional-dependencies]` | **Source of truth** for runtime deps and every extra | edit by hand |
 | `uv.lock` | Lock file of record; pins the resolved graph with hashes | `uv lock` |
 | `requirements.txt` | Generated projection for DR-compliance dependency scanning only — never an install path | `scripts/export-requirements.sh` |
-| `pixi.toml` | Conda/pixi environment; carries its **own duplicated** dev-dependency list | edit by hand, see the caveat below |
 
 So: add or change a dependency in `pyproject.toml`, then run `uv lock` and
 `scripts/export-requirements.sh` and commit all three. pip consumes the same
 `pyproject.toml` metadata directly, so there is nothing extra to update for it.
-
-`pixi.toml` is the exception and the trap: it restates the dev toolchain
-(`pre-commit`, `pytest`, `pytest-cov`, `ruff`, `pyright`, `bandit`) instead of
-reading the `dev` extra. Add a dev tool to `pyproject.toml`, run `uv lock`, and
-CI goes green while `pixi run lint` / `pixi run typecheck` keep using the old
-toolchain — nothing detects the divergence, because no CI job exercises pixi.
-
-## pixi (conda-forge based)
-
-> **Known broken, and not CI-verified.** `pixi run test` (and therefore
-> `pixi run check`) currently fails at collection: `pixi.toml` declares only
-> `python` and `pydantic`, while `universal-pathlib` and `fsspec` are core
-> runtime dependencies and `maite` is a dev dependency, and
-> `pixi run install` (`pip install -e . --no-deps`) fills none of them. Its
-> `python = ">=3.10,<3.14"` is also narrower than the project's
-> `requires-python`, so it cannot cover the 3.14 test matrix, and `pixi.lock` is
-> gitignored so the environment is unpinned. No CI job runs pixi.
->
-> This is pre-existing drift rather than a regression from the uv migration
-> (#60), and it is deliberately left alone here: #89 proposes removing pixi in
-> favour of a conda-lock workflow, so fixing `pixi.toml` now would be work that
-> issue deletes. Use uv unless you specifically need conda-forge.
-
-Useful on machines where pip-installing opencv is difficult (e.g., SUNet).
-
-```bash
-pixi run install      # editable install into conda env
-pixi run test         # pytest
-pixi run lint         # pre-commit
-pixi run typecheck    # pyright
-pixi run check        # all of the above
-```
-
-Configuration lives in `pixi.toml` (separate from `pyproject.toml`).
 
 ## `datamaite.__version__` in development environments
 
@@ -105,6 +70,9 @@ there is no version-bump commit. A release is three steps:
 3. **Approve `publish-pypi`** — the one manual gate, in the same tag pipeline.
    After it verifies, `gitlab-release` creates the GitLab Release with the
    changelog section as its notes.
+
+No conda step yet: once a conda-forge feedstock exists, the autotick bot will
+track PyPI and this repo will need no extra release step.
 
 Every publish step is idempotent (`--skip-existing` + digest comparison), so
 re-running a failed or interrupted publish job is safe — retrying the failed

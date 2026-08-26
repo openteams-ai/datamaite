@@ -673,6 +673,37 @@ test-py314:
   variables:
     VERSION: "3.14"
 
+# The only job that installs the built wheel the way a consumer does (#89):
+# every other job runs from `uv sync`'s editable install, which would not
+# catch a broken entry point or a dependency floor that only fails off-lock.
+# 3.10 / 3.13 / 3.14 cover the core numpy marker buckets; 3.10 and 3.14 are
+# also the pydantic split. Consumes `build`'s dist/ artifact (py3-none-any)
+# rather than rebuilding.
+.test-wheel-base:
+  extends: .shared-setup
+  stage: test
+  needs: ["build"]
+  cache: []
+  script:
+    - pip install "$(ls dist/*.whl)"
+    - python -c "import datamaite, numpy, pydantic, fsspec, upath; print(datamaite.__version__)"
+    - datamaite --help
+
+test-wheel-py310:
+  extends: .test-wheel-base
+  variables:
+    VERSION: "3.10"
+
+test-wheel-py313:
+  extends: .test-wheel-base
+  variables:
+    VERSION: "3.13"
+
+test-wheel-py314:
+  extends: .test-wheel-base
+  variables:
+    VERSION: "3.14"
+
 # ---------------------------------------------------------------------------
 # Integration (e2e): cross-format conversion matrix against the shared example-data
 # repo (jatic/orchestration-interoperability/datamaite-example-datasets). Loads
