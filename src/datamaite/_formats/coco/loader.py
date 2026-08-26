@@ -25,7 +25,9 @@ from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from datamaite._io import resolve_path
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import DatasetMetadata, ImageObjectDetectionSample, ObjectDetectionAnnotation
@@ -43,6 +45,18 @@ class CocoLoader(Loader):
 
     task: ClassVar[Task] = Task.OD
     format: ClassVar[DatasetFormat] = DatasetFormat.COCO
+    supports_remote: ClassVar[bool] = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        ann_path = _resolve_annotation_file(path, None)
+        if ann_path is None:
+            return False
+        data = _read_json(ann_path)
+        return bool(
+            data is not None and "images" in data and "annotations" in data and not ({"videos", "tracks"} & data.keys())
+        )
 
     def load(self, root: str | Path, **options: Any) -> ObjectDetectionDataset:
         return load_coco(root, **options)
@@ -53,6 +67,7 @@ def load_coco(
     *,
     annotation_file: str | Path | None = None,
     images_dir: str | Path | None = None,
+    storage_options: dict[str, Any] | None = None,
 ) -> ObjectDetectionDataset:
     """Load a COCO detection dataset into an :class:`ObjectDetectionDataset`.
 
@@ -74,13 +89,12 @@ def load_coco(
         subdirectory (the standard COCO layout, where file names are relative
         to the dataset root).
     """
-    root = Path(root)
+    root = to_dataset_path(root, storage_options)
     # Relative override paths anchor to ``root`` (its parent when root is the
-    # annotation file itself), never the process CWD. ``anchor / p`` leaves
-    # absolute overrides intact.
+    # annotation file itself), never the process CWD.
     anchor = root.parent if root.is_file() else root
     if annotation_file is not None:
-        annotation_file = anchor / Path(annotation_file)
+        annotation_file = resolve_path(anchor, annotation_file)
     ann_path = _resolve_annotation_file(root, annotation_file)
     if ann_path is None:
         logger.warning("No COCO annotation JSON found under %s", root)
@@ -100,7 +114,7 @@ def load_coco(
         )
 
     base_dir = (
-        anchor / Path(images_dir)
+        resolve_path(anchor, images_dir)
         if images_dir is not None
         else ann_path.parent.parent
         if ann_path.parent.name == "annotations"
@@ -127,12 +141,14 @@ def load_coco(
         licenses=tuple(lic for lic in data.get("licenses", []) if isinstance(lic, dict)),
     )
     logger.info("Loaded %d COCO image(s), %d categories from %s", len(samples), len(names_by_id), ann_path)
-    return ObjectDetectionDataset(samples=tuple(samples), dataset_metadata=meta)
+    return ObjectDetectionDataset(
+        samples=tuple(samples), dataset_metadata=meta, _storage_options=storage_options_for(root)
+    )
 
 
 def _resolve_annotation_file(root: Path, annotation_file: str | Path | None) -> Path | None:
     if annotation_file is not None:
-        path = Path(annotation_file)
+        path = to_dataset_path(annotation_file)
         if not path.is_file():
             # An explicit argument naming a missing file is a caller mistake,
             # not malformed data -- raising beats returning an empty dataset.

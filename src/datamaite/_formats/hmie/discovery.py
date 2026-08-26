@@ -30,7 +30,7 @@ import logging
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 
 logger = logging.getLogger(__name__)
 
@@ -482,7 +482,7 @@ def _build_pairs(
 
 def _is_video_file(filename: str) -> bool:
     """Check if a filename has a recognised video extension."""
-    return Path(filename).suffix.lower() in _VIDEO_EXTENSIONS
+    return PurePath(filename).suffix.lower() in _VIDEO_EXTENSIONS
 
 
 def _has_snippet_children(path: Path) -> bool:

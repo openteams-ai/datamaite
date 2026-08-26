@@ -37,7 +37,9 @@ from datamaite._formats.yolo._common import (
     split_sort_key,
     within,
 )
+from datamaite._io import list_files, resolve_path, resource_key
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import is_remote_path, storage_options_for, to_dataset_path
 from datamaite.geometry import from_yolo, has_positive_area
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.loaders import Loader, register_loader
@@ -56,6 +58,7 @@ logger = logging.getLogger(__name__)
 _YOLO_YAML_NAMES = ("data.yaml", "data.yml", "dataset.yaml", "dataset.yml")
 _OD_SPLIT_KEYS = ("train", "val", "test")
 _SOFS = frozenset({0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF})
+_MAX_JPEG_HEADER_SCAN = 256 * 1024
 
 
 @register_loader
@@ -65,13 +68,17 @@ class YoloImageClassificationLoader(Loader):
     task: ClassVar[Task] = Task.IC
     format = DatasetFormat.YOLO
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
 
     @classmethod
     def sniff(cls, root: str | Path) -> bool:
-        path = Path(root)
-        if not path.is_dir():
+        path = to_dataset_path(root)
+        declared_task = _declared_yolo_task(path)
+        if not path.is_dir() or declared_task not in {None, Task.IC.value}:
             return False
-        return _looks_like_yolo_classification_root(path, IMAGE_EXTENSIONS)
+        return _looks_like_yolo_classification_root(path, IMAGE_EXTENSIONS) or (
+            declared_task == Task.IC.value and _yaml_has_names(path)
+        )
 
     def load(
         self,
@@ -80,6 +87,7 @@ class YoloImageClassificationLoader(Loader):
         image_extensions: Collection[str] | str | None = None,
         split: str | Collection[str] | None = None,
         layout: str = "auto",
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> ImageClassificationDataset:
         """Read a YOLO classification dataset root.
@@ -119,18 +127,30 @@ class YoloImageClassificationLoader(Loader):
         """
         if layout not in ("auto", "split", "flat"):
             raise ValueError(f'layout must be "auto", "split", or "flat", got {layout!r}')
-        root_path = Path(root)
+        root_path = to_dataset_path(root, storage_options)
         if not root_path.is_dir():
             logger.warning("YOLO image-classification root is not a directory: %s", root_path)
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
 
         extensions = normalize_extensions(image_extensions)
-        records, class_name_list = _discover_classification_records(
-            root_path, extensions, splits=_normalize_split_selection(split), layout=layout
+        selected_splits = _normalize_split_selection(split)
+        records, class_name_list, declared_splits = _discover_classification_records(
+            root_path, extensions, splits=selected_splits, layout=layout
         )
+        if not class_name_list:
+            yaml_path = _find_yolo_yaml(root_path)
+            yaml_data = _read_data_yaml(yaml_path) if yaml_path is not None else {}
+            class_name_list = [name for _, name in _names_from_yaml(yaml_data.get("names"))]
+            declared_splits = tuple(
+                split_name
+                for split_name in _OD_SPLIT_KEYS
+                if yaml_data.get(split_name) not in (None, "", [], ())
+                and (selected_splits is None or split_name in selected_splits)
+            )
         if not records:
             logger.warning("No YOLO image-classification images found in %s", root_path)
-            return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
+            if not class_name_list:
+                return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
 
         # Union of every class subdirectory (already sorted), including empty
         # ones -- not just classes that contain images -- so dense label indices
@@ -143,7 +163,7 @@ class YoloImageClassificationLoader(Loader):
             id_density="dense",
             ordered_names=class_names,
         )
-        splits = tuple(ordered_unique(record[1] for record in records if record[1] is not None))
+        splits = tuple(ordered_unique(record[1] for record in records if record[1] is not None)) or declared_splits
         samples = tuple(
             ImageClassificationSample(
                 image_id=rel_path,
@@ -171,6 +191,7 @@ class YoloImageClassificationLoader(Loader):
             samples=samples,
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="yolo", splits=splits),
             dataset_id="yolo",
+            _storage_options=storage_options_for(root_path),
         )
 
 
@@ -181,13 +202,17 @@ class YoloObjectDetectionLoader(Loader):
     task: ClassVar[Task] = Task.OD
     format = DatasetFormat.YOLO
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
 
     @classmethod
     def sniff(cls, root: str | Path) -> bool:
-        path = Path(root)
-        if not path.is_dir():
+        path = to_dataset_path(root)
+        declared_task = _declared_yolo_task(path)
+        if not path.is_dir() or declared_task not in {None, Task.OD.value}:
             return False
-        return _looks_like_yolo_od_root(path, IMAGE_EXTENSIONS)
+        return _looks_like_yolo_od_root(path, IMAGE_EXTENSIONS) or (
+            declared_task == Task.OD.value and _yaml_has_names(path)
+        )
 
     def load(
         self,
@@ -197,6 +222,7 @@ class YoloObjectDetectionLoader(Loader):
         split: str | Collection[str] | None = None,
         yaml_file: str | Path | None = None,
         ann_dir: str | Path | None = None,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> ObjectDetectionDataset:
         """Read a YOLO detection dataset root.
@@ -237,7 +263,7 @@ class YoloObjectDetectionLoader(Loader):
           where exactly one image claims a given file; contested names are left
           unlabelled with a warning.
         """
-        root_path = Path(root)
+        root_path = to_dataset_path(root, storage_options)
         if not root_path.is_dir():
             logger.warning("YOLO object-detection root is not a directory: %s", root_path)
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
@@ -250,7 +276,7 @@ class YoloObjectDetectionLoader(Loader):
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
         yaml_data = _read_data_yaml(yaml_path) if yaml_path is not None else {}
         selected_splits = _normalize_split_selection(split)
-        labels_base = (root_path / Path(ann_dir)).resolve() if ann_dir is not None else None
+        labels_base = resolve_path(root_path, ann_dir) if ann_dir is not None else None
         records = _discover_od_records(
             root_path,
             extensions,
@@ -260,11 +286,25 @@ class YoloObjectDetectionLoader(Loader):
             labels_base=labels_base,
             yaml_is_explicit=yaml_file is not None,
         )
+        names = _names_from_yaml(yaml_data.get("names")) if yaml_data else ()
         if not records:
             logger.warning("No YOLO object-detection images found in %s", root_path)
-            return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
+            if not names:
+                return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
+            taxonomy = _build_od_taxonomy(names, ())
+            declared_splits = tuple(
+                split_name
+                for split_name in _OD_SPLIT_KEYS
+                if yaml_data.get(split_name) not in (None, "", [], ())
+                and (selected_splits is None or split_name in selected_splits)
+            )
+            return ObjectDetectionDataset(
+                samples=(),
+                dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="yolo", splits=declared_splits),
+                dataset_id="yolo",
+                _storage_options=storage_options_for(root_path),
+            )
 
-        names = _names_from_yaml(yaml_data.get("names")) if yaml_data else ()
         taxonomy = _build_od_taxonomy(names, records)
         names_by_id = taxonomy.index2label()
         samples: list[ImageObjectDetectionSample] = []
@@ -310,6 +350,7 @@ class YoloObjectDetectionLoader(Loader):
             samples=tuple(samples),
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="yolo", splits=splits),
             dataset_id="yolo",
+            _storage_options=storage_options_for(root_path),
         )
 
 
@@ -372,13 +413,56 @@ class _ClassDirScan:
         self._root = root
         self._extensions = extensions
         self._children: dict[Path, list[Path]] = {}
+        self._entry_types: dict[Path, str] = {}
+        self._empty_markers: set[Path] = set()
         self._images: dict[Path, tuple[Path, ...]] = {}
 
     def children(self, path: Path) -> list[Path]:
         cached = self._children.get(path)
         if cached is None:
-            cached = self._children[path] = safe_children(path)
+            cached = self._remote_children(path) if is_remote_path(path) else safe_children(path)
+            self._children[path] = cached
         return cached
+
+    def _remote_children(self, path: Path) -> list[Path]:
+        """List once with detail, retaining entry types to avoid N+1 HEADs."""
+        try:
+            infos = path.fs.listdir(path.path, detail=True)  # type: ignore[attr-defined]
+        except OSError as exc:
+            logger.warning("Could not read directory %s: %s", path, exc)
+            return []
+        children: list[Path] = []
+        for info in infos:
+            name = str(info["name"]).rstrip("/").rsplit("/", 1)[-1]
+            if not name:
+                continue
+            if name == ".datamaite-empty":
+                self._empty_markers.add(path)
+                continue
+            if name.startswith("."):
+                continue
+            child = path / name
+            self._entry_types[child] = str(info.get("type", ""))
+            children.append(child)
+        return sorted(children, key=lambda child: child.name)
+
+    def is_file(self, path: Path) -> bool:
+        kind = self._entry_types.get(path)
+        return kind == "file" if kind is not None else path.is_file()
+
+    def is_dir(self, path: Path) -> bool:
+        kind = self._entry_types.get(path)
+        return kind in {"directory", "dir"} if kind is not None else path.is_dir()
+
+    def is_symlink(self, path: Path) -> bool:
+        return False if path in self._entry_types else path.is_symlink()
+
+    def has_empty_marker(self, class_dir: Path) -> bool:
+        if is_remote_path(class_dir):
+            # Ensure the detailed listing has populated marker state.
+            self.children(class_dir)
+            return class_dir in self._empty_markers
+        return (class_dir / ".datamaite-empty").is_file()
 
     def images(self, class_dir: Path) -> tuple[Path, ...]:
         """Every image below ``class_dir``, recursively, in listing order."""
@@ -388,23 +472,35 @@ class _ClassDirScan:
         return cached
 
     def _walk(self, directory: Path) -> Iterator[Path]:
-        for child in self.children(directory):
-            if child.is_file():
+        # Iterative depth-first traversal preserves listing order without
+        # failing on deeply nested, untrusted directory trees.
+        stack: list[Iterator[Path]] = [iter(self.children(directory))]
+        while stack:
+            try:
+                child = next(stack[-1])
+            except StopIteration:
+                stack.pop()
+                continue
+            if self.is_file(child):
                 if child.suffix.lower() not in self._extensions:
                     continue
                 if not within(child, self._root):
                     logger.warning("Skipping image escaping the dataset root: %s", child)
                     continue
                 yield child
-            elif child.is_dir() and not child.is_symlink():
-                yield from self._walk(child)
+            elif self.is_dir(child) and not self.is_symlink(child):
+                stack.append(iter(self.children(child)))
 
 
 def _is_deep_split_dir(child: Path, scan: _ClassDirScan) -> bool:
     """Load-time discriminator: a split holds a class subdir with an image at any depth (#90)."""
     if infer_split(child.name) is None:
         return False
-    return any(scan.images(sub) for sub in scan.children(child) if sub.is_dir() and not sub.is_symlink())
+    return any(
+        scan.images(sub) or scan.has_empty_marker(sub)
+        for sub in scan.children(child)
+        if scan.is_dir(sub) and not scan.is_symlink(sub)
+    )
 
 
 def _real_child_dirs(base: Path, scan: _ClassDirScan) -> list[Path]:
@@ -416,9 +512,9 @@ def _real_child_dirs(base: Path, scan: _ClassDirScan) -> list[Path]:
     """
     child_dirs: list[Path] = []
     for child in scan.children(base):
-        if not child.is_dir():
+        if not scan.is_dir(child):
             continue
-        if child.is_symlink():
+        if scan.is_symlink(child):
             logger.warning("Skipping symlinked directory (symlinked directories are not descended): %s", child)
             continue
         child_dirs.append(child)
@@ -427,7 +523,7 @@ def _real_child_dirs(base: Path, scan: _ClassDirScan) -> list[Path]:
 
 def _discover_classification_records(
     root: Path, extensions: frozenset[str], *, splits: frozenset[str] | None = None, layout: str = "auto"
-) -> tuple[list[tuple[Path, str | None, str, str]], list[str]]:
+) -> tuple[list[tuple[Path, str | None, str, str]], list[str], tuple[str, ...]]:
     """Return ``(rows, class_names)`` where each row is ``(image_path, split, class_name, rel_path)``.
 
     ``class_names`` is the sorted union of every class subdirectory seen across
@@ -470,6 +566,7 @@ def _discover_classification_records(
                 )
     records: list[tuple[Path, str | None, str, str]] = []
     class_names: set[str] = set()
+    declared_splits: list[str] = []
     if uses_split_layout:
         # Once the layout is established, every split-named sibling is a split --
         # including one whose class dirs are all empty. Requiring each split to
@@ -477,6 +574,7 @@ def _discover_classification_records(
         split_dirs = [(child, split) for child in child_dirs if (split := infer_split(child.name)) is not None]
         if splits is not None:
             split_dirs = [(child, split) for child, split in split_dirs if split in splits]
+        declared_splits = ordered_unique(split for _, split in split_dirs)
         for split_dir, split in sorted(split_dirs, key=lambda item: (split_sort_key(item[1]), item[0].name)):
             recs, names = _classification_records_from_class_dirs(
                 root, _real_child_dirs(split_dir, scan), split=split, scan=scan
@@ -487,7 +585,7 @@ def _discover_classification_records(
         recs, names = _classification_records_from_class_dirs(root, child_dirs, split=None, scan=scan)
         records.extend(recs)
         class_names.update(names)
-    return sorted(records, key=lambda row: row[3]), sorted(class_names)
+    return sorted(records, key=lambda row: row[3]), sorted(class_names), tuple(declared_splits)
 
 
 def _classification_records_from_class_dirs(
@@ -540,6 +638,19 @@ def _looks_like_yolo_od_root(root: Path, extensions: frozenset[str]) -> bool:
     return bool(_discover_od_records(root, extensions, yaml_data={}, yaml_path=None, limit=1))
 
 
+def _yaml_has_names(root: Path) -> bool:
+    yaml_path = _find_yolo_yaml(root)
+    return bool(yaml_path is not None and _names_from_yaml(_read_data_yaml(yaml_path).get("names")))
+
+
+def _declared_yolo_task(root: Path) -> str | None:
+    yaml_path = _find_yolo_yaml(root)
+    if yaml_path is None:
+        return None
+    value = _read_data_yaml(yaml_path).get("datamaite_task")
+    return str(value).lower() if value is not None else None
+
+
 def _find_yolo_yaml(root: Path) -> Path | None:
     for name in _YOLO_YAML_NAMES:
         path = root / name
@@ -559,8 +670,7 @@ def _resolve_yaml_path(root: Path, yaml_file: str | Path | None) -> Path | None:
     """
     if yaml_file is None:
         return _find_yolo_yaml(root)
-    candidate = Path(yaml_file)
-    candidate = candidate if candidate.is_absolute() else root / candidate
+    candidate = resolve_path(root, yaml_file)
     if candidate.is_file():
         return candidate
     logger.warning("YOLO OD yaml_file not found: %s", candidate)
@@ -610,7 +720,7 @@ def _discover_od_records(
     yaml_is_explicit: bool = False,
 ) -> list[_OdRecord]:
     records: list[_OdRecord] = []
-    seen: set[Path] = set()
+    seen: set[str] = set()
 
     _selected_sources, hit_limit = _collect_yaml_records(
         records,
@@ -679,7 +789,7 @@ def _yaml_declares_image_sources(yaml_data: Mapping[str, Any]) -> bool:
 def _collect_yaml_records(
     records: list[_OdRecord],
     *,
-    seen: set[Path],
+    seen: set[str],
     root: Path,
     extensions: frozenset[str],
     yaml_data: Mapping[str, Any],
@@ -696,7 +806,7 @@ def _collect_yaml_records(
     for split in _OD_SPLIT_KEYS:
         if splits is not None and split not in splits:
             continue
-        for source in _yaml_split_sources(yaml_data.get(split), base=base, yaml_path=yaml_path):
+        for source in _yaml_split_sources(yaml_data.get(split), base=base, yaml_path=yaml_path, root=root):
             declared = True
             for record in _records_from_image_source(
                 source,
@@ -715,13 +825,10 @@ def _append_unique_record(
     records: list[_OdRecord],
     record: _OdRecord,
     *,
-    seen: set[Path],
+    seen: set[str],
     limit: int | None,
 ) -> bool:
-    try:
-        key = record.image_path.resolve()
-    except OSError:
-        key = record.image_path.absolute()
+    key = resource_key(record.image_path)
     if key in seen:
         return False
     seen.add(key)
@@ -741,12 +848,11 @@ def _yaml_dataset_base(yaml_path: Path, yaml_data: Mapping[str, Any]) -> Path:
     """
     raw_path = yaml_data.get("path")
     if isinstance(raw_path, str) and raw_path.strip():
-        candidate = Path(raw_path.strip())
-        return candidate if candidate.is_absolute() else yaml_path.parent / candidate
+        return resolve_path(yaml_path.parent, raw_path.strip())
     return yaml_path.parent
 
 
-def _yaml_split_sources(raw_value: Any, *, base: Path, yaml_path: Path) -> list[Path]:
+def _yaml_split_sources(raw_value: Any, *, base: Path, yaml_path: Path, root: Path) -> list[Path]:
     if raw_value is None:
         return []
     values = list(raw_value) if isinstance(raw_value, list | tuple) else [raw_value]
@@ -754,16 +860,18 @@ def _yaml_split_sources(raw_value: Any, *, base: Path, yaml_path: Path) -> list[
     for value in values:
         if not isinstance(value, str) or not value.strip():
             continue
-        path = Path(value.strip())
-        path = path if path.is_absolute() else base / path
+        path = resolve_path(base, value.strip())
+        if is_remote_path(root) and not within(path, root):
+            logger.warning("YOLO OD: refusing remote YAML source outside dataset root: %s", path)
+            continue
         if path.is_file() and path.suffix.lower() == ".txt":
-            sources.extend(_read_image_list(path, base=base, yaml_path=yaml_path))
+            sources.extend(_read_image_list(path, base=base, yaml_path=yaml_path, root=root))
         else:
             sources.append(path)
     return sources
 
 
-def _read_image_list(path: Path, *, base: Path, yaml_path: Path) -> list[Path]:
+def _read_image_list(path: Path, *, base: Path, yaml_path: Path, root: Path) -> list[Path]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
@@ -774,15 +882,15 @@ def _read_image_list(path: Path, *, base: Path, yaml_path: Path) -> list[Path]:
         text = raw.partition("#")[0].strip()
         if not text:
             continue
-        candidate = Path(text)
-        if not candidate.is_absolute():
+        candidate = resolve_path(base, text)
+        if is_remote_path(root) and not within(candidate, root):
+            logger.warning("YOLO OD: refusing remote image-list source outside dataset root: %s", candidate)
+            continue
+        if not candidate.exists():
             # Ultralytics treats paths in list files as relative to the dataset
-            # YAML's ``path`` (or YAML directory when ``path`` is absent), not to
-            # the process CWD.
-            candidate = base / candidate
-            if not candidate.exists():
-                alt = yaml_path.parent / text
-                candidate = alt if alt.exists() else candidate
+            # YAML's ``path`` (or YAML directory when ``path`` is absent).
+            alt = resolve_path(yaml_path.parent, text)
+            candidate = alt if alt.exists() else candidate
         sources.append(candidate)
     return sources
 
@@ -864,8 +972,8 @@ def _ann_relative_path(image_path: Path, image_base: Path, root: Path) -> Path:
             continue
         parts = [part for part in rel.parts if part != "images"]
         if parts:
-            return Path(*parts)
-    return Path(image_path.name)
+            return to_dataset_path(PurePosixPath(*parts).as_posix())
+    return to_dataset_path(image_path.name)
 
 
 def _resolve_ann_dir_labels(records: list[_OdRecord], *, labels_base: Path) -> list[_OdRecord]:
@@ -948,7 +1056,9 @@ def _infer_label_dir(image_dir: Path) -> Path:
     for index in range(len(parts) - 1, -1, -1):
         if parts[index] == "images":
             parts[index] = "labels"
-            return Path(*parts)
+            if is_remote_path(image_dir):
+                return image_dir.with_segments(*parts)  # type: ignore[attr-defined]
+            return to_dataset_path(PurePosixPath(*parts).as_posix())
     if infer_split(image_dir.name) is not None and image_dir.parent.name == "images":
         return image_dir.parent.parent / "labels" / image_dir.name
     return image_dir.parent / "labels"
@@ -988,14 +1098,18 @@ def _relative_image_file_name(image_path: Path, *, root: Path, split: str | None
 def _iter_images(directory: Path, *, extensions: frozenset[str], root: Path) -> list[Path]:
     images: list[Path] = []
     try:
-        candidates = sorted(directory.rglob("*"))
+        candidates = (
+            list_files(directory, recursive=True) if is_remote_path(directory) else sorted(directory.rglob("*"))
+        )
     except OSError as exc:
         logger.warning("Could not read YOLO image directory %s: %s", directory, exc)
         return []
     for candidate in candidates:
         if any(part.startswith(".") for part in candidate.relative_to(directory).parts):
             continue
-        if not candidate.is_file() or candidate.suffix.lower() not in extensions:
+        if candidate.suffix.lower() not in extensions:
+            continue
+        if not is_remote_path(candidate) and not candidate.is_file():
             continue
         if candidate.is_symlink() and not within(candidate, root):
             logger.warning("Skipping symlinked YOLO image escaping the dataset root: %s", candidate)
@@ -1313,7 +1427,8 @@ def _coerce_yaml_int(value: Any) -> int | None:
 
 def _read_image_size(path: Path) -> tuple[int | None, int | None]:
     try:
-        with path.open("rb") as fh:
+        open_kwargs = {"block_size": 64 * 1024} if is_remote_path(path) else {}
+        with path.open("rb", **open_kwargs) as fh:  # type: ignore[call-overload]
             header = fh.read(32)
             if header.startswith(b"\x89PNG\r\n\x1a\n") and header[12:16] == b"IHDR":
                 width, height = struct.unpack(">II", header[16:24])
@@ -1337,7 +1452,7 @@ def _read_image_size(path: Path) -> tuple[int | None, int | None]:
 def _read_jpeg_size(fh: Any) -> tuple[int | None, int | None]:  # noqa: C901 - JPEG marker scan is branchy
     # The SOI marker was consumed into the initial header; start scanning after it.
     fh.seek(2)
-    while True:
+    while fh.tell() < _MAX_JPEG_HEADER_SCAN:
         marker_prefix = fh.read(1)
         if not marker_prefix:
             return (None, None)
@@ -1357,6 +1472,8 @@ def _read_jpeg_size(fh: Any) -> tuple[int | None, int | None]:  # noqa: C901 - J
         length = struct.unpack(">H", length_bytes)[0]
         if length < 2:
             return (None, None)
+        if fh.tell() + length - 2 > _MAX_JPEG_HEADER_SCAN:
+            return (None, None)
         if marker_value in _SOFS:
             data = fh.read(length - 2)
             if len(data) < 5:
@@ -1364,6 +1481,7 @@ def _read_jpeg_size(fh: Any) -> tuple[int | None, int | None]:  # noqa: C901 - J
             height, width = struct.unpack(">HH", data[1:5])
             return _positive_size(width, height)
         fh.seek(length - 2, 1)
+    return (None, None)
 
 
 def _positive_size(width: int, height: int) -> tuple[int | None, int | None]:

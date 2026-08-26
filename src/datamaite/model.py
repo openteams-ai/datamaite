@@ -28,16 +28,17 @@ separate adapter call is required. MOT-view options are configured with
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass, field, replace
+from collections.abc import Iterator, Mapping
+from dataclasses import InitVar, dataclass, field, replace
 from functools import cached_property
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, ClassVar
 
 # Bounding box as (left, top, width, height) in pixels. Single definition lives
 # in geometry.py (with the conversion helpers); re-exported here for the model's
 # callers. geometry imports only stdlib, so this is import-cycle-free.
 from datamaite._types import Task
+from datamaite._upath import to_dataset_path
 from datamaite.geometry import BBox
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
@@ -160,7 +161,7 @@ class VideoSequence:
         filenames, it uses the explicit ``frame_files`` table.
         """
         if self.frame_files:
-            return Path(self._frame_file_at(frame_index)).name
+            return PurePosixPath(self._frame_file_at(frame_index)).name
         if self.frame_pattern is None:
             raise ValueError("frame_filename requires frame_files or frame_pattern")
         if frame_index < 0:
@@ -174,10 +175,10 @@ class VideoSequence:
         ``frame_dir`` / ``frame_pattern``.
         """
         if self.frame_files:
-            return Path(self._frame_file_at(frame_index))
+            return to_dataset_path(self._frame_file_at(frame_index))
         if self.frame_dir is None or self.frame_pattern is None:
             return None
-        return Path(self.frame_dir) / self.frame_filename(frame_index)
+        return to_dataset_path(self.frame_dir) / self.frame_filename(frame_index)
 
     def _frame_file_at(self, frame_index: int) -> str:
         """Return a non-empty explicit frame file for ``frame_index``."""
@@ -245,10 +246,24 @@ class VideoClassificationDataset:
     labels: dict[int, str] = field(default_factory=dict)
     dataset_id: str = "datamaite"
     task: Task = Task.VC
+    _storage_options: InitVar[Mapping[str, Any] | None] = field(default=None, kw_only=True)
+    _runtime_storage_options: ClassVar[Mapping[str, Any]]
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _storage_options: Mapping[str, Any] | None) -> None:
         if not isinstance(self.samples, tuple):
             object.__setattr__(self, "samples", tuple(self.samples))
+        object.__setattr__(self, "_runtime_storage_options", dict(_storage_options or {}))
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state.pop("_runtime_storage_options", None)
+        return state
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        """Restore public state with process-local storage options intentionally unbound."""
+        for name, value in state.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "_runtime_storage_options", {})
 
     def __len__(self) -> int:
         """Number of video-classification samples."""
@@ -270,6 +285,10 @@ class VideoClassificationDataset:
     def iter_samples(self) -> Iterator[VideoClassificationSample]:
         """Iterate the typed source records."""
         return iter(self.samples)
+
+    def with_storage_options(self, storage_options: Mapping[str, Any] | None) -> VideoClassificationDataset:
+        """Return a copy bound to explicit process-local storage options."""
+        return replace(self, _storage_options=storage_options)
 
     def label_names(self) -> dict[int, str]:
         """Return raw video-classification labels keyed by stable label ID."""
@@ -327,13 +346,16 @@ class BoxTrackDataset:
     # Per-instance memo store (e.g. probed VideoInfo). Mutated in place, never
     # rebound, so it is compatible with frozen=True.
     _caches: dict[str, Any] = field(default_factory=dict, init=False, compare=False, repr=False)
+    _storage_options: InitVar[Mapping[str, Any] | None] = field(default=None, kw_only=True)
+    _runtime_storage_options: ClassVar[Mapping[str, Any]]
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _storage_options: Mapping[str, Any] | None) -> None:
         # Accept any iterable of sequences but store an immutable tuple, so a
         # caller cannot ``ds.sequences.append(...)`` and invalidate the cached
         # ``_mot_sequences`` list. object.__setattr__ is the frozen-safe rebind.
         if not isinstance(self.sequences, tuple):
             object.__setattr__(self, "sequences", tuple(self.sequences))
+        object.__setattr__(self, "_runtime_storage_options", dict(_storage_options or {}))
         if self.dataset_metadata.taxonomy is None and self.categories:
             source_dataset = _mot_source_dataset(self.dataset_metadata, dataset_id=self.dataset_id)
             taxonomy = _taxonomy_from_mot_categories(self.categories, source_dataset=source_dataset)
@@ -343,6 +365,17 @@ class BoxTrackDataset:
                 replace(self.dataset_metadata, taxonomy=taxonomy, source_dataset=source_dataset),
             )
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state.pop("_runtime_storage_options", None)
+        return state
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        """Restore public state with process-local storage options intentionally unbound."""
+        for name, value in state.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "_runtime_storage_options", {})
+
     @cached_property
     def _mot_sequences(self) -> tuple[VideoSequence, ...]:
         """Video-bearing sequences (MOT needs pixels) -- the MAITE item list.
@@ -351,7 +384,11 @@ class BoxTrackDataset:
         full iteration is O(N), not O(N^2). Safe because ``sequences`` is an
         immutable tuple (see :meth:`__post_init__`).
         """
-        return tuple(seq for seq in self.sequences if seq.video_path is not None)
+        return tuple(
+            seq
+            for seq in self.sequences
+            if seq.video_path is not None or seq.frame_files or (seq.frame_dir and seq.frame_pattern)
+        )
 
     def __len__(self) -> int:
         # MAITE item count == number of video-bearing sequences (O(1), cached).
@@ -413,7 +450,18 @@ class BoxTrackDataset:
             empty_frame_policy=empty_frame_policy if empty_frame_policy is not None else self.empty_frame_policy,
             dataset_id=dataset_id if dataset_id is not None else self.dataset_id,
             _decoder=decoder if decoder is not None else self._decoder,
+            _storage_options=self._runtime_storage_options,
         )
+
+    def with_storage_options(self, storage_options: Mapping[str, Any] | None) -> BoxTrackDataset:
+        """Return a copy bound to explicit process-local storage options."""
+        decoder = self._decoder
+        if decoder is not None:
+            from datamaite.maite._decode import PyAVDecoder
+
+            if isinstance(decoder, PyAVDecoder):
+                decoder = PyAVDecoder(storage_options)
+        return replace(self, _decoder=decoder, _storage_options=storage_options)
 
     @property
     def sequence_count(self) -> int:

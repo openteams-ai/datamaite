@@ -32,7 +32,8 @@ from typing import Any
 
 import pytest
 
-from datamaite import load_mot, validate
+from datamaite import Task, load, load_mot, validate, write
+from datamaite._upath import to_dataset_path
 from tests._hmie_factory import (
     AnnotationSpec,
     FullVideoSpec,
@@ -42,6 +43,7 @@ from tests._hmie_factory import (
     make_hmie_dataset,
     single_video_dataset,
 )
+from tests.test_object_storage_matrix import WRITER_KEYS, _content_count, _dataset_for, _reload_root
 
 try:
     import s3fs
@@ -95,6 +97,88 @@ def _upload_tree(fs: Any, local_root: Path, bucket_name: str, prefix: str) -> No
             fs.put_file(str(path), f"{bucket_name}/{prefix}/{rel}")
 
 
+@pytest.mark.parametrize("key", WRITER_KEYS, ids=lambda key: f"{key.task.value}-{key.format.value}")
+def test_registry_read_write_roundtrip(
+    key: Any,
+    tmp_path: Path,
+    bucket: str,
+    storage_options: dict[str, Any],
+) -> None:
+    """Every reader/writer key round-trips against real S3 prefix semantics."""
+    dataset = _dataset_for(key.task, tmp_path / f"{key.task.value}-{key.format.value}")
+    root = f"s3://{bucket}/registry/{key.task.value}/{key.format.value}"
+
+    files = write(
+        dataset,
+        root,
+        output_format=key.format,
+        output_variant=key.variant,
+        storage_options=storage_options,
+        verbose=True,
+    )
+
+    assert files
+    reloaded = load(
+        _reload_root(to_dataset_path(root, storage_options), key),
+        dataset_format=key.format,
+        task=key.task,
+        registry_variant=key.variant,
+        storage_options=storage_options,
+    )
+    assert _content_count(reloaded) > 0
+
+    local_copy = tmp_path / "s3-to-local"
+    assert write(reloaded, local_copy, output_format=key.format, output_variant=key.variant, verbose=True)
+    assert (
+        _content_count(
+            load(
+                _reload_root(local_copy, key),
+                dataset_format=key.format,
+                task=key.task,
+                registry_variant=key.variant,
+            )
+        )
+        > 0
+    )
+
+    remote_copy = f"s3://{bucket}/registry-copy/{key.task.value}/{key.format.value}"
+    assert write(
+        reloaded,
+        remote_copy,
+        output_format=key.format,
+        output_variant=key.variant,
+        storage_options=storage_options,
+        verbose=True,
+    )
+    assert (
+        _content_count(
+            load(
+                _reload_root(to_dataset_path(remote_copy, storage_options), key),
+                dataset_format=key.format,
+                task=key.task,
+                registry_variant=key.variant,
+                storage_options=storage_options,
+            )
+        )
+        > 0
+    )
+
+
+def test_replace_mode_uses_portable_single_object_deletes(
+    tmp_path: Path, s3_fs: Any, bucket: str, storage_options: dict[str, Any]
+) -> None:
+    """Replace works with the pinned MinIO image and modern SDK checksums."""
+    dataset = _dataset_for(Task.IC, tmp_path / "replace-source")
+    root = f"s3://{bucket}/replace-mode"
+    write(dataset, root, output_format="yolo", storage_options=storage_options)
+    s3_fs.pipe_file(f"{bucket}/replace-mode/stale.txt", b"stale")
+
+    write(dataset, root, output_format="yolo", mode="replace", storage_options=storage_options)
+
+    assert not s3_fs.exists(f"{bucket}/replace-mode/stale.txt")
+    assert _content_count(load(root, dataset_format="yolo", task=Task.IC, storage_options=storage_options)) > 0
+
+
 def test_load_streams_video_probes(tmp_path: Path, s3_fs: Any, bucket: str, storage_options: dict[str, Any]) -> None:
     """load_mot(..., require_video=True) streams real ranged-read probes over S3."""
     local_root = tmp_path / "batch"
@@ -111,7 +195,7 @@ def test_load_streams_video_probes(tmp_path: Path, s3_fs: Any, bucket: str, stor
         f"s3://{bucket}/load-probe",
         dataset_format="hmie",
         require_video=True,
-        storage_options=storage_options,
+        storage_options={**storage_options, "block_size": 1 << 20},
     )
 
     assert dataset.sequence_count == 4

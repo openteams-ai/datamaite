@@ -21,12 +21,21 @@ import json
 import logging
 import math
 import re
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from datamaite._io import (
+    copy_resource,
+    is_within,
+    iter_video_frames,
+    remove_resource,
+    same_resource,
+    source_path,
+    write_cv_image,
+)
 from datamaite._types import DatasetFormat
+from datamaite._upath import to_dataset_path
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence, category_name_from_uri
 from datamaite.writers import Writer, register_writer
 
@@ -255,7 +264,7 @@ class TaoWriter(Writer[BoxTrackDataset]):
         """
         fallback_split = _validate_split(split, field="split")
         generated_extension = _validate_image_extension(image_extension)
-        dest = Path(dest)
+        dest = to_dataset_path(dest, _options.get("storage_options"))
         frames_root = dest / "frames"
         annotations_dir = dest / "annotations"
         frames_root.mkdir(parents=True, exist_ok=True)
@@ -441,7 +450,7 @@ def _clear_standard_annotations(annotations_dir: Path) -> None:
     for filename in set(_ANNOTATION_FILENAMES.values()) | {"test_without_annotations.json"}:
         path = annotations_dir / filename
         if path.exists():
-            path.unlink()
+            remove_resource(path)
 
 
 def _validate_split(value: str, *, field: str) -> str:
@@ -550,20 +559,16 @@ def _image_sequence_frame_indices(seq: VideoSequence) -> list[int]:
 
 def _safe_frame_path(seq: VideoSequence, frame_index: int) -> Path | None:
     try:
-        return seq.frame_path(frame_index)
+        path = seq.frame_path(frame_index)
+        return source_path(path) if path is not None else None
     except (IndexError, ValueError) as exc:
         logger.warning("Skipping frame %s for sequence %s: %s", frame_index, _sequence_name(seq), exc)
         return None
 
 
 def _copy_frame(source: Path, dest: Path) -> None:
-    try:
-        same_file = source.resolve(strict=False) == dest.resolve(strict=False)
-    except OSError:
-        same_file = False
-    if same_file:
-        return
-    shutil.copy2(source, dest)
+    if not same_resource(source, dest):
+        copy_resource(source, dest)
 
 
 def _extract_video_frames(
@@ -581,18 +586,7 @@ def _extract_video_frames(
     every decoded video frame so output ``frame_index`` values stay direct
     decoded-frame positions.
     """
-    try:
-        import cv2  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise ImportError(
-            "Writing video-backed sequences to TAO requires OpenCV. Install it with: pip install datamaite[fmv]"
-        ) from exc
-
-    video_path = Path(seq.video_path or "")
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        logger.warning("Could not open video for TAO frame extraction: %s", video_path)
-        return {}
+    video_path = source_path(seq.video_path or "")
 
     if seq.boxes and not seq.num_frames_exact:
         logger.warning(
@@ -602,28 +596,18 @@ def _extract_video_frames(
         )
 
     outputs: dict[int, _FrameOutput] = {}
-    frame_index = 0
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            file_name = _generated_frame_file_name(split, video_id, sequence_name, frame_index, generated_extension)
-            dest_path = dest / "frames" / file_name
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(dest_path), frame):
-                raise OSError(f"OpenCV failed to write frame image: {dest_path}")
-            height, width = frame.shape[:2]
-            outputs[frame_index] = _FrameOutput(
-                frame_index=frame_index,
-                file_name=file_name,
-                path=dest_path,
-                width=int(width),
-                height=int(height),
-            )
-            frame_index += 1
-    finally:
-        cap.release()
+    for frame_index, frame in enumerate(iter_video_frames(video_path)):
+        file_name = _generated_frame_file_name(split, video_id, sequence_name, frame_index, generated_extension)
+        dest_path = dest / "frames" / file_name
+        write_cv_image(dest_path, frame, generated_extension)
+        height, width = frame.shape[:2]
+        outputs[frame_index] = _FrameOutput(
+            frame_index=frame_index,
+            file_name=file_name,
+            path=dest_path,
+            width=int(width),
+            height=int(height),
+        )
 
     if not outputs:
         logger.warning("Video %s decoded zero frames for TAO output", video_path)
@@ -643,10 +627,13 @@ def _source_tao_file_name(seq: VideoSequence, source: Path, *, split: str) -> st
     annotation_file = seq.video_meta.get("annotation_file") or seq.annotation_path
     if not annotation_file:
         return None
-    source_root = Path(str(annotation_file)).parent.parent
+    source_root = source_path(str(annotation_file)).parent.parent
+    frames_root = source_root / "frames"
+    if not is_within(source, frames_root):
+        return None
     try:
-        rel = source.resolve(strict=False).relative_to((source_root / "frames").resolve(strict=False))
-    except (OSError, ValueError):
+        rel = source.relative_to(frames_root)
+    except ValueError:
         return None
     if rel.parts and rel.parts[0] in _STANDARD_SPLITS and rel.parts[0] != split:
         return None

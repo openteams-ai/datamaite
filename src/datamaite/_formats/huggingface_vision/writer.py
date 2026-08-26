@@ -44,11 +44,12 @@ import json
 import logging
 import math
 import re
-import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from datamaite._io import copy_resource, same_resource, source_path
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import to_dataset_path
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import (
@@ -120,7 +121,7 @@ class HuggingFaceVisionImageClassificationWriter(Writer[ImageClassificationDatas
         Samples whose own ``split`` is not a recognized split name fall back
         to ``default_split`` with a warning for the same reason.
         """
-        dest_path = Path(dest)
+        dest_path = to_dataset_path(dest, _.get("storage_options"))
         dest_path.mkdir(parents=True, exist_ok=True)
         default_split = _normalize_split(str(default_split), field="default_split")
         taxonomy = dataset.dataset_metadata.taxonomy
@@ -210,7 +211,7 @@ class HuggingFaceVisionObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         fallback_split = _normalize_optional_split(split)
         metadata_format = _validate_metadata_format(metadata_format)
         taxonomy = dataset.dataset_metadata.taxonomy
-        dest_path = Path(dest)
+        dest_path = to_dataset_path(dest, _.get("storage_options"))
         dest_path.mkdir(parents=True, exist_ok=True)
 
         rows_by_dir: dict[str, list[dict[str, Any]]] = {}
@@ -295,7 +296,7 @@ def _write_ic_sample(
         if sample.path_or_uri is None:
             logger.warning("Skipping Hugging Face vision IC sample %r with no image source", sample.image_id)
             return None
-        source = Path(sample.path_or_uri)
+        source = source_path(sample.path_or_uri)
         if not source.is_file():
             logger.warning(
                 "Skipping Hugging Face vision IC sample %r with missing image file: %s", sample.image_id, source
@@ -308,7 +309,7 @@ def _write_ic_sample(
     if sample.image_bytes is not None:
         target.write_bytes(sample.image_bytes)
     elif source is not None:
-        shutil.copy2(source, target)
+        copy_resource(source, target)
     return target
 
 
@@ -375,7 +376,7 @@ def _od_record_for_sample(
         if sample.path_or_uri is None:
             logger.warning("Skipping Hugging Face vision OD sample %r with no image source", sample.image_id)
             return None
-        source = Path(sample.path_or_uri)
+        source = source_path(sample.path_or_uri)
         if not source.is_file():
             logger.warning(
                 "Skipping Hugging Face vision OD sample %r with missing image file: %s", sample.image_id, source
@@ -388,9 +389,9 @@ def _od_record_for_sample(
     except ValueError as exc:
         logger.warning("Skipping Hugging Face vision OD sample %r: %s", sample.image_id, exc)
         return None
-    stem, suffix = Path(file_name).stem, Path(file_name).suffix
+    stem, suffix = PurePosixPath(file_name).stem, PurePosixPath(file_name).suffix
     rel_path = _unique_rel_path(split or "data", stem, suffix, used_paths)
-    if source is not None and (dest / rel_path).resolve(strict=False) == source.resolve(strict=False):
+    if source is not None and same_resource(dest / rel_path, source):
         rel_path = _unique_rel_path(split or "data", f"{stem}-copy", suffix, used_paths)
     return source, rel_path
 
@@ -504,12 +505,8 @@ def _copy_image(source: Path | None, dest: Path, *, image_bytes: bytes | None) -
         return
     if source is None:  # unreachable by construction; _od_record_for_sample verified one of the two
         raise ValueError(f"no image source for {dest}")
-    try:
-        same_file = source.resolve(strict=False) == dest.resolve(strict=False)
-    except OSError:
-        same_file = False
-    if not same_file:
-        shutil.copy2(source, dest)
+    if not same_resource(source, dest):
+        copy_resource(source, dest)
 
 
 def _split_for_sample(sample: ImageObjectDetectionSample, *, fallback: str | None, preserve_splits: bool) -> str | None:
@@ -563,8 +560,10 @@ def _validate_metadata_format(value: str) -> str:
 
 
 def _safe_file_name(sample: ImageClassificationSample | ImageObjectDetectionSample) -> str:
-    raw = sample.file_name or (Path(sample.path_or_uri).name if sample.path_or_uri else f"{sample.image_id}.jpg")
-    name = Path(str(raw)).name
+    raw = sample.file_name or (
+        PurePosixPath(sample.path_or_uri).name if sample.path_or_uri else f"{sample.image_id}.jpg"
+    )
+    name = PurePosixPath(str(raw)).name
     if not name or name in {".", ".."} or "\x00" in name or "\\" in name:
         raise ValueError(f"unsafe file name: {raw!r}")
     return name

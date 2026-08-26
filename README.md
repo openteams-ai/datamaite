@@ -89,9 +89,9 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 | `datamaite[ic]` | OpenCV | still-image IC pixel decode |
 | `datamaite[all]` | union of task extras | all task pixel/media paths |
 | `datamaite[maite]` | MAITE + PyAV | optional MAITE package plus MOT-video runtime for interoperability/conformance checks |
-| `datamaite[aws]` | `s3fs` | load/validate HMIE from `s3://` roots |
-| `datamaite[gcs]` | `gcsfs` | load/validate HMIE from `gs://` roots |
-| `datamaite[azure]` | `adlfs` | load/validate HMIE from `az://` roots |
+| `datamaite[aws]` | `s3fs` | read/write datasets on `s3://` roots |
+| `datamaite[gcs]` | `gcsfs` | read/write datasets on `gs://` roots |
+| `datamaite[azure]` | `adlfs` | read/write datasets on `az://` / `abfs://` roots |
 | `datamaite[cloud]` | `s3fs` + `gcsfs` + `adlfs` | all three cloud backends |
 
 `maite` itself is not a core runtime dependency; datamaite datasets conform to
@@ -102,18 +102,18 @@ See [docs/getting-started/installation.md](docs/getting-started/installation.md)
 
 ### Cloud object storage
 
-Dataset roots can be cloud URLs — `s3://`, `gs://`, or `az://` — with the
-matching extra installed (`datamaite[aws]`, `[gcs]`, `[azure]`, or
-`[cloud]` for all three). Cloud roots are supported for **HMIE only**;
-other format loaders raise a clear error on a cloud URL. Video integrity
-checks over cloud data additionally need the `fmv` extra (e.g.
-`datamaite[aws,fmv]`) — without it, video checks are skipped with a
-`video_dependency` warning:
+Dataset roots and write destinations can be `s3://`, `gs://`, `az://`, or
+`abfs://` URLs with the matching extra installed. Every registered format uses
+the same fsspec/UPath read, write, lazy-media, and conversion path. Pass
+source credentials to `load(..., storage_options=...)`; `write(...,
+storage_options=...)` applies options to the destination. Video-backed media
+additionally needs the `fmv` extra.
 
 ```python
 import datamaite
 
-result = datamaite.validate("s3://my-bucket/datasets/batch-a")
+ds = datamaite.load_od("s3://source/coco", dataset_format="coco")
+datamaite.write(ds, "s3://dest/yolo", output_format="yolo")
 ```
 
 See the cloud storage guide in the docs for credentials and how video

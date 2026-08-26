@@ -11,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from datamaite._io import is_within
 from datamaite._types import DatasetFormat, Task, WriteMode
+from datamaite._upath import is_remote_path, to_dataset_path
 from datamaite.loaders import load
 from datamaite.writers import _check_destination, _validate_mode, write
 
@@ -84,21 +86,18 @@ def convert(
     # actual clearing for mode="replace" happens later, inside write(), only
     # after `src` has loaded successfully. That ordering matters: if we deleted
     # here and the load then failed, dest would be wiped for nothing.
-    _check_destination(Path(dest), resolved_mode)
+    destination_options = merged_writer_options.get("storage_options")
+    resolved_dest = to_dataset_path(dest, destination_options)
+    _check_destination(resolved_dest, resolved_mode)
     if resolved_mode == "replace":
-        src_resolved = Path(src).resolve()
-        dest_resolved = Path(dest).resolve()
-        # A mode="replace" clear of dest happens after the source loads but
-        # before the writer reads the source's (lazy) media files. If dest is
-        # the source, or an ancestor of it, that clear destroys the source
-        # mid-conversion. resolve() collapses symlinks so an aliased dest is
-        # caught too. (A dest *inside* src is safe: clearing a subdir does not
-        # remove the source's own files.)
-        if src_resolved.is_relative_to(dest_resolved):
+        resolved_src = to_dataset_path(src, loader_options.get("storage_options"))
+        if is_within(resolved_src, resolved_dest):
+            src_display = resolved_src if is_remote_path(resolved_src) else resolved_src.resolve()
+            dest_display = resolved_dest if is_remote_path(resolved_dest) else resolved_dest.resolve()
             raise ValueError(
                 f"Refusing to convert with mode='replace': the destination {dest} "
-                f"(resolves to {dest_resolved}) is the source dataset or contains it "
-                f"(source resolves to {src_resolved}); clearing it would destroy the source."
+                f"(resolves to {dest_display}) is the source dataset or contains it "
+                f"(source resolves to {src_display}); clearing it would destroy the source."
             )
     dataset = load(
         src,

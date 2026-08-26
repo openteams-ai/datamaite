@@ -29,7 +29,9 @@ import logging
 from pathlib import Path
 from typing import Any, ClassVar
 
+from datamaite._io import list_files, read_resource_prefix
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import DatasetMetadata, ImageObjectDetectionSample
@@ -60,11 +62,19 @@ class FlatImagesLoader(Loader):
     task: ClassVar[Task] = Task.OD
     format = DatasetFormat.FLAT_IMAGES
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
 
     # No sniff override: any folder containing images would match, so this
     # format is explicit opt-in only and never participates in autodetect (#40).
 
-    def load(self, root: str | Path, *, image_extensions: Any = None, **_: Any) -> ObjectDetectionDataset:
+    def load(
+        self,
+        root: str | Path,
+        *,
+        image_extensions: Any = None,
+        storage_options: Any = None,
+        **_: Any,
+    ) -> ObjectDetectionDataset:
         """Read immediate image children under ``root`` into an unlabeled OD dataset.
 
         Parameters
@@ -85,7 +95,7 @@ class FlatImagesLoader(Loader):
             One sample per accepted image, each with zero detections and no
             taxonomy, because this format carries no annotations.
         """
-        root_path = Path(root)
+        root_path = to_dataset_path(root, storage_options)
         if not root_path.is_dir():
             logger.warning("Flat images root is not a directory: %s", root_path)
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="flat_images"))
@@ -107,16 +117,19 @@ class FlatImagesLoader(Loader):
             samples=tuple(samples),
             dataset_metadata=DatasetMetadata(source_dataset="flat_images"),
             dataset_id="flat_images",
+            _storage_options=storage_options_for(root_path),
         )
 
 
-def load_flat_images(root: str | Path, *, image_extensions: Any = None) -> ObjectDetectionDataset:
+def load_flat_images(
+    root: str | Path, *, image_extensions: Any = None, storage_options: Any = None
+) -> ObjectDetectionDataset:
     """Load a flat folder of label-free still images.
 
     Equivalent to ``datamaite.load_od(root, dataset_format="flat_images")``.
     See :meth:`FlatImagesLoader.load` for semantics.
     """
-    return FlatImagesLoader().load(root, image_extensions=image_extensions)
+    return FlatImagesLoader().load(root, image_extensions=image_extensions, storage_options=storage_options)
 
 
 def _normalize_extensions(image_extensions: Any) -> frozenset[str]:
@@ -143,23 +156,16 @@ def _normalize_extensions(image_extensions: Any) -> frozenset[str]:
 def _flat_image_files(root: Path, extensions: frozenset[str]) -> list[Path]:
     """Return immediate image files in deterministic order; never recurse."""
     try:
-        return sorted(p for p in root.iterdir() if p.is_file() and p.suffix.lower() in extensions)
+        return [path for path in list_files(root) if path.suffix.lower() in extensions]
     except OSError as exc:
         logger.warning("Could not list flat images root %s: %s", root, exc)
         return []
 
 
 def _encoded_image_sample(path: Path) -> ImageObjectDetectionSample | None:
-    """Build one sample for an encoded image file, or skip it with a warning.
-
-    Validation here is magic-bytes only (cheap, dependency-free); pixel
-    decoding stays lazy in the MAITE surface, mirroring the other still-image
-    loaders. Dimensions are left unset -- MAITE indexing fills them from the
-    decoded array.
-    """
+    """Build one sample after the same bounded header check on every backend."""
     try:
-        with path.open("rb") as fh:
-            head = fh.read(_MAGIC_PROBE_BYTES)
+        head = read_resource_prefix(path, _MAGIC_PROBE_BYTES)
     except OSError as exc:
         logger.warning("Skipping unreadable flat image %s: %s", path, exc)
         return None

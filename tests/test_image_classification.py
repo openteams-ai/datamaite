@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+from dataclasses import asdict
 from pathlib import Path
 
 import cv2
@@ -30,6 +32,17 @@ def _png_bytes(width: int = 3, height: int = 2) -> bytes:
 
 
 class TestImageClassificationDataset:
+    def test_runtime_storage_options_are_excluded_from_serialization(self) -> None:
+        ds = ImageClassificationDataset(samples=(), _storage_options={"secret": lambda: "credential"})
+
+        assert "secret" not in repr(ds)
+        assert "_storage_options" not in asdict(ds)
+        restored = pickle.loads(pickle.dumps(ds))  # noqa: S301 - trusted in-process round-trip
+        assert restored == ds
+        assert restored._runtime_storage_options == {}
+        rebound = restored.with_storage_options({"endpoint": "worker-local"})
+        assert rebound._runtime_storage_options == {"endpoint": "worker-local"}
+
     def test_dataset_is_maite_image_classification_surface(self) -> None:
         taxonomy = Taxonomy(
             entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
@@ -59,6 +72,59 @@ class TestImageClassificationDataset:
         assert image.shape == (3, 2, 3)  # CHW
         assert target.tolist() == [0.0, 1.0]
         assert metadata == {"id": "train/dog/a.png", "split": "train", "height": 2, "width": 3}
+
+    def test_fieldwise_input_is_fresh_and_caller_mutation_does_not_leak(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from datamaite.maite import _ic
+
+        calls = 0
+
+        def fake_decode(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return np.zeros((3, 2, 4), dtype=np.uint8)
+
+        monkeypatch.setattr(_ic, "decode_image", fake_decode)
+        dataset = ImageClassificationDataset(samples=(ImageClassificationSample(image_id="remote"),))
+
+        first = dataset.get_input(0)
+        first[0, 0, 0] = 200
+        second = dataset.get_input(0)
+
+        assert calls == 2
+        assert first is not second
+        assert second[0, 0, 0] == 0
+
+        item_input = dataset[0][0]
+        item_input[0, 0, 0] = 123
+        after_item = dataset.get_input(0)
+        assert calls == 4
+        assert after_item[0, 0, 0] == 0
+
+    def test_crop_samples_share_one_base_image_decode(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from datamaite.maite import _image
+
+        calls = 0
+
+        def fake_decode(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return np.zeros((10, 10, 3), dtype=np.uint8)
+
+        monkeypatch.setattr(_image, "decode_image_path", fake_decode)
+        samples = tuple(
+            ImageClassificationSample(
+                image_id=index,
+                path_or_uri="memory://bucket/shared.png",
+                region=(float(index), 0.0, 4.0, 4.0),
+            )
+            for index in range(2)
+        )
+        dataset = ImageClassificationDataset(samples=samples)
+
+        dataset.get_input(0)
+        dataset.get_input(1)
+
+        assert calls == 1
 
     def test_score_weighted_target_uses_label_score(self) -> None:
         taxonomy = Taxonomy(

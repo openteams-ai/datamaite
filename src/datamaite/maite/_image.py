@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
+from datamaite._io import decode_image_bytes, decode_image_path
+from datamaite._upath import sanitized_uri
 from datamaite.records import ImageRecord
 
 
-def decode_image(sample: ImageRecord, *, task_name: str = "image", extra: str = "all") -> np.ndarray:
+def decode_image(
+    sample: ImageRecord,
+    *,
+    task_name: str = "image",
+    extra: str = "all",
+    storage_options: Mapping[str, Any] | None = None,
+    base_cache: dict[str, np.ndarray] | None = None,
+) -> np.ndarray:
     """Decode an image sample to a ``(C, H, W)`` ``uint8`` RGB array.
 
     If ``sample.region`` is set (a ``(left, top, width, height)`` crop rectangle,
@@ -22,7 +32,7 @@ def decode_image(sample: ImageRecord, *, task_name: str = "image", extra: str = 
     optional task extras; only MAITE-style indexing does.
     """
     try:
-        import cv2  # type: ignore[import-untyped]
+        __import__("cv2")
     except ImportError as exc:
         raise ImportError(
             f"Indexing a {task_name} dataset as a MAITE dataset decodes images and needs OpenCV. "
@@ -30,14 +40,21 @@ def decode_image(sample: ImageRecord, *, task_name: str = "image", extra: str = 
         ) from exc
 
     if sample.image_bytes is not None:
-        buf = np.frombuffer(sample.image_bytes, dtype=np.uint8)
-        bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        bgr = decode_image_bytes(sample.image_bytes, color=True)
     elif sample.path_or_uri is not None:
-        bgr = cv2.imread(str(Path(sample.path_or_uri)), cv2.IMREAD_COLOR)
+        cache_key = sample.path_or_uri
+        if base_cache is not None and cache_key in base_cache:
+            bgr = base_cache[cache_key]
+        else:
+            bgr = decode_image_path(sample.path_or_uri, storage_options, color=True)
+            if bgr is not None and base_cache is not None:
+                base_cache.clear()
+                base_cache[cache_key] = bgr
     else:
         raise ValueError(f"image sample {sample.image_id!r} has neither path_or_uri nor image_bytes")
     if bgr is None:
-        raise OSError(f"could not decode image for sample {sample.image_id!r} ({sample.path_or_uri})")
+        location = sanitized_uri(sample.path_or_uri) if sample.path_or_uri is not None else "embedded bytes"
+        raise OSError(f"could not decode image for sample {sample.image_id!r} ({location})")
     region = getattr(sample, "region", None)
     if region is not None:
         img_h, img_w = bgr.shape[:2]

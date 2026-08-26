@@ -91,7 +91,7 @@ class TestMotChallengeHappyPath:
         ds = load_motchallenge(tmp_path)
 
         assert ds.sequence_count == 1
-        assert len(ds) == 0  # MOTChallenge is image-sequence based, not video-backed.
+        assert len(ds) == 1  # Frame-backed sequences now expose the lazy MAITE MOT surface.
         assert ds.num_boxes == 3
         assert ds.categories == {"motchallenge/pedestrian": 1, "motchallenge/static_person": 7}
 

@@ -11,14 +11,26 @@ rather than fabricating data.
 
 from __future__ import annotations
 
-import shutil
+import contextlib
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
+from uuid import uuid4
 
+from datamaite._io import (
+    copy_resource,
+    is_within,
+    remove_resource,
+    remove_tree,
+    runtime_storage_options,
+    source_storage_context,
+    write_mode_context,
+)
 from datamaite._types import DatasetFormat, Task, WriteMode
+from datamaite._upath import is_remote_path, to_dataset_path
 from datamaite.model import BoxTrackDataset, VisionDataset
 
 _DatasetT = TypeVar("_DatasetT", bound=VisionDataset)
@@ -71,6 +83,8 @@ class Writer(ABC, Generic[_DatasetT]):
 _WRITERS: dict[WriterKey, type[Writer[Any]]] = {}
 _BUILTIN_WRITER_MODULES = (
     "datamaite._formats.coco.writer",
+    "datamaite._formats.flat_images.writer",
+    "datamaite._formats.flat_mp4.writer",
     "datamaite._formats.hmie.writer",
     "datamaite._formats.huggingface_video_classification.writer",
     "datamaite._formats.huggingface_vision.writer",
@@ -120,7 +134,7 @@ def _validate_mode(mode: WriteMode | str) -> str:
     return normalized
 
 
-def _check_destination(dest: Path, mode: str) -> None:
+def _check_destination(dest: Path, mode: str) -> list[Path]:  # noqa: C901 - local/object safety branches
     """Validate the destination policy without touching anything on disk.
 
     This is the non-destructive half of :func:`_prepare_destination`: it raises
@@ -134,41 +148,48 @@ def _check_destination(dest: Path, mode: str) -> None:
     loading the source dataset, without risking a deletion ahead of a load
     that might fail.
     """
-    if dest.exists() and not dest.is_dir():
+    exists = dest.exists()
+    is_directory = dest.is_dir() if exists else False
+    if exists and not is_directory:
         raise NotADirectoryError(f"Destination {dest} exists and is not a directory")
-    if not dest.is_dir():
-        return
+    if not is_directory:
+        return []
     # For mode="replace" the safety checks (protected paths + symlink alias)
     # must run BEFORE the empty-directory short-circuit below: an *empty*
     # symlinked destination is still an alias we refuse to write/clear through,
     # and refusing the fs root / cwd / home must not depend on the dir being
     # non-empty.
     if mode == "replace":
-        resolved = dest.resolve()
-        cwd = Path.cwd().resolve()
-        home = Path.home().resolve()
-        # Refuse the filesystem root, and any directory that CONTAINS the cwd or
-        # the user's home (clearing it would wipe the working dir, a home dir, or
-        # a multi-user root like /Users or /home). is_relative_to covers equality
-        # too, so this also catches dest == cwd / dest == home.
-        if resolved == Path(resolved.anchor) or cwd.is_relative_to(resolved) or home.is_relative_to(resolved):
-            raise ValueError(
-                f"Refusing to replace the contents of {dest} (resolves to {resolved}); it is the "
-                "filesystem root or contains the current working directory or home directory"
-            )
-        if dest.is_symlink():
-            raise ValueError(f"Refusing to replace through a symlinked destination: {dest}")
+        if is_remote_path(dest):
+            # Refuse clearing an entire bucket/container; object-store replace
+            # is a non-atomic recursive prefix delete.
+            remote_parts = tuple(part for part in dest.parts if part not in {"/", ""})
+            if len(remote_parts) <= 1:
+                raise ValueError(f"Refusing to replace an object-store root: {dest}")
+        else:
+            resolved = dest.resolve()
+            cwd = Path.cwd().resolve()
+            home = Path.home().resolve()
+            # Refuse the filesystem root, and any directory that CONTAINS the cwd or home.
+            if resolved == Path(resolved.anchor) or cwd.is_relative_to(resolved) or home.is_relative_to(resolved):
+                raise ValueError(
+                    f"Refusing to replace the contents of {dest} (resolves to {resolved}); it is the "
+                    "filesystem root or contains the current working directory or home directory"
+                )
+            if dest.is_symlink():
+                raise ValueError(f"Refusing to replace through a symlinked destination: {dest}")
     entries = list(dest.iterdir())
     if not entries:
-        return
+        return []
     if mode == "append":
-        return
+        return entries
     if mode == "error":
         raise FileExistsError(
             f"Destination {dest} already exists and is not empty. "
             "Pass mode='replace' to clear it first, or mode='append' to write into it "
             "(append may leave stale files that a reload of the destination would pick up)."
         )
+    return entries
 
 
 def _prepare_destination(dest: Path, mode: str) -> None:
@@ -183,17 +204,16 @@ def _prepare_destination(dest: Path, mode: str) -> None:
     docstring for why it is split out), then, for ``mode="replace"``, the
     actual clearing happens here.
     """
-    _check_destination(dest, mode)
-    if not dest.is_dir():
+    entries = _check_destination(dest, mode)
+    if not entries:
         return
-    entries = list(dest.iterdir())
-    if not entries or mode != "replace":
+    if mode != "replace":
         return
     for entry in entries:
-        if entry.is_dir() and not entry.is_symlink():
-            shutil.rmtree(entry)
+        if entry.is_dir() and (is_remote_path(entry) or not entry.is_symlink()):
+            remove_tree(entry)
         else:
-            entry.unlink()
+            remove_resource(entry)
 
 
 def _key_for(writer_cls: type[Writer[Any]]) -> WriterKey:
@@ -307,9 +327,10 @@ def _sample_media_paths(sample: Any) -> list[str]:
     return _present_attrs(sample, ("path_or_uri", "video_path", "metadata_path"))
 
 
-def _resolve_quietly(value: str) -> Path | None:
+def _resolve_quietly(value: str, storage_options: Any = None) -> Path | None:
     try:
-        return Path(value).resolve()
+        path = to_dataset_path(value, storage_options)
+        return path if is_remote_path(path) else path.resolve()
     except (OSError, ValueError):
         return None
 
@@ -334,7 +355,8 @@ def _dataset_source_paths(dataset: VisionDataset) -> list[Path]:
     elif samples is not None:
         for sample in samples:
             raw.extend(_sample_media_paths(sample))
-    return [resolved for resolved in (_resolve_quietly(value) for value in raw) if resolved is not None]
+    options = runtime_storage_options(dataset)
+    return [resolved for resolved in (_resolve_quietly(value, options) for value in raw) if resolved is not None]
 
 
 def _reject_source_under_destination(dataset: VisionDataset, dest: Path) -> None:
@@ -347,11 +369,11 @@ def _reject_source_under_destination(dataset: VisionDataset, dest: Path) -> None
     Enforced here (not only in :func:`datamaite.conversion.convert`) so the
     module-level ``write()`` API is protected too.
     """
-    dest_resolved = dest.resolve()
+    dest_display = dest if is_remote_path(dest) else dest.resolve()
     for source in _dataset_source_paths(dataset):
-        if source == dest_resolved or source.is_relative_to(dest_resolved):
+        if is_within(source, dest):
             raise ValueError(
-                f"Refusing to replace {dest} (resolves to {dest_resolved}): the dataset's "
+                f"Refusing to replace {dest} (resolves to {dest_display}): the dataset's "
                 f"media/annotations live inside it (e.g. {source}); clearing it would destroy "
                 "the writer's own inputs mid-write. Write to a different directory."
             )
@@ -365,6 +387,8 @@ def write(
     output_variant: str = "default",
     mode: WriteMode | str = WriteMode.ERROR,
     verbose: bool = False,
+    storage_options: dict[str, Any] | None = None,
+    source_storage_options: dict[str, Any] | None = None,
     **options: Any,
 ) -> list[Path] | None:
     """Write ``dataset`` to ``dest`` in ``output_format``.
@@ -420,8 +444,123 @@ def write(
     # Fix A1). Direct Writer.write() calls still re-validate inline (cheap),
     # which also covers callers who bypass this module-level write().
     writer.validate_options(**options)
+    resolved_dest = to_dataset_path(dest, storage_options)
     if resolved_mode == "replace":
-        _reject_source_under_destination(dataset, Path(dest))
-    _prepare_destination(Path(dest), resolved_mode)
-    files = writer.write(dataset, dest, **options)
+        _reject_source_under_destination(dataset, resolved_dest)
+    writer_options = dict(options)
+    if storage_options is not None:
+        writer_options["storage_options"] = storage_options
+    with source_storage_context(dataset, source_storage_options), write_mode_context(resolved_mode):
+        if is_remote_path(resolved_dest) and resolved_mode == "replace":
+            files = _write_remote_staged_replace(
+                writer,
+                dataset,
+                resolved_dest,
+                writer_options=writer_options,
+            )
+        elif is_remote_path(resolved_dest) and resolved_mode == "error":
+            files = _write_remote_error(writer, dataset, resolved_dest, writer_options=writer_options)
+        else:
+            _prepare_destination(resolved_dest, resolved_mode)
+            files = writer.write(dataset, resolved_dest, **writer_options)
     return files if verbose else None
+
+
+def _write_remote_error(
+    writer: Writer[Any],
+    dataset: VisionDataset,
+    dest: Path,
+    *,
+    writer_options: dict[str, Any],
+) -> list[Path]:
+    """Stage an error-mode write without deleting unrelated final objects."""
+    _check_destination(dest, "error")
+    stage = dest.parent / f".{dest.name}.datamaite-stage-{uuid4().hex}"
+    promoted: list[Path] = []
+    try:
+        staged_files = writer.write(dataset, stage, **writer_options)
+        _check_destination(dest, "error")
+        final_files = [dest.joinpath(*staged.relative_to(stage).parts) for staged in staged_files]
+        promoted.extend(final_files)
+        _copy_resource_pairs(list(zip(staged_files, final_files, strict=True)))
+        return final_files
+    except Exception:
+        for path in promoted:
+            with contextlib.suppress(OSError):
+                remove_resource(path, missing_ok=True)
+        raise
+    finally:
+        with contextlib.suppress(OSError):
+            if stage.exists():
+                remove_tree(stage)
+
+
+def _remote_files(root: Path) -> list[Path]:
+    """Inventory files below a remote prefix with one backend find call."""
+    try:
+        names = root.fs.find(root.path, withdirs=False)  # type: ignore[attr-defined]
+    except (AttributeError, NotImplementedError, OSError):
+        return [path for path in root.rglob("*") if path.is_file()]
+    return [root.with_segments(name) for name in names]  # type: ignore[attr-defined]
+
+
+def _copy_resource_pairs(pairs: list[tuple[Path, Path]]) -> None:
+    """Copy independent objects with bounded concurrency."""
+    if not pairs:
+        return
+
+    def copy_pair(pair: tuple[Path, Path]) -> None:
+        copy_resource(pair[0], pair[1])
+
+    with ThreadPoolExecutor(max_workers=min(8, len(pairs))) as executor:
+        list(executor.map(copy_pair, pairs))
+
+
+def _write_remote_staged_replace(
+    writer: Writer[Any],
+    dataset: VisionDataset,
+    dest: Path,
+    *,
+    writer_options: dict[str, Any],
+) -> list[Path]:
+    """Stage replacement and retain a rollback copy until promotion succeeds."""
+    _check_destination(dest, "replace")
+    token = uuid4().hex
+    stage = dest.parent / f".{dest.name}.datamaite-stage-{token}"
+    backup = dest.parent / f".{dest.name}.datamaite-backup-{token}"
+    backup_files: list[tuple[Path, Path]] = []
+    destination_mutated = False
+    promotion_complete = False
+    rollback_complete = False
+    try:
+        stage_files = writer.write(dataset, stage, **writer_options)
+        for original in _remote_files(dest) if dest.exists() else []:
+            archived = backup.joinpath(*original.relative_to(dest).parts)
+            backup_files.append((original, archived))
+        _copy_resource_pairs([(original, archived) for original, archived in backup_files])
+        destination_mutated = True
+        _prepare_destination(dest, "replace")
+        final_files = [dest.joinpath(*staged.relative_to(stage).parts) for staged in stage_files]
+        _copy_resource_pairs(list(zip(stage_files, final_files, strict=True)))
+        promotion_complete = True
+        return final_files
+    except Exception as original_error:
+        if destination_mutated:
+            try:
+                if dest.exists():
+                    remove_tree(dest)
+                _copy_resource_pairs([(archived, original) for original, archived in backup_files])
+                rollback_complete = True
+            except Exception:
+                raise RuntimeError(
+                    f"remote replacement failed and rollback was incomplete; backup retained at {backup}"
+                ) from original_error
+        raise
+    finally:
+        with contextlib.suppress(OSError):
+            if stage.exists():
+                remove_tree(stage)
+        if not destination_mutated or promotion_complete or rollback_complete:
+            with contextlib.suppress(OSError):
+                if backup.exists():
+                    remove_tree(backup)

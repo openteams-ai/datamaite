@@ -19,12 +19,13 @@ from __future__ import annotations
 import json
 import logging
 import math
-import shutil
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar
 
+from datamaite._io import copy_resource, same_resource, source_path
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import to_dataset_path
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import ImageObjectDetectionSample, ObjectDetectionAnnotation
 from datamaite.taxonomy import Taxonomy
@@ -35,6 +36,25 @@ logger = logging.getLogger(__name__)
 # Keys the writer emits as typed fields; the attributes round-trip channel must
 # not shadow them. Mirrors the loader's _ANNOTATION_CORE_KEYS.
 _ANNOTATION_CORE_KEYS = frozenset({"id", "image_id", "category_id", "bbox", "area", "iscrowd", "segmentation"})
+
+
+def _validate_annotation_file_name(value: object) -> str:
+    """Return a portable bare filename or reject path and stream syntax."""
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        raise ValueError(f"annotation_file_name must be a bare file name, got {value!r}")
+    posix = PurePosixPath(value)
+    windows = PureWindowsPath(value)
+    if (
+        posix.name != value
+        or windows.name != value
+        or posix.is_absolute()
+        or windows.is_absolute()
+        or bool(windows.drive)
+        or ":" in value
+        or "\0" in value
+    ):
+        raise ValueError(f"annotation_file_name must be a bare file name, got {value!r}")
+    return value
 
 
 @dataclass
@@ -78,9 +98,7 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
         which also covers direct ``Writer.write()`` calls.
         """
         if "annotation_file_name" in options:
-            name = options["annotation_file_name"]
-            if not name or name in (".", "..") or Path(name).name != name:
-                raise ValueError(f"annotation_file_name must be a bare file name, got {name!r}")
+            _validate_annotation_file_name(options["annotation_file_name"])
 
     def write(
         self,
@@ -105,13 +123,8 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
             COCO JSON references files by name and stays loadable without
             them -- with a warning per missing source.
         """
-        if (
-            not annotation_file_name
-            or annotation_file_name in (".", "..")
-            or Path(annotation_file_name).name != annotation_file_name
-        ):
-            raise ValueError(f"annotation_file_name must be a bare file name, got {annotation_file_name!r}")
-        dest = Path(dest)
+        annotation_file_name = _validate_annotation_file_name(annotation_file_name)
+        dest = to_dataset_path(dest, _options.get("storage_options"))
         ann_dir = dest / "annotations"
         ann_dir.mkdir(parents=True, exist_ok=True)
 
@@ -287,13 +300,11 @@ def _copy_image(sample: ImageObjectDetectionSample, *, dest: Path) -> Path | Non
         target.write_bytes(sample.image_bytes)
         return target
     if sample.path_or_uri is not None:
-        source = Path(sample.path_or_uri)
+        source = source_path(sample.path_or_uri)
         if source.is_file():
-            if source.resolve() == target.resolve():
+            if same_resource(source, target):
                 return None  # writing a dataset over itself; the image is already in place
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            return target
+            return copy_resource(source, target)
         # The sample names a source; it just isn't on disk -- say so, rather than
         # the misleading "no image source" below.
         logger.warning(

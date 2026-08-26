@@ -52,7 +52,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from datamaite._io import is_within, list_files, resource_key
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.geometry import BBox, has_positive_area
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.loaders import Loader, register_loader
@@ -104,6 +106,7 @@ class _ImageRow:
     height: int | None = None
     metadata_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    verified_file: bool = False
 
 
 @register_loader
@@ -113,12 +116,18 @@ class HuggingFaceVisionImageClassificationLoader(Loader):
     task: ClassVar[Task] = Task.IC
     format = DatasetFormat.HUGGINGFACE_VISION
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        return _sniff_metadata(to_dataset_path(root), task=Task.IC)
 
     def load(
         self,
         root: str | Path,
         *,
         image_extensions: Collection[str] | str | None = None,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> ImageClassificationDataset:
         """Read a Hugging Face image classification dataset root.
@@ -134,7 +143,7 @@ class HuggingFaceVisionImageClassificationLoader(Loader):
             Face-compatible suffixes (``.jpg``, ``.jpeg``, ``.png``, ``.bmp``,
             ``.gif``, ``.tif``, ``.tiff``, ``.webp``).
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         if not root.is_dir():
             logger.warning("Hugging Face vision root is not a directory: %s", root)
             return ImageClassificationDataset(
@@ -176,6 +185,7 @@ class HuggingFaceVisionImageClassificationLoader(Loader):
                 taxonomy=taxonomy, source_dataset="huggingface_vision", splits=_splits_of(samples)
             ),
             dataset_id="huggingface_vision",
+            _storage_options=storage_options_for(root),
         )
 
 
@@ -186,12 +196,18 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
     task: ClassVar[Task] = Task.OD
     format = DatasetFormat.HUGGINGFACE_VISION
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        return _sniff_metadata(to_dataset_path(root), task=Task.OD)
 
     def load(
         self,
         root: str | Path,
         *,
         image_extensions: Collection[str] | str | None = None,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> ObjectDetectionDataset:
         """Read a Hugging Face object-detection dataset root.
@@ -205,7 +221,7 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
         metadata file has no boxes to read and loads empty with a warning
         (use the IC variant or another format for label-free folders).
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         if not root.is_dir():
             logger.warning("Hugging Face vision root is not a directory: %s", root)
             return ObjectDetectionDataset(
@@ -258,12 +274,26 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
                 taxonomy=taxonomy, source_dataset="huggingface_vision", splits=_splits_of(samples)
             ),
             dataset_id="huggingface_vision",
+            _storage_options=storage_options_for(root),
         )
 
 
 # ---------------------------------------------------------------------------
 # Row discovery (metadata files, then folder layout)
 # ---------------------------------------------------------------------------
+
+
+def _sniff_metadata(root: Path, *, task: Task) -> bool:
+    if not root.is_dir():
+        return False
+    for metadata_path in _metadata_files(root):
+        rows, _ = _read_metadata_rows(metadata_path)
+        for row in rows[:10]:
+            if task is Task.OD and _OBJECTS_COLUMN in row:
+                return True
+            if task is Task.IC and any(column in row for column in _LABEL_COLUMNS):
+                return True
+    return False
 
 
 def _discover_rows(
@@ -421,6 +451,7 @@ def _rows_from_image_tree(root: Path, base: Path, *, split: str | None, extensio
                 rel_path=_relative_posix(image_path, root),
                 split=split,
                 label=_label_from_parts(rel_to_base.parts),
+                verified_file=True,
             )
         )
     return rows
@@ -429,7 +460,7 @@ def _rows_from_image_tree(root: Path, base: Path, *, split: str | None, extensio
 def _filter_existing_rows(rows: Iterable[_ImageRow]) -> list[_ImageRow]:
     valid: list[_ImageRow] = []
     for row in rows:
-        if not row.path.is_file():
+        if not row.verified_file and not row.path.is_file():
             logger.warning("Skipping Hugging Face vision entry with missing image file: %s", row.path)
             continue
         valid.append(row)
@@ -437,10 +468,10 @@ def _filter_existing_rows(rows: Iterable[_ImageRow]) -> list[_ImageRow]:
 
 
 def _dedupe_rows(rows: Iterable[_ImageRow]) -> list[_ImageRow]:
-    seen: set[Path] = set()
+    seen: set[str] = set()
     deduped: list[_ImageRow] = []
     for row in rows:
-        key = row.path.resolve(strict=False)
+        key = resource_key(row.path)
         if key in seen:
             logger.warning("Skipping duplicate Hugging Face vision entry: %s", row.path)
             continue
@@ -830,13 +861,15 @@ def _read_parquet_rows(path: Path) -> tuple[list[dict[str, Any]], dict[str, tupl
             )
             return [], {}
         try:
-            rows = pd.read_parquet(path).to_dict(orient="records")
+            with path.open("rb") as stream:
+                rows = pd.read_parquet(stream).to_dict(orient="records")
         except Exception as exc:
             logger.warning("Could not read Hugging Face metadata parquet %s: %s", path, exc)
             return [], {}
     else:  # pragma: no cover - pyarrow success path needs the optional parquet dependency.
         try:
-            table = pq.read_table(path)
+            with path.open("rb") as stream:
+                table = pq.read_table(stream)
         except Exception as exc:
             logger.warning("Could not read Hugging Face metadata parquet %s: %s", path, exc)
             return [], {}
@@ -1053,7 +1086,7 @@ def _normalize_image_extensions(value: Collection[str] | str | None) -> frozense
 
 def _iter_image_files(base: Path, extensions: frozenset[str]) -> list[Path]:
     try:
-        return sorted(path for path in base.rglob("*") if path.is_file() and path.suffix.lower() in extensions)
+        return [path for path in list_files(base, recursive=True) if path.suffix.lower() in extensions]
     except OSError as exc:
         logger.warning("Could not list Hugging Face image tree %s: %s", base, exc)
         return []
@@ -1087,11 +1120,7 @@ def _relative_posix(path: Path, root: Path) -> str:
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(root.resolve(strict=False))
-    except (OSError, ValueError):
-        return False
-    return True
+    return is_within(path, root)
 
 
 def _sample_metadata(row: _ImageRow) -> dict[str, Any]:

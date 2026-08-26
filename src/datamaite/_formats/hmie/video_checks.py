@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from datamaite._io import open_av_container
 from datamaite._types import Finding, Severity
-from datamaite._upath import is_remote_path, local_open_target
 
 logger = logging.getLogger(__name__)
 
@@ -85,22 +85,6 @@ def _silence_av_logging(av) -> None:  # type: ignore[no-untyped-def]
     _av_silenced = True
 
 
-def _av_source(video_path: Path) -> Any:
-    """What to hand :func:`av.open` for ``video_path``.
-
-    Local paths open by plain filesystem string. Remote paths open as a
-    seekable fsspec file object with a 1 MiB read-ahead block
-    (``_REMOTE_READ_BLOCK_SIZE``), so PyAV's demuxer fetches only the byte
-    ranges the probe actually reads (container header plus the sampled
-    frames' packets) -- no full-file download, no presigned URLs, and
-    identical behavior on every backend. The caller owns closing a
-    returned file object.
-    """
-    if is_remote_path(video_path):
-        return video_path.open("rb", block_size=_REMOTE_READ_BLOCK_SIZE)  # type: ignore[union-attr]
-    return local_open_target(video_path)
-
-
 def probe_video(video_path: Path) -> tuple[VideoProperties, list[Finding]]:
     """Open a video once and extract cached properties plus integrity findings.
 
@@ -154,8 +138,7 @@ def _probe_with_container(av, video_path: Path, findings: list[Finding]) -> Vide
     source: Any = None
     container = None
     try:
-        source = _av_source(video_path)
-        container = av.open(source)
+        container, source = open_av_container(av, video_path, block_size=_REMOTE_READ_BLOCK_SIZE)
     except Exception:
         # Bad bytes, missing remote object, or transport failure: all
         # collapse to "cannot open", mirroring the old capture semantics.

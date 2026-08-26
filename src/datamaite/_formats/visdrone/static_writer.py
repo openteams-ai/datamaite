@@ -42,17 +42,18 @@ region would corrupt the output (#55 B3).
 from __future__ import annotations
 
 import logging
-import shutil
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, ClassVar
 
 from datamaite._formats._coerce import coerce_finite_float, coerce_int
 from datamaite._formats._fixed_taxonomy import ClassIdResolver, validate_class_map
 from datamaite._formats.visdrone.static_loader import IMAGE_EXTENSIONS, VISDRONE_STATIC_CLASSES
+from datamaite._io import copy_resource, same_resource, source_path
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import to_dataset_path
 from datamaite.geometry import BBox, has_positive_area
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
@@ -166,7 +167,7 @@ class VisDroneObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         """
         fallback_split = _normalize_split(split, field="split")
         resolver = _resolver(class_map)
-        dest_path = Path(dest)
+        dest_path = to_dataset_path(dest, _.get("storage_options"))
         dest_path.mkdir(parents=True, exist_ok=True)
 
         written: list[Path] = []
@@ -245,7 +246,7 @@ class VisDroneImageClassificationWriter(Writer[ImageClassificationDataset]):
         """
         fallback_split = _normalize_split(split, field="split")
         resolver = _resolver(class_map)
-        dest_path = Path(dest)
+        dest_path = to_dataset_path(dest, _.get("storage_options"))
         dest_path.mkdir(parents=True, exist_ok=True)
 
         written: list[Path] = []
@@ -506,17 +507,17 @@ def _write_image(
         if sample.path_or_uri is None:
             logger.warning("Skipping VisDrone static sample %r with no image source", sample.image_id)
             return None
-        source = Path(sample.path_or_uri)
+        source = source_path(sample.path_or_uri)
         if not source.is_file():
             logger.warning("Skipping VisDrone static sample %r with missing image file: %s", sample.image_id, source)
             return None
 
     raw_name = sample.file_name or (source.name if source is not None else f"{sample.image_id}.jpg")
-    name = Path(str(raw_name)).name
+    name = PurePath(str(raw_name)).name
     if not name or name in {".", ".."} or "\x00" in name or "\\" in name:
         logger.warning("Skipping VisDrone static sample %r with unsafe file name %r", sample.image_id, raw_name)
         return None
-    suffix = Path(name).suffix or ".jpg"
+    suffix = PurePath(name).suffix or ".jpg"
     if suffix.lower() not in IMAGE_EXTENSIONS:
         # Images are copied verbatim (no transcoding), so a suffix the static
         # loader does not read would silently vanish on reload.
@@ -528,15 +529,15 @@ def _write_image(
             ", ".join(sorted(IMAGE_EXTENSIONS)),
         )
         return None
-    stem = _unique_stem(Path(name).stem or "image", state.used_stems)
+    stem = _unique_stem(PurePath(name).stem or "image", state.used_stems)
 
     images_dir = split_root / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     target = images_dir / f"{stem}{suffix}"
     if sample.image_bytes is not None:
         target.write_bytes(sample.image_bytes)
-    elif source is not None and source.resolve(strict=False) != target.resolve(strict=False):
-        shutil.copy2(source, target)
+    elif source is not None and not same_resource(source, target):
+        copy_resource(source, target)
     written.append(target)
     return stem
 

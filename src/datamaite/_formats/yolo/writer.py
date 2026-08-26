@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import shutil
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -24,7 +23,16 @@ from datamaite._formats.yolo._common import (
     split_sort_key,
     unique_target,
 )
+from datamaite._io import (
+    copy_resource,
+    current_write_mode,
+    ensure_directory,
+    list_files,
+    same_resource,
+    source_path,
+)
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import is_remote_path, to_dataset_path
 from datamaite.geometry import clamp_to_image, has_positive_area, to_yolo
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
@@ -38,6 +46,8 @@ from datamaite.taxonomy import SourceId, Taxonomy
 from datamaite.writers import Writer, WriterCapabilities, register_writer
 
 logger = logging.getLogger(__name__)
+
+_APPEND_INVENTORY_THRESHOLD = 64
 
 
 @register_writer
@@ -66,11 +76,12 @@ class YoloImageClassificationWriter(Writer[ImageClassificationDataset]):
         per image; when a sample has multiple labels, the first label is used
         and the rest are left in the source model rather than invented on disk.
         """
-        dest_path = Path(dest)
-        dest_path.mkdir(parents=True, exist_ok=True)
+        dest_path = to_dataset_path(dest, _.get("storage_options"))
+        ensure_directory(dest_path)
         taxonomy = dataset.dataset_metadata.taxonomy
         written: list[Path] = []
         used_targets: set[Path] = set()
+        inventoried_dirs = _append_inventory(dataset.samples, dest_path)
         splits_seen: set[str] = set()
         classes_seen: set[str] = set()
 
@@ -81,6 +92,7 @@ class YoloImageClassificationWriter(Writer[ImageClassificationDataset]):
                 taxonomy=taxonomy,
                 default_split=default_split,
                 used_targets=used_targets,
+                inventoried_dirs=inventoried_dirs,
             )
             if target is None:
                 continue
@@ -88,6 +100,30 @@ class YoloImageClassificationWriter(Writer[ImageClassificationDataset]):
             splits_seen.add(target.parent.parent.name)
             classes_seen.add(target.parent.name)
             written.append(target)
+
+        # data.yaml carries taxonomy/splits even when no sample was writable.
+        # Object stores additionally need marker objects because empty prefixes
+        # do not exist.
+        if taxonomy is not None:
+            marker_splits = splits_seen or set(dataset.dataset_metadata.splits) or {default_split}
+            for entry in taxonomy.entries:
+                safe_class = safe_path_part(entry.name, field="class name")
+                classes_seen.add(safe_class)
+                for split_name in marker_splits:
+                    safe_split = safe_path_part(split_name, field="split")
+                    class_dir = dest_path / safe_split / safe_class
+                    if is_remote_path(dest_path):
+                        if not any(path.parent == class_dir for path in used_targets):
+                            marker = class_dir / ".datamaite-empty"
+                            ensure_directory(marker.parent)
+                            marker.write_bytes(b"")
+                            written.append(marker)
+                    elif written:
+                        # Local filesystems preserve empty directories. Only
+                        # materialize them once at least one sample succeeded,
+                        # retaining no-stray-output behavior for all-skipped writes.
+                        ensure_directory(class_dir)
+                    splits_seen.add(safe_split)
 
         if write_data_yaml:
             data_yaml = dest_path / "data.yaml"
@@ -157,12 +193,13 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         """
         if isinstance(precision, bool) or not isinstance(precision, int) or precision < 1:
             raise ValueError(f"precision must be a non-boolean integer >= 1, got {precision!r}")
-        dest_path = Path(dest)
-        dest_path.mkdir(parents=True, exist_ok=True)
+        dest_path = to_dataset_path(dest, _.get("storage_options"))
+        ensure_directory(dest_path)
         projection = _LabelProjection.from_dataset(dataset)
         written: list[Path] = []
         used_images: set[Path] = set()
         used_labels: set[Path] = set()
+        inventoried_dirs = _append_inventory(dataset.samples, dest_path)
         splits_seen: set[str] = set()
 
         for sample in dataset.samples:
@@ -176,6 +213,7 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
                 include_scores=include_scores,
                 used_images=used_images,
                 used_labels=used_labels,
+                inventoried_dirs=inventoried_dirs,
             )
             if paths is None:
                 continue
@@ -185,6 +223,8 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             written.append(label_path)
             splits_seen.add(label_path.parent.name)
 
+        if not splits_seen and projection.names:
+            splits_seen.update(dataset.dataset_metadata.splits or (default_split,))
         if write_data_yaml:
             data_yaml = dest_path / "data.yaml"
             data_yaml.write_text(
@@ -200,6 +240,19 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
 # ---------------------------------------------------------------------------
 
 
+def _append_inventory(samples: Any, dest: Path) -> set[Path] | None:
+    if is_remote_path(dest) and current_write_mode() == "append" and len(samples) >= _APPEND_INVENTORY_THRESHOLD:
+        return set()
+    return None
+
+
+def _inventory_directory(directory: Path, used: set[Path], inventoried: set[Path] | None) -> None:
+    if inventoried is None or directory in inventoried:
+        return
+    used.update(list_files(directory))
+    inventoried.add(directory)
+
+
 def _write_ic_sample(
     sample: ImageClassificationSample,
     dest_path: Path,
@@ -207,6 +260,7 @@ def _write_ic_sample(
     taxonomy: Taxonomy | None,
     default_split: str,
     used_targets: set[Path],
+    inventoried_dirs: set[Path] | None,
 ) -> Path | None:
     """Write one IC sample to ``<dest>/<split>/<class>/<file>``; return the path."""
     if getattr(sample, "region", None) is not None:
@@ -243,19 +297,52 @@ def _write_ic_sample(
         if sample.path_or_uri is None:
             logger.warning("Skipping YOLO IC sample %r with no image source", sample.image_id)
             return None
-        source = Path(sample.path_or_uri)
-        if not source.is_file():
+        source = source_path(sample.path_or_uri)
+        if not is_remote_path(source) and not source.is_file():
             logger.warning("Skipping YOLO IC sample %r with missing image file: %s", sample.image_id, source)
             return None
 
     class_dir = dest_path / split / safe_class_name
-    class_dir.mkdir(parents=True, exist_ok=True)
-    target = unique_target(class_dir / file_name, used_targets)
+    created_directories = _ensure_output_directory(class_dir, dest_path)
+    _inventory_directory(class_dir, used_targets, inventoried_dirs)
+    target = unique_target(class_dir / file_name, used_targets, check_storage=inventoried_dirs is None)
     if sample.image_bytes is not None:
         target.write_bytes(sample.image_bytes)
-    elif source is not None:  # a verified file, set above when image_bytes is None
-        shutil.copy2(source, target)
+    elif source is not None and not _copy_ic_source(sample, source, target, created_directories):
+        return None
     return target
+
+
+def _copy_ic_source(
+    sample: ImageClassificationSample, source: Path, target: Path, created_directories: list[Path]
+) -> bool:
+    try:
+        copy_resource(source, target)
+    except FileNotFoundError:
+        _remove_created_output_directories(created_directories)
+        logger.warning("Skipping YOLO IC sample %r with missing image file: %s", sample.image_id, source)
+        return False
+    return True
+
+
+def _ensure_output_directory(directory: Path, dest: Path) -> list[Path]:
+    if is_remote_path(directory):
+        return []
+    created: list[Path] = []
+    current = directory
+    while current != dest and not current.exists():
+        created.append(current)
+        current = current.parent
+    ensure_directory(directory)
+    return created
+
+
+def _remove_created_output_directories(directories: list[Path]) -> None:
+    for directory in directories:
+        try:
+            directory.rmdir()
+        except OSError:  # noqa: PERF203 - stop at first non-empty dir
+            return
 
 
 def _single_label(sample: ImageClassificationSample) -> ClassificationLabel | None:
@@ -287,8 +374,10 @@ def _ic_class_name(label: ClassificationLabel, taxonomy: Taxonomy | None) -> str
 
 
 def _safe_ic_file_name(sample: ImageClassificationSample) -> str:
-    raw = sample.file_name or (Path(sample.path_or_uri).name if sample.path_or_uri else f"{sample.image_id}.jpg")
-    name = Path(str(raw)).name
+    raw = sample.file_name or (
+        PurePosixPath(sample.path_or_uri).name if sample.path_or_uri else f"{sample.image_id}.jpg"
+    )
+    name = PurePosixPath(str(raw)).name
     if not name or name in {".", ".."} or name != str(raw).replace("\\", "/").rsplit("/", 1)[-1] or "\x00" in name:
         raise ValueError(f"unsafe file name: {raw!r}")
     return name
@@ -299,7 +388,7 @@ def _ic_data_yaml(*, splits: tuple[str, ...], names: list[str]) -> str:
     # order the loader (and Ultralytics) derive class indices from. Deriving from
     # the taxonomy's own order instead would mislabel classes for any non-
     # alphabetical taxonomy, since on-disk folders are read back alphabetically.
-    lines = ["# Generated by datamaite", f"path: {json.dumps('.')}"]
+    lines = ["# Generated by datamaite", "datamaite_task: ic", f"path: {json.dumps('.')}"]
     if splits:
         if "train" in splits:
             lines.append("train: train")
@@ -383,6 +472,7 @@ def _write_od_sample(
     include_scores: bool,
     used_images: set[Path],
     used_labels: set[Path],
+    inventoried_dirs: set[Path] | None,
 ) -> tuple[Path | None, Path] | None:
     try:
         split = safe_path_part(sample.split or default_split, field="split")
@@ -396,41 +486,54 @@ def _write_od_sample(
         if sample.path_or_uri is None:
             logger.warning("Skipping YOLO OD sample %r with no image source", sample.image_id)
             return None
-        source = Path(sample.path_or_uri)
-        if not source.is_file():
+        source = source_path(sample.path_or_uri)
+        if not is_remote_path(source) and not source.is_file():
             logger.warning("Skipping YOLO OD sample %r with missing image file: %s", sample.image_id, source)
             return None
 
     image_root = dest / "images" / split
     label_root = dest / "labels" / split
+    image_seed = image_root / rel_image.as_posix()
+    label_seed = label_root.joinpath(*rel_image.with_suffix(".txt").parts)
+    if include_images:
+        _inventory_directory(image_seed.parent, used_images, inventoried_dirs)
+    _inventory_directory(label_seed.parent, used_labels, inventoried_dirs)
     image_target, label_target = _unique_od_targets(
-        image_root / rel_image.as_posix(),
+        image_seed,
         image_root,
         label_root,
         used_images,
         used_labels,
         require_image_free=include_images,
+        check_storage=inventoried_dirs is None,
     )
     label_lines = _od_label_lines(sample, projection=projection, precision=precision, include_scores=include_scores)
 
     image_path: Path | None = None
     if include_images:
-        image_target.parent.mkdir(parents=True, exist_ok=True)
+        created_directories = _ensure_output_directory(image_target.parent, dest)
         if sample.image_bytes is not None:
             image_target.write_bytes(sample.image_bytes)
-        elif source is not None and source.resolve() != image_target.resolve():
-            shutil.copy2(source, image_target)
+        elif source is not None and not same_resource(source, image_target):
+            try:
+                copy_resource(source, image_target)
+            except FileNotFoundError:
+                _remove_created_output_directories(created_directories)
+                logger.warning("Skipping YOLO OD sample %r with missing image file: %s", sample.image_id, source)
+                return None
         used_images.add(image_target)
         image_path = image_target
 
-    label_target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(label_target.parent)
     label_target.write_text("\n".join(label_lines) + ("\n" if label_lines else ""), encoding="utf-8")
     used_labels.add(label_target)
     return (image_path, label_target)
 
 
 def _safe_od_image_rel(sample: ImageObjectDetectionSample, *, split: str) -> PurePosixPath:
-    raw = sample.file_name or (Path(sample.path_or_uri).name if sample.path_or_uri else f"{sample.image_id}.jpg")
+    raw = sample.file_name or (
+        PurePosixPath(sample.path_or_uri).name if sample.path_or_uri else f"{sample.image_id}.jpg"
+    )
     posix = safe_relative_path(str(raw), field="file name")
     parts = list(posix.parts)
     if parts and parts[0] == "images":
@@ -454,12 +557,17 @@ def _unique_od_targets(
     used_labels: set[Path],
     *,
     require_image_free: bool,
+    check_storage: bool,
 ) -> tuple[Path, Path]:
     for candidate in _candidate_targets(image_target):
-        rel = candidate.relative_to(image_root)
-        label_candidate = label_root / rel.with_suffix(".txt")
-        image_available = free_target(candidate, used_images) if require_image_free else candidate not in used_images
-        if image_available and free_target(label_candidate, used_labels):
+        rel = PurePosixPath(*candidate.relative_to(image_root).parts)
+        label_candidate = label_root.joinpath(*rel.with_suffix(".txt").parts)
+        image_available = (
+            free_target(candidate, used_images, check_storage=check_storage)
+            if require_image_free
+            else candidate not in used_images
+        )
+        if image_available and free_target(label_candidate, used_labels, check_storage=check_storage):
             return candidate, label_candidate
     raise ValueError(f"could not allocate unique YOLO OD target near {image_target}")
 
@@ -562,7 +670,7 @@ def _format_float(value: float, *, precision: int) -> str:
 
 
 def _od_data_yaml(*, splits: tuple[str, ...], names: list[str]) -> str:
-    lines = ["# Generated by datamaite", f"path: {json.dumps('.')}"]
+    lines = ["# Generated by datamaite", "datamaite_task: od", f"path: {json.dumps('.')}"]
     if splits:
         if "train" in splits:
             lines.append("train: images/train")

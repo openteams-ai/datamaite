@@ -45,6 +45,26 @@ class TestFingerprint:
         assert fp.hash == fp2.hash  # same first 1MB
         assert fp.size == fp2.size  # same size
 
+    def test_remote_fingerprint_prefers_backend_version_metadata(self, memory_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        path = memory_root / "versioned.bin"
+        path.write_bytes(b"same content")
+        original_info = path.fs.info
+        etag = "version-one"
+
+        def versioned_info(*args, **kwargs):  # type: ignore[no-untyped-def]
+            info = dict(original_info(*args, **kwargs))
+            info["ETag"] = etag
+            return info
+
+        monkeypatch.setattr(path.fs, "info", versioned_info)
+        first = fingerprint_file(path)
+        etag = "version-two"
+        second = fingerprint_file(path)
+
+        assert first is not None
+        assert second is not None
+        assert first.hash != second.hash
+
     def test_fingerprint_nonexistent_file(self, tmp_path: Path) -> None:
         f = tmp_path / "missing.json"
         fp = fingerprint_file(f)

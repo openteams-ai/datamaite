@@ -224,6 +224,8 @@ _OPTION_VALIDATION_CASES = [
 # row in _OPTION_VALIDATION_CASES.
 _NO_OPTION_VALIDATION_KEYS = {
     WriterKey(task=Task.MOT, format=DatasetFormat.HMIE, variant="default"),
+    WriterKey(task=Task.MOT, format=DatasetFormat.FLAT_MP4, variant="default"),
+    WriterKey(task=Task.OD, format=DatasetFormat.FLAT_IMAGES, variant="default"),
     WriterKey(task=Task.IC, format=DatasetFormat.YOLO, variant="default"),
 }
 

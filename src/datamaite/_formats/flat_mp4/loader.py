@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from datamaite._io import list_files, probe_video, resource_size
 from datamaite._types import DatasetFormat
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import BoxTrackDataset, VideoSequence
 
@@ -28,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 # OpenCV/FFmpeg fourcc aliases observed for the two IR-3.3-S-1 codecs. MP4
 # H.264 commonly appears as avc1; MPEG-2 aliases vary by backend/container.
-_H264_FOURCCS = frozenset({"avc1", "avc3", "h264", "x264", "davc"})
-_MPEG2_FOURCCS = frozenset({"mpg2", "mpeg", "mp2v", "pim2", "em2v", "m2v1"})
+_H264_CODEC_TOKENS = frozenset({"avc1", "avc3", "h264", "x264", "davc"})
+_MPEG2_CODEC_TOKENS = frozenset({"mpeg2video", "mpg2", "mpeg", "mp2v", "pim2", "em2v", "m2v1"})
 _SUPPORTED_CODEC_LABELS = {"h264": "H.264", "mpeg2": "MPEG-2"}
 
 
@@ -39,6 +41,7 @@ class _VideoProbe:
 
     opened: bool
     codec: str | None = None
+    codec_name: str | None = None
     codec_fourcc: str | None = None
     fps: float = 0.0
     frame_count: int = 0
@@ -52,8 +55,14 @@ class FlatMp4Loader(Loader):
     """Loader for a flat directory of H.264/MPEG-2 ``.mp4`` videos."""
 
     format = DatasetFormat.FLAT_MP4
+    supports_remote = True
 
-    def load(self, root: str | Path, **_: Any) -> BoxTrackDataset:
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        return path.is_dir() and bool(_flat_mp4_files(path))
+
+    def load(self, root: str | Path, *, storage_options: dict[str, Any] | None = None, **_: Any) -> BoxTrackDataset:
         """Read immediate ``*.mp4`` children under ``root`` into ``BoxTrackDataset``.
 
         Parameters
@@ -70,7 +79,7 @@ class FlatMp4Loader(Loader):
             dataset has no boxes or categories because this format carries no
             annotations.
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         if not root.is_dir():
             logger.warning("Flat MP4 root is not a directory: %s", root)
             return BoxTrackDataset(sequences=(), categories={})
@@ -87,22 +96,22 @@ class FlatMp4Loader(Loader):
                 sequences.append(seq)
 
         logger.info("Loaded %d flat MP4 video(s) from %s", len(sequences), root)
-        return BoxTrackDataset(sequences=tuple(sequences), categories={})
+        return BoxTrackDataset(sequences=tuple(sequences), categories={}, _storage_options=storage_options_for(root))
 
 
-def load_flat_mp4(root: str | Path) -> BoxTrackDataset:
+def load_flat_mp4(root: str | Path, *, storage_options: dict[str, Any] | None = None) -> BoxTrackDataset:
     """Load a flat folder of H.264/MPEG-2 ``.mp4`` videos.
 
     Equivalent to ``datamaite.load(root, dataset_format="flat_mp4")``. See
     :meth:`FlatMp4Loader.load` for semantics.
     """
-    return FlatMp4Loader().load(root)
+    return FlatMp4Loader().load(root, storage_options=storage_options)
 
 
 def _flat_mp4_files(root: Path) -> list[Path]:
     """Return immediate MP4 files in deterministic order; never recurse."""
     try:
-        return sorted(p for p in root.iterdir() if p.is_file() and p.suffix.lower() == ".mp4")
+        return [path for path in list_files(root) if path.suffix.lower() == ".mp4"]
     except OSError as exc:
         logger.warning("Could not list flat MP4 root %s: %s", root, exc)
         return []
@@ -135,7 +144,7 @@ def _load_video(video_path: Path, *, next_video_id: int) -> VideoSequence | None
             "source_path": str(video_path),
             "codec": codec,
             "codec_label": _SUPPORTED_CODEC_LABELS.get(codec, codec),
-            "codec_fourcc": probe.codec_fourcc,
+            "codec_fourcc": _canonical_fourcc(codec, probe.codec_fourcc),
         },
         boxes=[],
         width=probe.width,
@@ -146,43 +155,24 @@ def _load_video(video_path: Path, *, next_video_id: int) -> VideoSequence | None
 
 
 def _probe_mp4_video(video_path: Path) -> _VideoProbe:
-    """Open ``video_path`` with OpenCV and collect codec/metadata."""
+    """Probe through the shared local/remote video adapter."""
     try:
-        import cv2  # type: ignore[import-untyped]
-    except ImportError:
-        logger.warning("OpenCV not installed; cannot load flat MP4 videos (install datamaite[fmv])")
+        details = probe_video(video_path)
+    except (ImportError, OSError, ValueError) as exc:
+        logger.warning("Skipping flat MP4 video after probe error %s: %s", video_path, exc)
         return _VideoProbe(opened=False)
-
-    cap = cv2.VideoCapture(str(video_path))
-    try:
-        if not cap.isOpened():
-            logger.warning("Skipping flat MP4 video that cannot be opened: %s", video_path)
-            return _VideoProbe(opened=False)
-
-        try:
-            fps = _finite_float(cap.get(cv2.CAP_PROP_FPS)) or 0.0
-            frame_count = int(_finite_float(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0)
-            width = int(_finite_float(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0)
-            height = int(_finite_float(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0)
-            codec_fourcc = _fourcc_to_string(cap.get(cv2.CAP_PROP_FOURCC))
-            codec = _canonical_codec(codec_fourcc)
-            ret, first_frame = cap.read()
-            first_frame_decodable = bool(ret and first_frame is not None)
-        except Exception as exc:
-            logger.warning("Skipping flat MP4 video after probe error %s: %s", video_path, exc)
-            return _VideoProbe(opened=False)
-    finally:
-        cap.release()
-
+    codec_name = details.get("codec_name")
+    codec_fourcc = details.get("codec_fourcc")
     return _VideoProbe(
-        opened=True,
-        codec=codec,
-        codec_fourcc=codec_fourcc,
-        fps=fps,
-        frame_count=frame_count,
-        width=width,
-        height=height,
-        first_frame_decodable=first_frame_decodable,
+        opened=bool(details.get("opened")),
+        codec=_canonical_codec(str(codec_name)) or _canonical_codec(str(codec_fourcc)),
+        codec_name=str(codec_name) if codec_name else None,
+        codec_fourcc=str(codec_fourcc) if codec_fourcc else None,
+        fps=_finite_float(details.get("fps")) or 0.0,
+        frame_count=int(_finite_float(details.get("frame_count")) or 0),
+        width=int(_finite_float(details.get("width")) or 0),
+        height=int(_finite_float(details.get("height")) or 0),
+        first_frame_decodable=bool(details.get("first_frame_decodable")),
     )
 
 
@@ -192,10 +182,10 @@ def _probe_is_usable(video_path: Path, probe: _VideoProbe) -> bool:
         return False
     if probe.codec not in _SUPPORTED_CODEC_LABELS:
         known = ", ".join(_SUPPORTED_CODEC_LABELS.values())
-        fourcc = probe.codec_fourcc or "unknown"
+        token = probe.codec_name or probe.codec_fourcc or "unknown"
         logger.warning(
             "Skipping flat MP4 video with unsupported codec %r (supported: %s): %s",
-            fourcc,
+            token,
             known,
             video_path,
         )
@@ -217,14 +207,23 @@ def _probe_is_usable(video_path: Path, probe: _VideoProbe) -> bool:
     return True
 
 
-def _canonical_codec(fourcc: str | None) -> str | None:
-    """Map an OpenCV/FFmpeg fourcc string to the supported codec key."""
-    if not fourcc:
+def _canonical_fourcc(codec: str, value: str | None) -> str | None:
+    """Normalize backend-specific aliases used for the same MP4 codec."""
+    if codec == "h264":
+        return "avc1"
+    if codec == "mpeg2":
+        return "mpg2"
+    return value.lower() if value else None
+
+
+def _canonical_codec(value: str | None) -> str | None:
+    """Map an FFmpeg codec name or container fourcc to a supported key."""
+    if not value:
         return None
-    token = fourcc.strip().lower()
-    if token in _H264_FOURCCS:
+    token = value.strip().lower()
+    if token in _H264_CODEC_TOKENS:
         return "h264"
-    if token in _MPEG2_FOURCCS:
+    if token in _MPEG2_CODEC_TOKENS:
         return "mpeg2"
     return None
 
@@ -255,6 +254,6 @@ def _finite_float(value: Any) -> float | None:
 def _file_size(path: Path) -> int | None:
     """Return file size in bytes, or None if unavailable."""
     try:
-        return path.stat().st_size
+        return resource_size(path)
     except OSError:
         return None

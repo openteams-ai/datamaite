@@ -18,15 +18,16 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 from datamaite._formats._coerce import coerce_finite_float, coerce_int
 from datamaite._formats._fixed_taxonomy import ClassIdResolver, validate_class_map
+from datamaite._io import copy_resource, iter_video_frames, same_resource, source_path, write_cv_image
 from datamaite._types import DatasetFormat
+from datamaite._upath import to_dataset_path
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 from datamaite.writers import Writer, WriterCapabilities, register_writer
 
@@ -155,7 +156,7 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
             logger=logger,
             minimum=0,
         )
-        dest = Path(dest)
+        dest = to_dataset_path(dest, _options.get("storage_options"))
         dest.mkdir(parents=True, exist_ok=True)
 
         written: list[Path] = []
@@ -339,20 +340,16 @@ def _image_sequence_frame_indices(seq: VideoSequence) -> list[int]:
 
 def _safe_frame_path(seq: VideoSequence, frame_index: int) -> Path | None:
     try:
-        return seq.frame_path(frame_index)
+        path = seq.frame_path(frame_index)
+        return source_path(path) if path is not None else None
     except (IndexError, ValueError) as exc:
         logger.warning("Skipping frame %s for sequence %s: %s", frame_index, _sequence_label(seq), exc)
         return None
 
 
 def _copy_frame(source: Path, dest: Path) -> None:
-    try:
-        same_file = source.resolve(strict=False) == dest.resolve(strict=False)
-    except OSError:
-        same_file = False
-    if same_file:
-        return
-    shutil.copy2(source, dest)
+    if not same_resource(source, dest):
+        copy_resource(source, dest)
 
 
 def _extract_video_frames(  # pragma: no cover - optional OpenCV path covered by integration-style users.
@@ -365,18 +362,7 @@ def _extract_video_frames(  # pragma: no cover - optional OpenCV path covered by
     written_seen: set[Path],
 ) -> dict[int, _FrameOutput]:
     """Decode every frame of a video-backed sequence into VisDrone frame images."""
-    try:
-        import cv2  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise ImportError(
-            "Writing video-backed sequences to VisDrone requires OpenCV. Install it with: pip install datamaite[fmv]"
-        ) from exc
-
-    video_path = Path(seq.video_path or "")
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        logger.warning("Could not open video for VisDrone frame extraction: %s", video_path)
-        return {}
+    video_path = source_path(seq.video_path or "")
 
     if seq.boxes and not seq.num_frames_exact:
         logger.warning(
@@ -386,27 +372,17 @@ def _extract_video_frames(  # pragma: no cover - optional OpenCV path covered by
         )
 
     outputs: dict[int, _FrameOutput] = {}
-    frame_index = 0
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            dest_path = frame_dir / f"{frame_index + 1:07d}{image_extension}"
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(dest_path), frame):
-                raise OSError(f"OpenCV failed to write frame image: {dest_path}")
-            height, width = frame.shape[:2]
-            outputs[frame_index] = _FrameOutput(
-                frame_index=frame_index,
-                path=dest_path,
-                width=int(width),
-                height=int(height),
-            )
-            _append_written(written, written_seen, dest_path)
-            frame_index += 1
-    finally:
-        cap.release()
+    for frame_index, frame in enumerate(iter_video_frames(video_path)):
+        dest_path = frame_dir / f"{frame_index + 1:07d}{image_extension}"
+        write_cv_image(dest_path, frame, image_extension)
+        height, width = frame.shape[:2]
+        outputs[frame_index] = _FrameOutput(
+            frame_index=frame_index,
+            path=dest_path,
+            width=int(width),
+            height=int(height),
+        )
+        _append_written(written, written_seen, dest_path)
 
     if not outputs:
         logger.warning("Video %s decoded zero frames for VisDrone output", video_path)
@@ -530,7 +506,7 @@ def _sequence_label(seq: VideoSequence) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     if seq.video_path:
-        stem = Path(seq.video_path).stem
+        stem = PurePosixPath(seq.video_path).stem
         if stem:
             return stem
     return f"sequence_{seq.video_id:06d}"

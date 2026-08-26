@@ -18,7 +18,7 @@ datamaite`` / loading / validating never pulls either.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,9 +76,9 @@ def _detection_attributes(dets: Sequence[ObjectDetectionAnnotation]) -> dict[str
     return {key: [d.attributes.get(key) for d in dets] for key in keys}
 
 
-def od_input(sample: ImageObjectDetectionSample) -> np.ndarray:
+def od_input(sample: ImageObjectDetectionSample, *, storage_options: Mapping[str, Any] | None = None) -> np.ndarray:
     """Decode one OD sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
-    return decode_image(sample, task_name="ObjectDetectionDataset", extra="od")
+    return decode_image(sample, task_name="ObjectDetectionDataset", extra="od", storage_options=storage_options)
 
 
 def od_target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
@@ -86,7 +86,13 @@ def od_target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
     return _target(sample)
 
 
-def od_metadata(sample: ImageObjectDetectionSample, image: np.ndarray | None = None) -> dict[str, Any]:
+def od_metadata(
+    sample: ImageObjectDetectionSample,
+    image: np.ndarray | None = None,
+    *,
+    dimensions: tuple[int, int] | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build one OD sample's MAITE datum metadata.
 
     The source-preserving per-image passthrough (``sample.metadata`` -- e.g. COCO
@@ -110,16 +116,24 @@ def od_metadata(sample: ImageObjectDetectionSample, image: np.ndarray | None = N
     meta["id"] = sample.image_id
     height, width = sample.height, sample.width
     if height is None or width is None:
-        if image is None:
-            image = od_input(sample)
-        height = sample.height if sample.height is not None else int(image.shape[1])
-        width = sample.width if sample.width is not None else int(image.shape[2])
+        if image is None and dimensions is None:
+            image = od_input(sample, storage_options=storage_options)
+        probed_width, probed_height = dimensions or (None, None)
+        height = sample.height if sample.height is not None else probed_height
+        width = sample.width if sample.width is not None else probed_width
+        if height is None or width is None:
+            if image is None:  # defensive fallback for custom callers
+                image = od_input(sample, storage_options=storage_options)
+            height = sample.height if sample.height is not None else int(image.shape[1])
+            width = sample.width if sample.width is not None else int(image.shape[2])
     meta["height"] = height
     meta["width"] = width
     return meta
 
 
-def build_od_item(sample: ImageObjectDetectionSample) -> tuple[np.ndarray, ObjectDetectionTarget, dict[str, Any]]:
+def build_od_item(
+    sample: ImageObjectDetectionSample, *, storage_options: Mapping[str, Any] | None = None
+) -> tuple[np.ndarray, ObjectDetectionTarget, dict[str, Any]]:
     """Build one MAITE OD item ``(image, target, datum_metadata)`` for ``sample``."""
-    image = od_input(sample)
-    return image, od_target(sample), od_metadata(sample, image)
+    image = od_input(sample, storage_options=storage_options)
+    return image, od_target(sample), od_metadata(sample, image, storage_options=storage_options)

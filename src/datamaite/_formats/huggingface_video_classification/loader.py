@@ -23,12 +23,14 @@ import json
 import logging
 import math
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
+from datamaite._io import is_within, list_files, resource_key
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import is_remote_path, storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import VideoClassificationDataset, VideoClassificationSample
 
@@ -58,6 +60,7 @@ class _VideoRecord:
     label: str | None
     metadata_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    size_bytes: int | None = None
 
 
 @register_loader
@@ -66,12 +69,21 @@ class HuggingFaceVideoClassificationLoader(Loader):
 
     task = Task.VC
     format = DatasetFormat.HUGGINGFACE_VIDEO_CLASSIFICATION
+    supports_remote = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        if not path.is_dir():
+            return False
+        return bool(_metadata_files(path) or _records_from_folder_layout(path, _VIDEO_EXTENSIONS))
 
     def load(
         self,
         root: str | Path,
         *,
         video_extensions: Collection[str] | str | None = None,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> VideoClassificationDataset:
         """Read a Hugging Face video classification dataset root.
@@ -94,7 +106,7 @@ class HuggingFaceVideoClassificationLoader(Loader):
             One video-level classification sample per loadable file. This is a
             source-record dataset, not a MAITE dataset.
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         if not root.is_dir():
             logger.warning("Hugging Face video classification root is not a directory: %s", root)
             return VideoClassificationDataset(samples=(), categories={})
@@ -121,20 +133,25 @@ class HuggingFaceVideoClassificationLoader(Loader):
             len(categories),
             root,
         )
-        return VideoClassificationDataset(samples=tuple(samples), categories=categories, labels=labels)
+        return VideoClassificationDataset(
+            samples=tuple(samples), categories=categories, labels=labels, _storage_options=storage_options_for(root)
+        )
 
 
 def load_huggingface_video_classification(
     root: str | Path,
     *,
     video_extensions: Collection[str] | str | None = None,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> VideoClassificationDataset:
     """Load a Hugging Face VideoFolder video classification dataset root.
 
     Equivalent to ``datamaite.load(root, dataset_format="huggingface_video_classification")``.
     See :meth:`HuggingFaceVideoClassificationLoader.load` for semantics.
     """
-    return HuggingFaceVideoClassificationLoader().load(root, video_extensions=video_extensions)
+    return HuggingFaceVideoClassificationLoader().load(
+        root, video_extensions=video_extensions, storage_options=storage_options
+    )
 
 
 def _records_from_metadata(
@@ -270,7 +287,7 @@ def _build_dataset_records(
                 metadata_path=str(record.metadata_path) if record.metadata_path is not None else None,
                 video_meta=video_meta,
                 metadata=dict(record.metadata),
-                size_bytes=_file_size(record.path),
+                size_bytes=record.size_bytes,
             )
         )
     return samples, categories, labels
@@ -280,19 +297,29 @@ def _filter_existing_records(records: Iterable[_VideoRecord]) -> list[_VideoReco
     """Keep records whose resolved video file exists."""
     valid: list[_VideoRecord] = []
     for record in records:
-        if not record.path.is_file():
+        try:
+            if is_remote_path(record.path):
+                info = record.path.fs.info(record.path.path)  # type: ignore[attr-defined]
+                if info.get("type") not in {"file", None}:
+                    raise FileNotFoundError(str(record.path))
+                size = int(info.get("size", 0))
+            else:
+                if not record.path.is_file():
+                    raise FileNotFoundError(str(record.path))
+                size = int(record.path.stat().st_size)
+        except (OSError, TypeError, ValueError):
             logger.warning("Skipping Hugging Face video classification entry with missing file: %s", record.path)
             continue
-        valid.append(record)
+        valid.append(replace(record, size_bytes=size))
     return valid
 
 
 def _dedupe_records(records: Iterable[_VideoRecord]) -> list[_VideoRecord]:
     """Keep the first reference to a video path, preserving discovery order."""
-    seen: set[Path] = set()
+    seen: set[str] = set()
     deduped: list[_VideoRecord] = []
     for record in records:
-        key = record.path.resolve(strict=False)
+        key = resource_key(record.path)
         if key in seen:
             logger.warning("Skipping duplicate Hugging Face video classification entry: %s", record.path)
             continue
@@ -410,13 +437,15 @@ def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
             )
             return []
         try:
-            rows = pd.read_parquet(path).to_dict(orient="records")
+            with path.open("rb") as stream:
+                rows = pd.read_parquet(stream).to_dict(orient="records")
         except Exception as exc:
             logger.warning("Could not read Hugging Face metadata parquet %s: %s", path, exc)
             return []
     else:  # pragma: no cover - pyarrow success path needs the optional parquet dependency.
         try:
-            rows = pq.read_table(path).to_pylist()
+            with path.open("rb") as stream:
+                rows = pq.read_table(stream).to_pylist()
         except Exception as exc:
             logger.warning("Could not read Hugging Face metadata parquet %s: %s", path, exc)
             return []
@@ -531,7 +560,7 @@ def _normalize_video_extensions(value: Collection[str] | str | None) -> frozense
 def _iter_video_files(base: Path, extensions: frozenset[str]) -> list[Path]:
     """Return supported video files recursively under ``base``."""
     try:
-        return sorted(path for path in base.rglob("*") if path.is_file() and path.suffix.lower() in extensions)
+        return [path for path in list_files(base, recursive=True) if path.suffix.lower() in extensions]
     except OSError as exc:
         logger.warning("Could not list Hugging Face video tree %s: %s", base, exc)
         return []
@@ -575,12 +604,8 @@ def _relative_posix(path: Path, root: Path) -> str:
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    """Return True if ``path`` resolves under ``root``, catching symlink escapes."""
-    try:
-        path.resolve(strict=False).relative_to(root.resolve(strict=False))
-    except (OSError, ValueError):
-        return False
-    return True
+    """Return True if ``path`` stays under ``root`` on its backend."""
+    return is_within(path, root)
 
 
 def _file_size(path: Path) -> int | None:

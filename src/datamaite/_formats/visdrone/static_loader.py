@@ -16,7 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
+from datamaite._io import list_files
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.geometry import BBox, has_positive_area
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.loaders import Loader, register_loader
@@ -186,7 +188,7 @@ def _normalize_extensions(image_extensions: Any) -> frozenset[str]:
 
 def iter_images(images_dir: Path, extensions: frozenset[str]) -> list[Path]:
     """Sorted image files directly under ``images/`` (VisDrone-DET is flat)."""
-    return sorted(p for p in images_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions)
+    return [path for path in list_files(images_dir) if path.suffix.lower() in extensions]
 
 
 def _has_matching_image(images_dir: Path, stem: str, extensions: frozenset[str]) -> bool:
@@ -194,8 +196,9 @@ def _has_matching_image(images_dir: Path, stem: str, extensions: frozenset[str])
 
 
 def _warn_orphan_annotations(annotations_dir: Path, images_dir: Path, extensions: frozenset[str]) -> None:
-    for ann in sorted(annotations_dir.glob("*.txt")):
-        if not _has_matching_image(images_dir, ann.stem, extensions):
+    image_stems = {path.stem for path in iter_images(images_dir, extensions)}
+    for ann in (path for path in list_files(annotations_dir) if path.suffix.lower() == ".txt"):
+        if ann.stem not in image_stems:
             logger.warning("VisDrone annotation %s has no matching image; skipping", ann)
 
 
@@ -218,7 +221,7 @@ def _row_to_detection(row: _VisDroneRow) -> ObjectDetectionAnnotation:
 
 def _dirs(root: str | Path) -> tuple[Path, Path, Path] | None:
     """Return ``(root, images_dir, annotations_dir)`` when both subdirs exist."""
-    root_path = Path(root)
+    root_path = to_dataset_path(root)
     images_dir = root_path / "images"
     annotations_dir = root_path / "annotations"
     if not images_dir.is_dir() or not annotations_dir.is_dir():
@@ -229,7 +232,7 @@ def _dirs(root: str | Path) -> tuple[Path, Path, Path] | None:
 
 def _looks_like_visdrone_static(root: str | Path) -> bool:
     """True when ``root`` has ``images/``+``annotations/`` and a VisDrone-shaped annotation line."""
-    path = Path(root)
+    path = to_dataset_path(root)
     images_dir = path / "images"
     annotations_dir = path / "annotations"
     if not images_dir.is_dir() or not annotations_dir.is_dir():
@@ -255,12 +258,21 @@ class VisDroneObjectDetectionLoader(Loader):
     task: ClassVar[Task] = Task.OD
     format = DatasetFormat.VISDRONE
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
 
     @classmethod
     def sniff(cls, root: str | Path) -> bool:
         return _looks_like_visdrone_static(root)
 
-    def load(self, root: str | Path, *, image_extensions: Any = None, **_: Any) -> ObjectDetectionDataset:
+    def load(
+        self,
+        root: str | Path,
+        *,
+        image_extensions: Any = None,
+        storage_options: dict[str, Any] | None = None,
+        **_: Any,
+    ) -> ObjectDetectionDataset:
+        root = to_dataset_path(root, storage_options)
         dirs = _dirs(root)
         if dirs is None:
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="visdrone"))
@@ -300,6 +312,7 @@ class VisDroneObjectDetectionLoader(Loader):
             samples=tuple(samples),
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="visdrone", splits=splits),
             dataset_id="visdrone",
+            _storage_options=storage_options_for(root_path),
         )
 
 
@@ -310,14 +323,22 @@ class VisDroneImageClassificationLoader(Loader):
     task: ClassVar[Task] = Task.IC
     format = DatasetFormat.VISDRONE
     variant: ClassVar[str] = "default"
+    supports_remote: ClassVar[bool] = True
 
     @classmethod
     def sniff(cls, root: str | Path) -> bool:
         return _looks_like_visdrone_static(root)
 
     def load(
-        self, root: str | Path, *, include_ignored_regions: bool = False, image_extensions: Any = None, **_: Any
+        self,
+        root: str | Path,
+        *,
+        include_ignored_regions: bool = False,
+        image_extensions: Any = None,
+        storage_options: dict[str, Any] | None = None,
+        **_: Any,
     ) -> ImageClassificationDataset:
+        root = to_dataset_path(root, storage_options)
         dirs = _dirs(root)
         if dirs is None:
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="visdrone"))
@@ -378,4 +399,5 @@ class VisDroneImageClassificationLoader(Loader):
             samples=tuple(samples),
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="visdrone", splits=splits),
             dataset_id="visdrone",
+            _storage_options=storage_options_for(root_path),
         )

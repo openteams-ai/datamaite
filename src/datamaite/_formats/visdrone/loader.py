@@ -27,10 +27,12 @@ import math
 import os
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Literal
 
+from datamaite._io import decode_image_path, list_files
 from datamaite._types import DatasetFormat
+from datamaite._upath import is_remote_path, storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 
@@ -113,6 +115,12 @@ class VisDroneVideoLoader(Loader):
     """
 
     format = DatasetFormat.VISDRONE_VIDEO
+    supports_remote = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        return bool(_split_roots(path, variant="auto"))
 
     def load(
         self,
@@ -125,6 +133,7 @@ class VisDroneVideoLoader(Loader):
         frame_ext: str = ".jpg",
         fps: float = 0.0,
         probe_images: bool = False,
+        storage_options: dict[str, Any] | None = None,
         **_: Any,
     ) -> BoxTrackDataset:
         """Read VisDrone video split(s) into :class:`BoxTrackDataset`.
@@ -169,7 +178,7 @@ class VisDroneVideoLoader(Loader):
             Image-sequence-backed VisDrone sequence records. Empty when no
             official split roots or no annotation files are found.
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         resolved_variant = _normalize_variant(variant)
         source = _normalize_source(annotation_source)
         class_filter = _normalize_classes(classes)
@@ -209,7 +218,9 @@ class VisDroneVideoLoader(Loader):
         logger.info(
             "Loaded %d VisDrone video sequence(s), %d categories from %s", len(sequences), len(categories), root
         )
-        return BoxTrackDataset(sequences=tuple(sequences), categories=categories)
+        return BoxTrackDataset(
+            sequences=tuple(sequences), categories=categories, _storage_options=storage_options_for(root)
+        )
 
 
 def load_visdrone_video(
@@ -222,6 +233,7 @@ def load_visdrone_video(
     frame_ext: str = ".jpg",
     fps: float = 0.0,
     probe_images: bool = False,
+    storage_options: dict[str, Any] | None = None,
 ) -> BoxTrackDataset:
     """Load a VisDrone VID or MOT video dataset root.
 
@@ -237,6 +249,7 @@ def load_visdrone_video(
         frame_ext=frame_ext,
         fps=fps,
         probe_images=probe_images,
+        storage_options=storage_options,
     )
 
 
@@ -562,23 +575,23 @@ def _category_for_visdrone_class(category_id: int, categories: dict[str, int]) -
 
 def _probe_images(frame_dir: Path, frame_ext: str, *, enabled: bool) -> _ImageProbe:
     """Count frame files and optionally read the first frame via OpenCV."""
-    frame_count = _count_frame_files(frame_dir, frame_ext)
-    if frame_count is None:
-        _warn_no_matching_frames(frame_dir, frame_ext)
     if not enabled:
+        frame_count = _count_frame_files(frame_dir, frame_ext)
+        if frame_count is None:
+            _warn_no_matching_frames(frame_dir, frame_ext)
         return _ImageProbe(frame_count=frame_count)
 
     frame_paths = _frame_paths(frame_dir, frame_ext)
+    frame_count = len(frame_paths) or None
     if not frame_paths:
+        _warn_no_matching_frames(frame_dir, frame_ext)
         return _ImageProbe(frame_count=frame_count)
+    first = frame_paths[0]
     try:
-        import cv2  # type: ignore[import-untyped]
+        image = decode_image_path(first)
     except ImportError:
         logger.warning("OpenCV not installed; skipping VisDrone image probing (install datamaite[fmv])")
         return _ImageProbe(frame_count=frame_count)
-
-    first = frame_paths[0]
-    image = cv2.imread(str(first), cv2.IMREAD_UNCHANGED)
     if image is None:
         logger.warning("Could not read VisDrone frame image for probing: %s", first)
         return _ImageProbe(frame_count=frame_count)
@@ -592,8 +605,11 @@ def _frame_paths(frame_dir: Path, frame_ext: str) -> list[Path]:
         return []
     ext = frame_ext.lower()
     try:
-        with os.scandir(frame_dir) as entries:
-            paths = [Path(entry.path) for entry in entries if _entry_is_matching_file(entry, ext)]
+        if is_remote_path(frame_dir):
+            paths = [path for path in list_files(frame_dir) if path.suffix.lower() == ext]
+        else:
+            with os.scandir(frame_dir) as entries:
+                paths = [to_dataset_path(entry.path) for entry in entries if _entry_is_matching_file(entry, ext)]
     except OSError as exc:
         logger.warning("Could not list VisDrone frame directory %s: %s", frame_dir, exc)
         return []
@@ -606,8 +622,11 @@ def _count_frame_files(frame_dir: Path, frame_ext: str) -> int | None:
         return None
     ext = frame_ext.lower()
     try:
-        with os.scandir(frame_dir) as entries:
-            count = sum(1 for entry in entries if _entry_is_matching_file(entry, ext))
+        if is_remote_path(frame_dir):
+            count = sum(1 for path in list_files(frame_dir) if path.suffix.lower() == ext)
+        else:
+            with os.scandir(frame_dir) as entries:
+                count = sum(1 for entry in entries if _entry_is_matching_file(entry, ext))
     except OSError as exc:
         logger.warning("Could not list VisDrone frame directory %s: %s", frame_dir, exc)
         return None
@@ -617,7 +636,7 @@ def _count_frame_files(frame_dir: Path, frame_ext: str) -> int | None:
 def _entry_is_matching_file(entry: os.DirEntry[str], ext: str) -> bool:
     """Return True when an os.scandir entry is a frame file for ``ext``."""
     try:
-        return entry.is_file() and (not ext or Path(entry.name).suffix.lower() == ext)
+        return entry.is_file() and (not ext or PurePath(entry.name).suffix.lower() == ext)
     except OSError:
         return False
 

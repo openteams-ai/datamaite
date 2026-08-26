@@ -26,7 +26,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from datamaite._io import decode_image_path, is_within
 from datamaite._types import DatasetFormat
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 
@@ -96,12 +98,19 @@ class TaoLoader(Loader):
     """Loader for official TAO dataset roots."""
 
     format = DatasetFormat.TAO
+    supports_remote = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        return bool(_annotation_files(path))
 
     def load(
         self,
         root: str | Path,
         *,
         probe_images: bool = False,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> BoxTrackDataset:
         """Read a TAO dataset root into :class:`BoxTrackDataset`.
@@ -124,7 +133,7 @@ class TaoLoader(Loader):
             records. Empty when no standard TAO annotation files are found or
             all discovered files are malformed.
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         annotation_files = _annotation_files(root)
         if not annotation_files:
             logger.warning("TAO root has no standard annotation files under %s", root / "annotations")
@@ -150,16 +159,23 @@ class TaoLoader(Loader):
             sequences.extend(loaded)
 
         logger.info("Loaded %d TAO sequence(s), %d categories from %s", len(sequences), len(categories), root)
-        return BoxTrackDataset(sequences=tuple(sequences), categories=categories)
+        return BoxTrackDataset(
+            sequences=tuple(sequences), categories=categories, _storage_options=storage_options_for(root)
+        )
 
 
-def load_tao(root: str | Path, *, probe_images: bool = False) -> BoxTrackDataset:
+def load_tao(
+    root: str | Path,
+    *,
+    probe_images: bool = False,
+    storage_options: Mapping[str, Any] | None = None,
+) -> BoxTrackDataset:
     """Load an official TAO dataset root.
 
     Equivalent to ``datamaite.load(root, dataset_format="tao", ...)``. See
     :meth:`TaoLoader.load` for parameter semantics.
     """
-    return TaoLoader().load(root, probe_images=probe_images)
+    return TaoLoader().load(root, probe_images=probe_images, storage_options=storage_options)
 
 
 def _annotation_files(root: Path) -> list[tuple[str, Path]]:
@@ -618,11 +634,10 @@ def _probe_image(path: Path | None) -> tuple[int, int] | None:
     if path is None:
         return None
     try:
-        import cv2  # type: ignore[import-untyped]
+        image = decode_image_path(path)
     except ImportError:
         logger.warning("OpenCV not installed; skipping TAO image probing (install datamaite[fmv])")
         return None
-    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         logger.warning("Could not read TAO frame image for probing: %s", path)
         return None
@@ -634,13 +649,13 @@ def _first_frame_file(frame_files: Iterable[str | None]) -> Path | None:
     """Return the first present frame file from a frame file table."""
     for frame_file in frame_files:
         if frame_file is not None:
-            return Path(frame_file)
+            return to_dataset_path(frame_file)
     return None
 
 
 def _common_frame_dir(frame_files: Iterable[str | None]) -> str | None:
     """Return a common frame directory when every present frame shares one."""
-    parents = {str(Path(frame_file).parent) for frame_file in frame_files if frame_file is not None}
+    parents = {str(to_dataset_path(frame_file).parent) for frame_file in frame_files if frame_file is not None}
     return next(iter(parents)) if len(parents) == 1 else None
 
 
@@ -679,14 +694,8 @@ def _resolve_image_path(root: Path, file_name: str, *, annotation_path: Path) ->
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    """Return True if ``path`` resolves under ``root``, catching symlink escapes."""
-    try:
-        resolved_path = path.resolve(strict=False)
-        resolved_root = root.resolve(strict=False)
-        resolved_path.relative_to(resolved_root)
-    except (OSError, ValueError):
-        return False
-    return True
+    """Return True if ``path`` stays under ``root`` on its backend."""
+    return is_within(path, root)
 
 
 def _parse_bbox(value: object) -> tuple[float, float, float, float] | None:

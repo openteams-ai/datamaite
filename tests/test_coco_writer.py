@@ -249,7 +249,22 @@ class TestCocoWriterDrops:
         assert not (tmp_path / "deep" / "escape.jpg").exists()
         assert "unsafe file_name" in caplog.text
 
-    def test_annotation_file_name_must_be_bare(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "../outside.json",
+            r"..\outside.json",
+            "/absolute/outside.json",
+            r"C:\outside.json",
+            r"C:relative.json",
+            r"\\server\share\outside.json",
+            "instances.json:stream",
+            ".",
+            "..",
+            "",
+        ],
+    )
+    def test_annotation_file_name_must_be_portable_and_bare(self, tmp_path: Path, bad_name: str) -> None:
         ds = ObjectDetectionDataset(samples=())
         with pytest.raises(ValueError, match="bare file name"):
-            write(ds, tmp_path, output_format="coco", annotation_file_name="../evil.json")
+            write(ds, tmp_path, output_format="coco", annotation_file_name=bad_name)

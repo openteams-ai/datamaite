@@ -135,6 +135,39 @@ class TestYoloObjectDetectionRegistry:
 
 
 class TestYoloObjectDetectionLoader:
+    @pytest.mark.parametrize("remote", [False, True])
+    def test_empty_dataset_round_trips_taxonomy_and_split(self, remote: bool, tmp_path: Path, memory_root) -> None:  # type: ignore[no-untyped-def]
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
+            id_density="dense",
+        )
+        dataset = ObjectDetectionDataset(
+            samples=(),
+            dataset_metadata=DatasetMetadata(taxonomy=taxonomy, splits=("train",)),
+        )
+        root = memory_root / "empty-yolo-od" if remote else tmp_path
+
+        write(dataset, root, output_format="yolo")
+        restored = load_od(root, dataset_format="yolo")
+
+        assert restored.index2label() == {0: "cat", 1: "dog"}
+        assert restored.dataset_metadata.splits == ("train",)
+
+    def test_remote_yaml_cannot_escape_dataset_root(self, memory_root) -> None:  # type: ignore[no-untyped-def]
+        sensitive = memory_root / "sensitive" / "images"
+        sensitive.mkdir(parents=True)
+        (sensitive / "outside.png").write_bytes(b"outside")
+        root = memory_root / "untrusted-yolo"
+        root.mkdir(parents=True)
+        (root / "data.yaml").write_text(
+            f"train: {sensitive}\nnames: ['secret']\n",
+            encoding="utf-8",
+        )
+
+        dataset = load_od(root, dataset_format="yolo")
+
+        assert dataset.sample_count == 0
+
     def test_direct_loader_bad_or_empty_roots_return_empty(self, tmp_path: Path) -> None:
         assert not YoloObjectDetectionLoader.sniff(tmp_path / "missing")
         assert YoloObjectDetectionLoader().load(tmp_path / "missing").sample_count == 0
@@ -631,6 +664,51 @@ class TestYoloObjectDetectionWriter:
         assert files == []
         assert not (out / "labels").exists()
         assert "missing image file" in caplog.text
+
+    def test_missing_remote_image_source_leaves_no_local_layout(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id="x",
+                    path_or_uri="memory://missing/nope.png",
+                    file_name="x.png",
+                    width=10,
+                    height=10,
+                    detections=(),
+                ),
+            ),
+        )
+        out = tmp_path / "out"
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            files = write(ds, out, output_format="yolo", write_data_yaml=False, verbose=True)
+
+        assert files == []
+        assert "missing image file" in caplog.text
+        assert list(out.rglob("*")) == []
+
+    def test_missing_remote_source_does_not_remove_preexisting_append_layout(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        image_dir = out / "images" / "train"
+        image_dir.mkdir(parents=True)
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id="x",
+                    path_or_uri="memory://missing/nope.png",
+                    file_name="x.png",
+                    width=10,
+                    height=10,
+                    detections=(),
+                ),
+            ),
+        )
+
+        write(ds, out, output_format="yolo", mode="append", write_data_yaml=False)
+
+        assert image_dir.is_dir()
 
     def test_unsafe_file_name_is_skipped(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         ds = ObjectDetectionDataset(

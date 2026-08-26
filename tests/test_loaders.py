@@ -254,26 +254,21 @@ class TestCloudRoots:
         with pytest.raises(FileNotFoundError):
             load(str(memory_root / "nope"), dataset_format=DatasetFormat.HMIE)
 
-    def test_load_mot_rejects_non_hmie_cloud_format(self, memory_root) -> None:
-        # Cloud roots are HMIE-only; a non-HMIE format must fail loudly rather
-        # than crash inside a loader with local-filesystem assumptions.
-        root = memory_root / "x"
-        root.mkdir()
-        with pytest.raises(ValueError, match="HMIE format only"):
-            load_mot(str(root), dataset_format="motchallenge")
+    def test_every_builtin_loader_declares_remote_support(self) -> None:
+        from datamaite.loaders import available_loader_keys, get_loader
 
-    def test_load_od_and_load_ic_reject_cloud_roots(self, memory_root) -> None:
-        # (#87) The task-first OD/IC entry points share the HMIE-only cloud
-        # policy of load()/load_mot()/load_vc(); no OD/IC format is validated
-        # against object storage.
+        assert all(
+            get_loader(key.format, task=key.task, variant=key.variant).supports_remote
+            for key in available_loader_keys()
+        )
+
+    def test_task_first_loaders_accept_empty_remote_roots(self, memory_root) -> None:
         from datamaite import load_ic, load_od
 
         root = memory_root / "x"
         root.mkdir()
-        with pytest.raises(ValueError, match="HMIE format only"):
-            load_od(str(root), dataset_format="coco")
-        with pytest.raises(ValueError, match="HMIE format only"):
-            load_ic(str(root), dataset_format="yolo")
+        assert load_od(str(root), dataset_format="coco").sample_count == 0
+        assert load_ic(str(root), dataset_format="visdrone").sample_count == 0
 
     def test_load_mot_hmie_cloud_still_works(self, memory_root) -> None:
         single_video_dataset(
@@ -284,15 +279,22 @@ class TestCloudRoots:
         assert isinstance(ds, BoxTrackDataset)
         assert ds.sequence_count == 1
 
-    def test_autodetect_rejects_cloud_root(self, memory_root) -> None:
-        # No format is cloud-sniffable, so autodetect must fail cleanly instead
-        # of letting a loader's sniff() crash on a UPath it can't coerce with
-        # Path(). The UPath-object form is the one that used to raise a raw
-        # TypeError from inside the yolo loader's sniff; the string form is
-        # covered too since it takes a different path through to_dataset_path.
+    def test_autodetect_reports_no_match_for_empty_cloud_root(self, memory_root) -> None:
+        # Remote roots now use the same sniff contract as local roots; an empty
+        # prefix has no matching format and still gets the actionable error.
         root = memory_root / "x"
         root.mkdir()
         with pytest.raises(ValueError, match="dataset_format"):
             load(root, dataset_format=None)
         with pytest.raises(ValueError, match="dataset_format"):
             load(str(root), dataset_format=None)
+
+    def test_autodetect_yolo_ic_cloud_root(self, memory_root) -> None:
+        root = memory_root / "autodetect-yolo"
+        image = root / "train" / "cat" / "a.jpg"
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"discovery only")
+
+        dataset = load(str(root), dataset_format=None, task=Task.IC)
+
+        assert dataset.sample_count == 1  # type: ignore[union-attr]

@@ -30,10 +30,12 @@ import math
 import os
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
+from datamaite._io import decode_image_path, list_files
 from datamaite._types import DatasetFormat
+from datamaite._upath import is_remote_path, storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 
@@ -106,6 +108,18 @@ class MotChallengeLoader(Loader):
     """
 
     format = DatasetFormat.MOTCHALLENGE
+    supports_remote = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        return any(
+            (split / sequence / "seqinfo.ini").is_file()
+            for split in (path / "train", path / "test")
+            if split.is_dir()
+            for sequence in split.iterdir()
+            if sequence.is_dir()
+        )
 
     def load(
         self,
@@ -116,6 +130,7 @@ class MotChallengeLoader(Loader):
         classes: Collection[int] | None = None,
         class_names: Mapping[int, str] | None = None,
         probe_images: bool = False,
+        storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> BoxTrackDataset:
         """Read a MOTChallenge benchmark root into :class:`BoxTrackDataset`.
@@ -152,7 +167,7 @@ class MotChallengeLoader(Loader):
             Loaded sequences and a MOT class map. Empty when the root has no
             usable split directories or no selected annotation files.
         """
-        root = Path(root)
+        root = to_dataset_path(root, storage_options)
         source = annotation_source.lower()
         if source not in _VALID_SOURCES:
             valid = ", ".join(sorted(_VALID_SOURCES))
@@ -190,7 +205,9 @@ class MotChallengeLoader(Loader):
                     sequences.append(seq)
 
         logger.info("Loaded %d MOTChallenge sequence(s), %d categories from %s", len(sequences), len(categories), root)
-        return BoxTrackDataset(sequences=tuple(sequences), categories=categories)
+        return BoxTrackDataset(
+            sequences=tuple(sequences), categories=categories, _storage_options=storage_options_for(root)
+        )
 
 
 def load_motchallenge(
@@ -201,6 +218,7 @@ def load_motchallenge(
     classes: Collection[int] | None = None,
     class_names: Mapping[int, str] | None = None,
     probe_images: bool = False,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> BoxTrackDataset:
     """Load a standard MOTChallenge dataset root.
 
@@ -214,6 +232,7 @@ def load_motchallenge(
         classes=classes,
         class_names=class_names,
         probe_images=probe_images,
+        storage_options=storage_options,
     )
 
 
@@ -330,7 +349,8 @@ def _parse_seqinfo(seq_dir: Path) -> _SeqInfo:
 
     parser = configparser.ConfigParser()
     try:
-        parser.read(path, encoding="utf-8")
+        with path.open(encoding="utf-8") as stream:
+            parser.read_file(stream)
     except (configparser.Error, OSError, UnicodeDecodeError) as exc:
         logger.warning("Could not parse MOTChallenge seqinfo.ini %s; using defaults: %s", path, exc)
         return _SeqInfo(name=seq_dir.name, path=path)
@@ -623,14 +643,12 @@ def _probe_images(frame_dir: Path, im_ext: str, *, enabled: bool, count_frames: 
             _warn_no_matching_frames(frame_dir, im_ext)
             return _ImageProbe(frame_count=frame_count)
 
+        first = frame_paths[0]
         try:
-            import cv2  # type: ignore[import-untyped]
+            image = decode_image_path(first)
         except ImportError:
             logger.warning("OpenCV not installed; skipping MOTChallenge image probing (install datamaite[fmv])")
             return _ImageProbe(frame_count=frame_count)
-
-        first = frame_paths[0]
-        image = cv2.imread(str(first), cv2.IMREAD_UNCHANGED)
         if image is None:
             logger.warning("Could not read MOTChallenge frame image for probing: %s", first)
             return _ImageProbe(frame_count=frame_count)
@@ -652,8 +670,11 @@ def _frame_paths(frame_dir: Path, im_ext: str) -> list[Path]:
         return []
     ext = im_ext.lower()
     try:
-        with os.scandir(frame_dir) as entries:
-            paths = [Path(entry.path) for entry in entries if _entry_is_matching_file(entry, ext)]
+        if is_remote_path(frame_dir):
+            paths = [path for path in list_files(frame_dir) if path.suffix.lower() == ext]
+        else:
+            with os.scandir(frame_dir) as entries:
+                paths = [to_dataset_path(entry.path) for entry in entries if _entry_is_matching_file(entry, ext)]
     except OSError as exc:
         logger.warning("Could not list MOTChallenge frame directory %s: %s", frame_dir, exc)
         return []
@@ -666,8 +687,11 @@ def _count_frame_files(frame_dir: Path, im_ext: str) -> int | None:
         return None
     ext = im_ext.lower()
     try:
-        with os.scandir(frame_dir) as entries:
-            count = sum(1 for entry in entries if _entry_is_matching_file(entry, ext))
+        if is_remote_path(frame_dir):
+            count = sum(1 for path in list_files(frame_dir) if path.suffix.lower() == ext)
+        else:
+            with os.scandir(frame_dir) as entries:
+                count = sum(1 for entry in entries if _entry_is_matching_file(entry, ext))
     except OSError as exc:
         logger.warning("Could not list MOTChallenge frame directory %s: %s", frame_dir, exc)
         return None
@@ -677,7 +701,7 @@ def _count_frame_files(frame_dir: Path, im_ext: str) -> int | None:
 def _entry_is_matching_file(entry: os.DirEntry[str], ext: str) -> bool:
     """Return True when an os.scandir entry is a frame file for ``ext``."""
     try:
-        return entry.is_file() and (not ext or Path(entry.name).suffix.lower() == ext)
+        return entry.is_file() and (not ext or PurePath(entry.name).suffix.lower() == ext)
     except OSError:
         return False
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pickle
+from dataclasses import asdict
+
 import pytest
 
 from datamaite import (
@@ -63,6 +66,44 @@ class TestRegionKeywordOnly:
 
 
 class TestModel:
+    def test_runtime_storage_options_are_excluded_from_serialization(self) -> None:
+        ds = ObjectDetectionDataset(samples=(), _storage_options={"secret": lambda: "credential"})
+
+        assert "secret" not in repr(ds)
+        assert "_storage_options" not in asdict(ds)
+        restored = pickle.loads(pickle.dumps(ds))  # noqa: S301 - trusted in-process round-trip
+        assert restored == ds
+        assert restored._runtime_storage_options == {}
+
+    def test_fieldwise_input_is_fresh_and_caller_mutation_does_not_leak(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        import numpy as np
+
+        from datamaite.maite import _od
+
+        calls = 0
+
+        def fake_decode(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return np.zeros((3, 2, 4), dtype=np.uint8)
+
+        monkeypatch.setattr(_od, "decode_image", fake_decode)
+        ds = ObjectDetectionDataset(samples=(ImageObjectDetectionSample(image_id="remote"),))
+
+        first = ds.get_input(0)
+        first[0, 0, 0] = 200
+        second = ds.get_input(0)
+
+        assert calls == 2
+        assert first is not second
+        assert second[0, 0, 0] == 0
+
+        item_input = ds[0][0]
+        item_input[0, 0, 0] = 123
+        after_item = ds.get_input(0)
+        assert calls == 4
+        assert after_item[0, 0, 0] == 0
+
     def test_len_and_counts(self) -> None:
         ds = _ds()
         assert len(ds) == 2

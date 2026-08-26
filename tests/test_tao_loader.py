@@ -109,7 +109,7 @@ class TestTaoHappyPath:
         ds = load_tao(tmp_path)
 
         assert ds.sequence_count == 2
-        assert len(ds) == 0  # TAO is image-sequence backed, not video-backed.
+        assert len(ds) == 2  # Frame-backed sequences now expose the lazy MAITE MOT surface.
         assert ds.num_boxes == 2
         assert ds.categories == {"tao/category_1/person": 1}
         assert ds.index2label() == {1: "person"}

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from datamaite._types import Finding, Severity
-from datamaite._upath import to_dataset_path
+from datamaite._upath import is_remote_path, to_dataset_path
 
 _HASH_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
@@ -43,8 +43,24 @@ def fingerprint_file(path: Path) -> FileFingerprint | None:
 
     try:
         h = hashlib.sha256()
-        with path.open("rb") as f:
-            h.update(f.read(_HASH_CHUNK_SIZE))
+        if is_remote_path(path):
+            info = path.fs.info(path.path)  # type: ignore[attr-defined]
+            stable = next(
+                (
+                    info.get(key)
+                    for key in ("VersionId", "version_id", "generation", "ETag", "etag", "checksum")
+                    if info.get(key) not in (None, "")
+                ),
+                None,
+            )
+            if stable is not None:
+                h.update(f"{type(stable).__name__}:{stable}".encode())
+            else:
+                with path.open("rb", block_size=_HASH_CHUNK_SIZE) as f:  # type: ignore[call-overload]
+                    h.update(f.read(_HASH_CHUNK_SIZE))
+        else:
+            with path.open("rb") as f:
+                h.update(f.read(_HASH_CHUNK_SIZE))
         return FileFingerprint(hash=h.hexdigest(), size=stat.st_size, mtime=stat.st_mtime)
     except Exception:
         # A fingerprint failure is a cache miss, not a crash: the read can

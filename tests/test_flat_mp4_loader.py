@@ -24,6 +24,26 @@ def _write_mp4(path: Path) -> Path:
     return path
 
 
+def _write_pyav_mpeg2(path: Path) -> Path:
+    av = pytest.importorskip("av")
+    np = pytest.importorskip("numpy")
+    container = av.open(str(path), "w")
+    stream = container.add_stream("mpeg2video", rate=10)
+    stream.width = 64
+    stream.height = 48
+    stream.pix_fmt = "yuv420p"
+    try:
+        for index in range(4):
+            frame = av.VideoFrame.from_ndarray(np.full((48, 64, 3), index * 30, dtype=np.uint8), format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    finally:
+        container.close()
+    return path
+
+
 def _probe(
     *,
     codec: str | None,
@@ -126,6 +146,7 @@ class TestFlatMp4HappyPath:
         assert _canonical_codec("H264") == "h264"
         assert _canonical_codec("mpg2") == "mpeg2"
         assert _canonical_codec("MP2V") == "mpeg2"
+        assert _canonical_codec("mpeg2video") == "mpeg2"
         assert _canonical_codec("mp4v") is None
         assert _fourcc_to_string(cv_fourcc("avc1")) == "avc1"
         assert _fourcc_to_string(0) is None
@@ -265,6 +286,24 @@ class TestFlatMp4RealProbe:
         assert seq.duration is not None
         assert seq.duration > 0
         assert seq.boxes == []
+
+    def test_mpeg2_local_remote_codec_parity(self, tmp_path: Path, memory_root) -> None:  # type: ignore[no-untyped-def]
+        local_root = tmp_path / "local"
+        local_root.mkdir()
+        clip = _write_pyav_mpeg2(local_root / "mpeg2.mp4")
+        remote_root = memory_root / "mpeg2-parity"
+        remote_clip = remote_root / clip.name
+        remote_clip.parent.mkdir(parents=True, exist_ok=True)
+        remote_clip.write_bytes(clip.read_bytes())
+
+        local = load_flat_mp4(local_root)
+        remote = load_flat_mp4(remote_root)
+
+        assert local.sequence_count == remote.sequence_count == 1
+        assert local.sequences[0].video_meta["codec"] == "mpeg2"
+        assert remote.sequences[0].video_meta["codec"] == "mpeg2"
+        assert local.sequences[0].video_meta["codec_fourcc"] == "mpg2"
+        assert _probe_mp4_video(remote_clip).codec_name == "mpeg2video"
 
     def test_real_unsupported_codec_is_probed_then_skipped(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
         pytest.importorskip("cv2")

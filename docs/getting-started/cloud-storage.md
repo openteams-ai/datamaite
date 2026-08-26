@@ -1,12 +1,13 @@
-# Loading datasets from cloud object storage
+# Reading and writing datasets on object storage
 
-datamaite can load and validate HMIE datasets directly from S3, Google
-Cloud Storage, or Azure Blob Storage — no manual download step. Pass a
-cloud URL wherever a dataset root path is accepted.
+datamaite can read and write every registered dataset format directly on S3,
+Google Cloud Storage, or Azure Blob Storage. Pass a cloud URL anywhere a
+dataset root or write destination is accepted. Format modules use the same
+fsspec/UPath path and shared media/copy adapters, so there are no provider
+branches in individual readers or writers.
 
-Cloud URLs are supported for **HMIE loading and validation only**. Other
-format loaders (MOTChallenge, COCO, YOLO, ...) raise a clear error on a
-cloud root; download the dataset and point them at a local path instead.
+HMIE validation also supports cloud roots. Validation for non-HMIE formats is
+not currently implemented, independently of their read/write support.
 
 ## Install the backend extra
 
@@ -32,18 +33,39 @@ Without `fmv`, video checks are skipped: each video emits a
 clean while never touching a single video byte. Install `fmv` whenever you
 rely on the integrity findings.
 
-## Load and validate with a cloud URL
+## Load, write, convert, and validate with cloud URLs
 
 ```python
 import datamaite
 
-ds = datamaite.load_mot("s3://my-bucket/datasets/batch-a", dataset_format="hmie")
+ds = datamaite.load_od(
+    "s3://my-bucket/datasets/coco",
+    dataset_format="coco",
+    storage_options={"anon": False},
+)
 
-result = datamaite.validate("s3://my-bucket/datasets/batch-a", workers=8)
+datamaite.write(
+    ds,
+    "gs://other-bucket/datasets/yolo",
+    output_format="yolo",
+    storage_options={"token": "google_default"},  # destination options
+)
+
+# Source and destination options stay separate during conversion.
+datamaite.convert(
+    "s3://my-bucket/datasets/coco",
+    "az://container/datasets/yolo",
+    input_format="coco",
+    output_format="yolo",
+    read_options={"storage_options": {"anon": False}},
+    write_options={"storage_options": {"account_name": "..."}},
+)
+
+result = datamaite.validate("s3://my-bucket/datasets/hmie", workers=8)
 print(result.summary())
 ```
 
-The CLI accepts the same URLs:
+The validation CLI accepts cloud URLs:
 
 ```bash
 datamaite validate s3://my-bucket/datasets/batch-a --no-cache
@@ -67,13 +89,36 @@ result = datamaite.validate(
 
 The CLI has no credentials flag; configure the environment instead.
 
+Dataset pickle/cloudpickle state never contains `storage_options`. Workers
+reconstruct ambient provider credentials lazily; when explicit process-local
+options are required after transfer, call `dataset.with_storage_options(...)`
+before lazy media access or writing. `write(..., source_storage_options=...)`
+can also explicitly rebind only the source side.
+
+## Destination modes and object-store semantics
+
+`mode="error"`, `"append"`, and `"replace"` work for object-store prefixes.
+Remote error/replace writes stage output before promotion, so a writer failure
+does not clear an existing destination. Promotion and multi-object replacement
+cannot be globally atomic on object storage; rename may be copy + delete.
+Replacing an account/bucket/container root is refused. Append retains stale
+objects by design and assumes a single writer; concurrent appenders cannot
+reserve names atomically across every supported backend.
+
+Cross-filesystem media copies stream in bounded chunks; same-filesystem copies
+use the backend's native copy when available. Remote image/video decoding stays
+lazy. Empty YOLO class directories are represented by hidden marker objects,
+because an empty object-store prefix does not exist.
+
 ## How video integrity checks work on cloud data
 
 Annotation (JSON) checks stream directly from object storage. Video
 integrity checks stream too: the probe opens each remote video as a
-seekable file object and decodes through PyAV over 1 MiB ranged reads, so
+seekable file object and decodes through PyAV over bounded ranged reads, so
 only the byte ranges it actually reads (the container header plus a handful
-of sampled frames) are transferred. No full-file download, no temporary
+of sampled frames) are transferred. The default read-ahead block is 8 MiB;
+pass `storage_options={"block_size": 1 << 20}` to tune it to 1 MiB for
+seek-heavy workloads. No full-file download, no temporary
 files, no presigned URLs. In practice a probe transfers about 13 MB per
 video regardless of file size (see the transport benchmark under
 `tools/probe_bench/`), because the cost scales with the number of frames

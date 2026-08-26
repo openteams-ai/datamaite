@@ -6,6 +6,9 @@ import logging
 from collections.abc import Collection, Iterable
 from pathlib import Path, PurePosixPath
 
+from datamaite._io import current_write_mode
+from datamaite._upath import is_remote_path
+
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"})
@@ -64,10 +67,15 @@ def relative_posix(path: Path, root: Path) -> str:
 
 
 def within(path: Path, root: Path) -> bool:
-    """Whether ``path`` resolves to a location inside ``root`` (symlink-safe)."""
+    """Whether ``path`` is inside ``root``, resolving local symlinks safely."""
     try:
+        if is_remote_path(root):
+            # Object stores have no symlinks; lexical containment avoids one or
+            # more remote metadata requests per discovered object.
+            path.relative_to(root)
+            return True
         return path.resolve().is_relative_to(root.resolve())
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -93,19 +101,27 @@ def safe_relative_path(value: str, *, field: str) -> PurePosixPath:
     return posix
 
 
-def unique_target(target: Path, used: set[Path]) -> Path:
+def unique_target(target: Path, used: set[Path], *, check_storage: bool = True) -> Path:
     # ``is_symlink()`` in addition to ``exists()``: a *dangling* symlink reports
     # ``exists() == False`` but writing through it would land outside ``dest``.
-    if free_target(target, used):
+    if free_target(target, used, check_storage=check_storage):
         return target
     stem = target.stem
     suffix = target.suffix
     for index in range(2, 1_000_000):
         candidate = target.with_name(f"{stem}_{index}{suffix}")
-        if free_target(candidate, used):
+        if free_target(candidate, used, check_storage=check_storage):
             return candidate
     raise ValueError(f"could not allocate unique target near {target}")
 
 
-def free_target(target: Path, used: set[Path]) -> bool:
-    return target not in used and not target.exists() and not target.is_symlink()
+def free_target(target: Path, used: set[Path], *, check_storage: bool = True) -> bool:
+    if target in used:
+        return False
+    if not check_storage:
+        return True
+    # Error/replace remote writes use an empty staging prefix; append keeps the
+    # immediate candidate checks below to narrow concurrent-writer races.
+    if is_remote_path(target) and current_write_mode() in {"error", "replace"}:
+        return True
+    return not target.exists() and not target.is_symlink()

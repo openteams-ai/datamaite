@@ -13,13 +13,16 @@ to numpy + a decoder.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import numpy as np
 
+from datamaite._io import decode_image_path
+from datamaite._upath import is_remote_path, to_dataset_path
 from datamaite.maite._common import (
     EMPTY_BOXES,
     EMPTY_LABELS,
@@ -27,11 +30,12 @@ from datamaite.maite._common import (
     EMPTY_TRACK_IDS,
     boxes_array,
     cached_video_info,
+    fallback_video_info,
     labels_array,
     scores_array,
     track_ids_array,
 )
-from datamaite.maite._decode import DecodedFrame, default_decoder
+from datamaite.maite._decode import DecodedFrame, VideoInfo, default_decoder
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
 
 logger = logging.getLogger(__name__)
@@ -127,6 +131,54 @@ def _frame_plan(
     return order, order
 
 
+class _ImageSequenceStream:
+    """Re-iterable MAITE stream over frame-backed MOT datasets."""
+
+    def __init__(
+        self,
+        seq: VideoSequence,
+        frame_order: Sequence[int],
+        storage_options: Mapping[str, Any],
+    ) -> None:
+        self._seq = seq
+        self._frame_order = frame_order
+        self._storage_options = storage_options
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Never serialize storage credentials with a public MAITE stream."""
+        return {
+            "_seq": self._seq,
+            "_frame_order": self._frame_order,
+            "_storage_options": {},
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+
+    def __iter__(self) -> Iterator[DecodedFrame]:
+        for emitted, source_index in enumerate(self._frame_order):
+            path = self._seq.frame_path(source_index)
+            if path is None:
+                continue
+            bgr = decode_image_path(path, self._storage_options)
+            if bgr is None:
+                logger.warning("Could not decode MOT frame image: %s", path)
+                continue
+            if bgr.ndim == 2:
+                rgb = np.repeat(bgr[:, :, None], 3, axis=2)
+            elif bgr.shape[2] == 4:
+                rgb = bgr[:, :, [2, 1, 0]]
+            else:
+                rgb = bgr[:, :, ::-1]
+            time_s = source_index / self._seq.fps if self._seq.fps > 0 else 0.0
+            yield DecodedFrame(
+                pixels=np.ascontiguousarray(rgb.transpose(2, 0, 1)),
+                time_s=time_s,
+                pts=source_index,
+                frame_index=emitted,
+            )
+
+
 def build_mot_item(
     dataset: BoxTrackDataset, seq: VideoSequence
 ) -> tuple[Iterable[DecodedFrame], _MotTarget, dict[str, Any]]:
@@ -137,16 +189,34 @@ def build_mot_item(
     ``_mot_sequences`` list -- so item access stays O(1) and full iteration
     O(N). Decoder/empty-frame-policy come from the dataset's MOT options.
     """
-    decoder = dataset._decoder or default_decoder()
-    video_path = cast(str, seq.video_path)
-
     by_frame = seq.boxes_by_frame()
     frame_order, source_indices = _frame_plan(seq, by_frame, dataset.empty_frame_policy)
     target = _MotTarget(frame_tracks=_FrameTracks(frame_order, by_frame))
-    stream = decoder.stream(video_path, source_indices)
 
-    info_cache = dataset._caches.setdefault("video_info", {})
-    info = cached_video_info(info_cache, video_path, seq, decoder)
+    if seq.video_path is not None:
+        decoder = dataset._decoder or default_decoder(dataset._runtime_storage_options)
+        video_path = cast(str, seq.video_path)
+        stream: Iterable[DecodedFrame] = decoder.stream(video_path, source_indices)
+        info_cache = dataset._caches.setdefault("video_info", {})
+        resolved_video = to_dataset_path(video_path, dataset._runtime_storage_options)
+        if (
+            is_remote_path(resolved_video)
+            and seq.width is not None
+            and seq.height is not None
+            and seq.size_bytes is not None
+        ):
+            info = fallback_video_info(seq)
+        else:
+            info = cached_video_info(info_cache, video_path, seq, decoder)
+    else:
+        stream = _ImageSequenceStream(seq, frame_order, dataset._runtime_storage_options)
+        fallback = fallback_video_info(seq)
+        info = VideoInfo(
+            width=fallback.width,
+            height=fallback.height,
+            time_base=Fraction(1, round(seq.fps)) if seq.fps > 0 else fallback.time_base,
+            size_bytes=fallback.size_bytes,
+        )
     metadata: dict[str, Any] = {
         "id": seq.video_id,
         "height": info.height,

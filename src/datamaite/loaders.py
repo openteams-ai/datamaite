@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
 from datamaite._types import DatasetFormat, Task
-from datamaite._upath import is_remote_path, to_dataset_path
+from datamaite._upath import is_remote_path, sanitized_uri, to_dataset_path
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset, VisionDataset
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,9 @@ class Loader(ABC):
     format: ClassVar[DatasetFormat]
     #: Layout/model-family discriminator within ``(task, format)``.
     variant: ClassVar[str] = "default"
+    #: Whether this loader uses the portable fsspec/UPath contract.
+    #: False-by-default keeps third-party/local-only loaders closed.
+    supports_remote: ClassVar[bool] = False
 
     @abstractmethod
     def load(self, root: str | Path, **options: Any) -> VisionDataset:
@@ -241,37 +244,32 @@ def load(
     about *data* (skip unparseable items, warn, return empty), but a bad root
     fails loudly here rather than silently yielding an empty dataset.
     """
-    _require_dataset_root(root, options.get("storage_options"))
+    storage_options = options.get("storage_options")
+    resolved_root = to_dataset_path(root, storage_options)
+    _require_dataset_root(resolved_root)
     if dataset_format is None:
-        resolved_format, resolved_task, resolved_variant = _detect_format(root, task=task, variant=registry_variant)
+        resolved_format, resolved_task, resolved_variant = _detect_format(
+            resolved_root, task=task, variant=registry_variant
+        )
     else:
         resolved_format, resolved_task, resolved_variant = dataset_format, task, registry_variant
-    _reject_remote_non_hmie(root, resolved_format, options.get("storage_options"))
-    dataset = get_loader(resolved_format, task=resolved_task, variant=resolved_variant).load(root, **options)
+    loader = get_loader(resolved_format, task=resolved_task, variant=resolved_variant)
+    _reject_unsupported_remote(resolved_root, loader)
+    dataset = loader.load(resolved_root, **options)
     _warn_if_empty(dataset, root, resolved_format)
     return dataset
 
 
-def _reject_remote_non_hmie(
-    root: str | Path,
-    dataset_format: DatasetFormat | str,
-    storage_options: Any = None,
-) -> None:
-    """Cloud roots are supported for the HMIE format only.
+def _reject_unsupported_remote(root: str | Path, loader: Loader, storage_options: Any = None) -> None:
+    """Fail closed when a loader has not adopted the portable storage contract.
 
-    Every fsspec backend uses the same code path, but only HMIE loading has
-    been exercised end-to-end against object storage; other format loaders
-    have local-filesystem assumptions we have not validated remotely, so a
-    remote root with a non-HMIE format fails loudly here rather than in some
-    backend-specific way deep inside the loader.
+    This capability check replaces backend-specific dispatch policies with an
+    implementation property.
     """
-    if not is_remote_path(to_dataset_path(root, storage_options)):
-        return
-    fmt = _coerce_format(dataset_format)
-    if fmt is not DatasetFormat.HMIE:
+    if is_remote_path(to_dataset_path(root, storage_options)) and not loader.supports_remote:
         raise ValueError(
-            f"cloud dataset roots are currently supported for the HMIE format only; "
-            f"got format={fmt.value} for root={root!r}"
+            f"{loader.__class__.__name__} does not support remote dataset roots yet; "
+            f"got format={loader.format.value} for root={sanitized_uri(root)!r}"
         )
 
 
@@ -283,9 +281,9 @@ def _require_dataset_root(root: str | Path, storage_options: Any = None) -> None
     """
     path = to_dataset_path(root, storage_options)
     if not path.exists():
-        raise FileNotFoundError(f"dataset root does not exist: {path}")
+        raise FileNotFoundError(f"dataset root does not exist: {sanitized_uri(path)}")
     if not path.is_dir():
-        raise NotADirectoryError(f"dataset root is not a directory: {path}")
+        raise NotADirectoryError(f"dataset root is not a directory: {sanitized_uri(path)}")
 
 
 def _is_empty(dataset: VisionDataset) -> bool:
@@ -313,7 +311,7 @@ def _warn_if_empty(dataset: VisionDataset, root: str | Path, fmt: DatasetFormat 
         logger.warning(
             "Loaded an empty dataset from %s (format=%s): the root exists but no loadable items were found "
             "(wrong format, wrong subdirectory, or no matching data)",
-            root,
+            sanitized_uri(root),
             fmt_value,
         )
 
@@ -334,8 +332,6 @@ def load_mot(
     (e.g. HMIE's ``require_video``). This is the public MOT loader; per-format
     helpers are internal to ``datamaite._formats.<format>.loader``.
     """
-    _require_dataset_root(root, options.get("storage_options"))
-    _reject_remote_non_hmie(root, dataset_format, options.get("storage_options"))
     try:
         loader = get_loader(dataset_format, task=Task.MOT, variant=registry_variant)
     except ValueError as task_error:
@@ -348,7 +344,10 @@ def load_mot(
             loader = get_loader(dataset_format, variant=registry_variant)
         except ValueError:
             raise task_error from None
-    dataset = loader.load(root, **options)
+    resolved_root = to_dataset_path(root, options.get("storage_options"))
+    _reject_unsupported_remote(resolved_root, loader)
+    _require_dataset_root(resolved_root)
+    dataset = loader.load(resolved_root, **options)
     if not isinstance(dataset, BoxTrackDataset):
         raise TypeError(f"load_mot expected a BoxTrackDataset, got {type(dataset).__name__}")
     _warn_if_empty(dataset, root, dataset_format)
@@ -371,8 +370,6 @@ def load_vc(
     public VC loader; per-format helpers are internal to
     ``datamaite._formats.<format>.loader``.
     """
-    _require_dataset_root(root, options.get("storage_options"))
-    _reject_remote_non_hmie(root, dataset_format, options.get("storage_options"))
     try:
         loader = get_loader(dataset_format, task=Task.VC, variant=registry_variant)
     except ValueError as task_error:
@@ -380,7 +377,10 @@ def load_vc(
             loader = get_loader(dataset_format, variant=registry_variant)
         except ValueError:
             raise task_error from None
-    dataset = loader.load(root, **options)
+    resolved_root = to_dataset_path(root, options.get("storage_options"))
+    _reject_unsupported_remote(resolved_root, loader)
+    _require_dataset_root(resolved_root)
+    dataset = loader.load(resolved_root, **options)
     if not isinstance(dataset, VideoClassificationDataset):
         raise TypeError(f"load_vc expected a VideoClassificationDataset, got {type(dataset).__name__}")
     _warn_if_empty(dataset, root, dataset_format)
@@ -394,11 +394,6 @@ def _detect_format(
     variant: str = "default",
 ) -> tuple[DatasetFormat, Task, str]:
     """Pick a format by asking each registered loader to sniff ``root``."""
-    if is_remote_path(to_dataset_path(root)):
-        raise ValueError(
-            f"Could not autodetect dataset format for {root!r}: autodetect is not supported for cloud "
-            "roots; pass dataset_format explicitly"
-        )
     _ensure_builtin_loaders()
     resolved_task = _coerce_task(task)
     requested_variant = str(variant or "default")
@@ -420,16 +415,17 @@ def _detect_format(
                 "Autodetected %s as YOLO image-classification: subfolder names will be used as "
                 "class labels. If these folders are not class labels, move the images into a flat directory "
                 "and load it with dataset_format='flat_images'.",
-                root,
+                sanitized_uri(root),
             )
         return key.format, key.task, key.variant
     if matches:
         choices = ", ".join(f"{k.task.value}:{k.format.value}:{k.variant}" for k in matches)
         raise ValueError(
-            f"Ambiguous autodetect for {root!r}; matched multiple loaders ({choices}). "
+            f"Ambiguous autodetect for {sanitized_uri(root)!r}; matched multiple loaders ({choices}). "
             "Pass dataset_format/task explicitly."
         )
     known = ", ".join(f"{k.task.value}:{k.format.value}:{k.variant}" for k in available_loader_keys()) or "(none)"
     raise ValueError(
-        f"Could not autodetect dataset format for {root!r}; pass dataset_format explicitly (available: {known})"
+        f"Could not autodetect dataset format for {sanitized_uri(root)!r}; "
+        f"pass dataset_format explicitly (available: {known})"
     )

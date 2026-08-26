@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Every registered dataset format can now be read from and written to local
+  filesystems and fsspec-backed object storage, including S3, GCS, Azure, and
+  `memory://`. Public loading, writing, conversion, and autodetection APIs
+  accept cloud dataset roots and explicit `storage_options`.
+- Flat Images and Flat MP4 now have registered writers, making them available
+  as conversion destinations with copied image or video media.
+- Added a manual object-storage benchmark suite covering discovery, transfers,
+  destination modes, and sparse remote-video access.
 - YOLO image-classification discovery is now recursive (#90): images anywhere
   below a class directory (`<split>/<class>/**/<image>`) load with the
   top-level directory as the class and the nested relative path preserved in
@@ -37,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dataset conversion now supports local-to-cloud, cloud-to-local, and
+  cloud-to-cloud routes. The `error`, `append`, and rollback-safe `replace`
+  destination modes now work with object-store prefixes.
+- Remote image and video media remains lazy and uses bounded range reads where
+  possible. Metadata-only image dimension access no longer requires downloading
+  and decoding the complete object.
+- Dataset pickle and cloudpickle state excludes explicit storage credentials and
+  decoded media. Process-local credentials can be rebound after transfer with
+  `with_storage_options(...)`.
 - Dependency management, CI, and the developer workflow now run on **uv**
   instead of Poetry (#60). `uv.lock` is the lock file of record and CI fails if
   it has drifted from `pyproject.toml` (`uv lock --check`); `poetry.lock` is
@@ -103,9 +120,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `load_od` and `load_ic` now reject cloud (remote URL) dataset roots with the
-  same loud error as `load`/`load_mot`/`load_vc` (#87); previously an `s3://`
-  root fell through into loaders with local-filesystem assumptions.
+- Local and object-storage loaders now produce consistent results for malformed
+  flat images and supported Flat MP4 codecs, including MPEG-2.
+- Repeated IC and OD input access now returns independent image arrays,
+  preventing caller mutations from affecting later reads.
 
 
 ## [0.4.1] - 2026-07-31

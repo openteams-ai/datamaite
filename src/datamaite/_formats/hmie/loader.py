@@ -40,8 +40,9 @@ from datamaite._formats.hmie.discovery import (
 )
 from datamaite._formats.hmie.frame_mapping import frame_key_to_index, is_mappable
 from datamaite._formats.hmie.schema import ScaleAnnotation
+from datamaite._io import resolve_path
 from datamaite._types import DatasetFormat
-from datamaite._upath import to_dataset_path
+from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence, category_name_from_uri
 
@@ -79,6 +80,12 @@ class HmieLoader(Loader):
     """
 
     format = DatasetFormat.HMIE
+    supports_remote = True
+
+    @classmethod
+    def sniff(cls, root: str | Path) -> bool:
+        path = to_dataset_path(root)
+        return path.is_dir() and bool(discover_hmie_pairs(path).pairs)
 
     def load(
         self,
@@ -133,8 +140,8 @@ class HmieLoader(Loader):
             # so load_hmie("/data/batch", annotation_dir="ann/") reads
             # /data/batch/ann/. ``root / p`` leaves absolute overrides intact.
             pairs = _pairs_from_dirs(
-                root / annotation_dir if annotation_dir is not None else root,
-                root / video_dir if video_dir is not None else None,
+                resolve_path(root, annotation_dir) if annotation_dir is not None else root,
+                resolve_path(root, video_dir) if video_dir is not None else None,
             )
         else:
             pairs = discover_hmie_pairs(root).pairs
@@ -149,7 +156,9 @@ class HmieLoader(Loader):
         logger.info("Loaded %d sequence(s), %d categories from %s", len(sequences), len(categories), root)
         # tuple(): BoxTrackDataset stores an immutable sequence set so its cached
         # MAITE item list (_mot_sequences) cannot go stale.
-        return BoxTrackDataset(sequences=tuple(sequences), categories=categories)
+        return BoxTrackDataset(
+            sequences=tuple(sequences), categories=categories, _storage_options=storage_options_for(root)
+        )
 
 
 def load_hmie(

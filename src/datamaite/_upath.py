@@ -37,44 +37,98 @@ _ALLOWED_URL_SCHEMES = frozenset({"s3", "gs", "az", "abfs", "abfss", "memory", "
 def to_dataset_path(root: str | Path | UPath, storage_options: Mapping[str, Any] | None = None) -> Path:
     """Coerce a dataset root to a concrete path object.
 
-    ``Path`` inputs (including ``UPath``) pass through unchanged -- this is a
-    deliberate power-user seam: constructing an ``http://`` or ``memory://``
-    UPath directly (as ``tools/probe_bench`` and unit fixtures do) bypasses
-    the string-scheme allowlist below. String inputs with a URL scheme are
-    validated against ``_ALLOWED_URL_SCHEMES`` and become ``UPath`` with
-    ``storage_options`` applied; plain string paths become ``pathlib.Path``.
+    Existing path objects pass through after the same protocol validation used
+    for URL strings. URL inputs become configured ``UPath`` instances, except
+    ``file://`` URLs, which become native ``Path`` objects to preserve the local
+    fast path. Plain strings become ``pathlib.Path``.
 
     A URL string with embedded credentials (``scheme://user:pass@host/...``)
     is rejected: credentials belong in ``storage_options``, never the URL.
     """
     if not isinstance(root, str):
+        protocol = getattr(root, "protocol", "")
+        if isinstance(protocol, (tuple, list)):
+            protocol = protocol[0] if protocol else ""
+        if protocol not in _LOCAL_PROTOCOLS:
+            _validate_url(str(root))
+            if storage_options:
+                from upath import UPath
+
+                return cast(Path, UPath(str(root), **_filesystem_options(str(protocol), storage_options)))
         return cast(Path, root)
     if "://" in root:
         import urllib.parse
 
         from upath import UPath
 
-        split = urllib.parse.urlsplit(root)
-        if split.username is not None or split.password is not None:
-            raise ValueError(
-                "dataset root URL must not embed credentials; pass them via "
-                "storage_options (e.g. storage_options={'key': ..., 'secret': ...}) instead"
-            )
-        if split.scheme not in _ALLOWED_URL_SCHEMES:
-            allowed = ", ".join(sorted(_ALLOWED_URL_SCHEMES))
-            raise ValueError(f"unsupported dataset root scheme {split.scheme!r}; allowed schemes are: {allowed}")
+        split = _validate_url(root)
+        if split.scheme == "file":
+            if split.netloc not in ("", "localhost"):
+                raise ValueError("file:// dataset roots must refer to the local host")
+            return Path(urllib.parse.unquote(split.path))
 
         # universal-pathlib >= 0.3 bases remote UPath on pathlib_abc rather
         # than pathlib.Path, but it implements the full pathlib surface. The
         # cast localizes that difference here so downstream code keeps plain
         # ``Path`` annotations for both local and remote roots.
-        return cast(Path, UPath(root, **dict(storage_options or {})))
+        return cast(Path, UPath(root, **_filesystem_options(split.scheme, storage_options)))
     return Path(root)
+
+
+def _filesystem_options(protocol: str, storage_options: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Translate datamaite stream options before constructing a filesystem."""
+    options = dict(storage_options or {})
+    if protocol == "s3" and "block_size" in options:
+        options.setdefault("default_block_size", options.pop("block_size"))
+    return options
+
+
+def _validate_url(value: str) -> Any:
+    """Validate a URL's protocol and require credentials outside the URI."""
+    import urllib.parse
+
+    split = urllib.parse.urlsplit(value)
+    if split.username is not None or split.password is not None or split.query or split.fragment:
+        raise ValueError(
+            "dataset root URL must not embed credentials, query parameters, or fragments; pass credentials via "
+            "storage_options (e.g. storage_options={'key': ..., 'secret': ...}) instead"
+        )
+    if split.scheme not in _ALLOWED_URL_SCHEMES:
+        allowed = ", ".join(sorted(_ALLOWED_URL_SCHEMES))
+        raise ValueError(f"unsupported dataset root scheme {split.scheme!r}; allowed schemes are: {allowed}")
+    return split
+
+
+def sanitized_uri(value: str | Path) -> str:
+    """Return a URI safe for diagnostics, without userinfo, query, or fragment."""
+    import urllib.parse
+
+    text = str(value)
+    if "://" not in text:
+        return text
+    split = urllib.parse.urlsplit(text)
+    host = split.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{host}:{split.port}" if split.port is not None else host
+    return urllib.parse.urlunsplit((split.scheme, netloc, split.path, "", ""))
 
 
 def is_remote_path(path: Path) -> bool:
     """True when ``path`` lives on a non-local fsspec filesystem."""
     return getattr(path, "protocol", "") not in _LOCAL_PROTOCOLS
+
+
+def storage_options_for(path: Path) -> dict[str, Any]:
+    """Return the fsspec options bound to ``path`` without exposing them in records.
+
+    Local :class:`pathlib.Path` objects have no options and return an empty
+    mapping. Remote UPaths retain the options used to construct their fsspec
+    filesystem; datasets keep this mapping as private runtime state so a public
+    string ``path_or_uri`` can be reopened lazily after loading.
+
+    """
+    return dict(getattr(path, "storage_options", {}) or {})
 
 
 def local_open_target(path: Path) -> str:

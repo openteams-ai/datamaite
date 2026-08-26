@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -58,9 +59,20 @@ def _target(sample: ImageClassificationSample, taxonomy: Taxonomy | None) -> np.
     return target
 
 
-def ic_input(sample: ImageClassificationSample) -> np.ndarray:
+def ic_input(
+    sample: ImageClassificationSample,
+    *,
+    storage_options: Mapping[str, Any] | None = None,
+    base_cache: dict[str, np.ndarray] | None = None,
+) -> np.ndarray:
     """Decode one IC sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
-    return decode_image(sample, task_name="ImageClassificationDataset", extra="ic")
+    return decode_image(
+        sample,
+        task_name="ImageClassificationDataset",
+        extra="ic",
+        storage_options=storage_options,
+        base_cache=base_cache,
+    )
 
 
 def ic_target(sample: ImageClassificationSample, taxonomy: Taxonomy | None) -> np.ndarray:
@@ -74,7 +86,14 @@ def ic_target(sample: ImageClassificationSample, taxonomy: Taxonomy | None) -> n
     return _target(sample, taxonomy)
 
 
-def ic_metadata(sample: ImageClassificationSample, image: np.ndarray | None = None) -> dict[str, Any]:
+def ic_metadata(
+    sample: ImageClassificationSample,
+    image: np.ndarray | None = None,
+    *,
+    dimensions: tuple[int, int] | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    base_cache: dict[str, np.ndarray] | None = None,
+) -> dict[str, Any]:
     """Build one IC sample's MAITE datum metadata (``id``/``split``/``height``/``width``).
 
     The image is decoded only when the true dimensions cannot be known without
@@ -87,17 +106,25 @@ def ic_metadata(sample: ImageClassificationSample, image: np.ndarray | None = No
         meta["split"] = sample.split
     has_region = getattr(sample, "region", None) is not None
     if has_region or sample.height is None or sample.width is None:
-        if image is None:
-            image = ic_input(sample)
+        if image is None and (has_region or dimensions is None):
+            image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
         if has_region:
             # A region crop is clamped to image bounds at decode time, so its true
             # size is known only from the decoded array -- the stored dims are the
             # nominal (possibly over-edge) box size and would disagree for
             # edge-straddling crops.
+            if image is None:  # defensive fallback for custom callers
+                image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
             height, width = int(image.shape[1]), int(image.shape[2])
         else:
-            height = sample.height if sample.height is not None else int(image.shape[1])
-            width = sample.width if sample.width is not None else int(image.shape[2])
+            probed_width, probed_height = dimensions or (None, None)
+            height = sample.height if sample.height is not None else probed_height
+            width = sample.width if sample.width is not None else probed_width
+            if height is None or width is None:
+                if image is None:  # defensive fallback for custom callers
+                    image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
+                height = sample.height if sample.height is not None else int(image.shape[1])
+                width = sample.width if sample.width is not None else int(image.shape[2])
     else:
         height, width = sample.height, sample.width
     meta["height"] = height
@@ -108,7 +135,14 @@ def ic_metadata(sample: ImageClassificationSample, image: np.ndarray | None = No
 def build_ic_item(
     sample: ImageClassificationSample,
     taxonomy: Taxonomy | None,
+    *,
+    storage_options: Mapping[str, Any] | None = None,
+    base_cache: dict[str, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Build one MAITE IC item ``(image, target, datum_metadata)`` for ``sample``."""
-    image = ic_input(sample)
-    return image, ic_target(sample, taxonomy), ic_metadata(sample, image)
+    image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
+    return (
+        image,
+        ic_target(sample, taxonomy),
+        ic_metadata(sample, image, storage_options=storage_options, base_cache=base_cache),
+    )

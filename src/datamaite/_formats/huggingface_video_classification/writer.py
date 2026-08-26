@@ -22,11 +22,12 @@ import json
 import logging
 import math
 import re
-import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from datamaite._io import copy_resource, same_resource, source_path
 from datamaite._types import DatasetFormat, Task
+from datamaite._upath import to_dataset_path
 from datamaite.model import VideoClassificationDataset, VideoClassificationSample, VisionDataset
 from datamaite.writers import Writer, register_writer
 
@@ -109,7 +110,7 @@ class HuggingFaceVideoClassificationWriter(Writer[VideoClassificationDataset]):
 
         fallback_split = _normalize_optional_split(split)
         metadata_format = _validate_metadata_format(metadata_format)
-        dest = Path(dest)
+        dest = to_dataset_path(dest, _options.get("storage_options"))
         dest.mkdir(parents=True, exist_ok=True)
 
         rows: list[dict[str, Any]] = []
@@ -153,7 +154,7 @@ def _record_for_sample(
     if not sample.video_path:
         logger.warning("Skipping Hugging Face video classification sample %s with no source video", sample.video_id)
         return None
-    source = Path(sample.video_path)
+    source = source_path(sample.video_path)
     if not source.is_file():
         logger.warning("Skipping Hugging Face video classification sample with missing video: %s", source)
         return None
@@ -174,7 +175,7 @@ def _record_for_sample(
     stem = _safe_name(_source_stem(sample, source))
     prefix = split or "data"
     rel_path = _unique_rel_path(prefix, stem, suffix, used_paths)
-    if (dest / rel_path).resolve(strict=False) == source.resolve(strict=False):
+    if same_resource(dest / rel_path, source):
         rel_path = _unique_rel_path(prefix, f"{stem}-copy", suffix, used_paths)
     return source, rel_path, label
 
@@ -224,13 +225,8 @@ def _csv_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def _copy_video(source: Path, dest: Path) -> None:
-    try:
-        same_file = source.resolve(strict=False) == dest.resolve(strict=False)
-    except OSError:
-        same_file = False
-    if same_file:
-        return
-    shutil.copy2(source, dest)
+    if not same_resource(source, dest):
+        copy_resource(source, dest)
 
 
 def _append_written(written: list[Path], seen: set[Path], path: Path) -> None:

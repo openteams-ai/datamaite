@@ -649,7 +649,12 @@ To support a new input format `foo`:
    `VideoClassificationDataset`). Decorate it with `@register_loader`.
 4. Export the loader from `_formats/foo/__init__.py` and import it from the
    public package `__init__` so registration runs.
-5. Do **not** assume loader support implies validation support. Validation is
+5. Follow the storage contract: accept the resolved portable path, never wrap
+   roots or record URIs in `Path`, resolve metadata-relative paths with
+   `_io.resolve_path`, use shared image/video adapters, retain private runtime
+   storage options on the returned dataset, and add local + `memory://` parity
+   tests. Formats describe layouts, not S3/GCS/Azure behavior.
+6. Do **not** assume loader support implies validation support. Validation is
    currently HMIE-only; add non-HMIE validators only as a deliberate separate
    feature with docs and tests.
 
@@ -983,7 +988,11 @@ represented in the model.
    `consumes` dataset class, decorated with `@register_writer`.
 3. Import it from the package `__init__` / built-in writer module list so
    registration runs.
-4. `datamaite.write(ds, dest, output_format="<fmt>")` and `convert(...)` then
+4. Follow the storage contract: preserve the resolved destination path, use
+   `_io.copy_resource` / shared media encoding instead of `shutil`, `cv2`
+   filename APIs, or `Path(sample.path_or_uri)`, and cover local→cloud,
+   cloud→local, cloud→cloud plus all destination modes.
+5. `datamaite.write(ds, dest, output_format="<fmt>")` and `convert(...)` then
    work with no changes to the dispatcher, provided loader and writer tasks
    match.
 

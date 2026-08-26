@@ -17,13 +17,14 @@ necessarily its absolute index in the source video.
 from __future__ import annotations
 
 import logging
-import os
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
+
+from datamaite._io import open_video_source, resource_size
 
 logger = logging.getLogger(__name__)
 
@@ -92,16 +93,29 @@ class Decoder(Protocol):
 class _PyAVStream:
     """Re-iterable lazy stream over selected source frames of one video."""
 
-    def __init__(self, video_path: str, source_indices: Sequence[int] | None) -> None:
+    def __init__(
+        self,
+        video_path: str,
+        source_indices: Sequence[int] | None,
+        storage_options: Mapping[str, Any] | None = None,
+    ) -> None:
         self._path = video_path
+        self._storage_options = storage_options
         self._selection: set[int] | None = None if source_indices is None else set(source_indices)
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Never serialize storage credentials with a public MAITE stream."""
+        return {"_path": self._path, "_selection": self._selection, "_storage_options": None}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
 
     def __iter__(self) -> Iterator[DecodedFrame]:
         av = _import_av()
 
         wanted = self._selection
         target = None if wanted is None else len(wanted)
-        with av.open(self._path) as container:
+        with open_video_source(self._path, self._storage_options) as source, av.open(source) as container:
             emitted = 0
             for source_index, frame in enumerate(container.decode(video=0)):
                 if wanted is not None and source_index not in wanted:
@@ -122,10 +136,20 @@ class _PyAVStream:
 class PyAVDecoder:
     """Default :class:`Decoder` backed by PyAV (libav)."""
 
+    def __init__(self, storage_options: Mapping[str, Any] | None = None) -> None:
+        self._storage_options = storage_options
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Reconstruct from ambient credentials after deserialization."""
+        return {"_storage_options": None}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+
     def info(self, video_path: str) -> VideoInfo:
         av = _import_av()
 
-        with av.open(video_path) as container:
+        with open_video_source(video_path, self._storage_options) as source, av.open(source) as container:
             stream = container.streams.video[0]
             codec = stream.codec_context
             time_base = stream.time_base or Fraction(1, 1000)
@@ -133,11 +157,11 @@ class PyAVDecoder:
                 width=int(codec.width),
                 height=int(codec.height),
                 time_base=Fraction(time_base),
-                size_bytes=os.path.getsize(video_path),
+                size_bytes=resource_size(video_path, self._storage_options) or 0,
             )
 
     def stream(self, video_path: str, source_indices: Sequence[int] | None) -> Iterable[DecodedFrame]:
-        return _PyAVStream(video_path, source_indices)
+        return _PyAVStream(video_path, source_indices, self._storage_options)
 
     def decode_one(self, video_path: str, source_index: int) -> DecodedFrame:
         for frame in self.stream(video_path, [source_index]):
@@ -148,9 +172,9 @@ class PyAVDecoder:
 _DEFAULT_DECODER = PyAVDecoder()
 
 
-def default_decoder() -> Decoder:
-    """Return the process-wide default PyAV decoder."""
-    return _DEFAULT_DECODER
+def default_decoder(storage_options: Mapping[str, Any] | None = None) -> Decoder:
+    """Return the default decoder, configured for a remote dataset when needed."""
+    return PyAVDecoder(storage_options) if storage_options else _DEFAULT_DECODER
 
 
 def resolve_video_info(video_path: str, decoder: Decoder, fallback: VideoInfo) -> VideoInfo:

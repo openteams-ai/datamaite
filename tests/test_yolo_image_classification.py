@@ -8,6 +8,7 @@ import os
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from datamaite import (
@@ -121,6 +122,114 @@ class TestYoloImageClassificationLoader:
 
         assert load_ic(tmp_path, dataset_format="yolo").sample_count == 2
         assert load_ic(tmp_path, dataset_format="yolo", split="train").sample_count == 0
+
+    def test_memory_root_loads_taxonomy_and_decodes_lazily(self, memory_root) -> None:  # type: ignore[no-untyped-def]
+        """A second format uses the same backend-neutral path/decode seam."""
+        cv2 = pytest.importorskip("cv2")
+        source = np.arange(4 * 7 * 3, dtype=np.uint8).reshape(4, 7, 3)
+        ok, buf = cv2.imencode(".png", source)
+        assert ok
+
+        root = memory_root / "yolo-ic"
+        image_path = root / "train" / "cat" / "remote.png"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(buf.tobytes())
+
+        ds = load_ic(
+            str(root),
+            dataset_format="yolo",
+            storage_options={"poc_marker": "must-not-appear-in-repr"},
+        )
+
+        assert ds.sample_count == 1
+        assert ds.index2label() == {0: "cat"}
+        assert ds.dataset_metadata.splits == ("train",)
+        assert isinstance(ds.samples[0].path_or_uri, str)
+        assert ds.samples[0].path_or_uri.startswith("memory://")
+        assert "must-not-appear-in-repr" not in repr(ds)
+
+        image, target, metadata = ds[0]
+        np.testing.assert_array_equal(np.transpose(image, (1, 2, 0)), source[:, :, ::-1])
+        np.testing.assert_array_equal(target, np.array([1.0], dtype=np.float32))
+        assert metadata["split"] == "train"
+
+    def test_memory_traversal_uses_detailed_listings_not_per_entry_info(self, memory_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        root = memory_root / "yolo-listing-count"
+        for index in range(20):
+            image_path = root / "train" / "cat" / f"roll-{index}" / "remote.png"
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b"encoded later")
+
+        info_calls = 0
+        original_info = root.fs.info
+
+        def counted_info(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal info_calls
+            info_calls += 1
+            return original_info(*args, **kwargs)
+
+        monkeypatch.setattr(root.fs, "info", counted_info)
+        ds = load_ic(str(root), dataset_format="yolo")
+
+        assert ds.sample_count == 20
+        assert info_calls <= 5
+
+    def test_local_partially_empty_taxonomy_round_trip(self, tmp_path: Path) -> None:
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
+            id_density="dense",
+        )
+        dataset = ImageClassificationDataset(
+            samples=(
+                ImageClassificationSample(
+                    image_id="cat",
+                    image_bytes=b"image",
+                    file_name="cat.jpg",
+                    split="train",
+                    labels=(ClassificationLabel(category_id=0, source_category_id=0, category_name="cat"),),
+                ),
+            ),
+            dataset_metadata=DatasetMetadata(taxonomy=taxonomy, splits=("train",)),
+        )
+
+        write(dataset, tmp_path, output_format="yolo")
+        restored = load_ic(tmp_path, dataset_format="yolo")
+
+        assert restored.index2label() == {0: "cat", 1: "dog"}
+
+    def test_local_all_empty_classes_round_trip_taxonomy(self, tmp_path: Path) -> None:
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
+            id_density="dense",
+        )
+        dataset = ImageClassificationDataset(
+            samples=(),
+            dataset_metadata=DatasetMetadata(taxonomy=taxonomy, splits=("train",)),
+        )
+
+        write(dataset, tmp_path, output_format="yolo")
+        restored = load_ic(tmp_path, dataset_format="yolo")
+
+        assert restored.index2label() == {0: "cat", 1: "dog"}
+        assert restored.dataset_metadata.splits == ("train",)
+
+    def test_remote_all_empty_classes_round_trip_taxonomy(self, memory_root) -> None:  # type: ignore[no-untyped-def]
+        taxonomy = Taxonomy(
+            entries=(CategoryEntry(source_id=0, name="cat"), CategoryEntry(source_id=1, name="dog")),
+            id_density="dense",
+        )
+        dataset = ImageClassificationDataset(
+            samples=(),
+            dataset_metadata=DatasetMetadata(taxonomy=taxonomy, splits=("train",)),
+        )
+        root = memory_root / "empty-yolo-roundtrip"
+
+        write(dataset, root, output_format="yolo")
+        restored = load_ic(root, dataset_format="yolo")
+
+        assert restored.sample_count == 0
+        assert restored.index2label() == {0: "cat", 1: "dog"}
+        assert restored.dataset_metadata.splits == ("train",)
 
     def test_generic_load_can_disambiguate_with_task(self, tmp_path: Path) -> None:
         _dataset(tmp_path)
@@ -644,6 +753,39 @@ class TestYoloImageClassificationWriterSkipPaths:
         assert "missing image file" in caplog.text
         # The class dir must not be created for a sample that was skipped.
         assert not (dest / "train" / "cat").exists()
+
+    def test_missing_remote_source_is_skipped_without_stray_local_dirs(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        dest = tmp_path / "out"
+        label = ClassificationLabel(category_id=0, category_name="cat")
+        ds = _one_sample_dataset(
+            ImageClassificationSample(
+                image_id="x", path_or_uri="memory://missing/nope.jpg", file_name="x.jpg", labels=(label,)
+            )
+        )
+
+        with caplog.at_level(logging.WARNING, logger="datamaite._formats.yolo"):
+            files = write(ds, dest, output_format="yolo", write_data_yaml=False, verbose=True)
+
+        assert files == []
+        assert "missing image file" in caplog.text
+        assert list(dest.rglob("*")) == []
+
+    def test_missing_remote_source_does_not_remove_preexisting_append_directory(self, tmp_path: Path) -> None:
+        dest = tmp_path / "out"
+        class_dir = dest / "train" / "cat"
+        class_dir.mkdir(parents=True)
+        label = ClassificationLabel(category_id=0, category_name="cat")
+        ds = _one_sample_dataset(
+            ImageClassificationSample(
+                image_id="x", path_or_uri="memory://missing/nope.jpg", file_name="x.jpg", labels=(label,)
+            )
+        )
+
+        write(ds, dest, output_format="yolo", mode="append", write_data_yaml=False)
+
+        assert class_dir.is_dir()
 
     def test_dangling_dest_symlink_is_not_written_through(self, tmp_path: Path) -> None:
         # A pre-planted *dangling* symlink in dest reports exists()==False; the

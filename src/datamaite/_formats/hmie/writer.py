@@ -30,12 +30,13 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from datamaite._formats.hmie.discovery import _VIDEO_EXTENSIONS
+from datamaite._io import copy_resource, current_write_mode, remove_tree, source_path
 from datamaite._types import DatasetFormat
+from datamaite._upath import to_dataset_path
 from datamaite.model import BoxTrackDataset, VideoSequence
 from datamaite.writers import Writer, register_writer
 
@@ -66,13 +67,14 @@ class HmieWriter(Writer[BoxTrackDataset]):
         fewer sequences does not leave stale snippets that ``load_hmie(dest)``
         would then reload. Other contents of ``dest`` are left untouched.
         """
-        dest = Path(dest)
+        dest = to_dataset_path(dest, _options.get("storage_options"))
         dest.mkdir(parents=True, exist_ok=True)
         # Clear only directories matching this writer's own output pattern, so a
         # re-run is idempotent without touching anything the writer didn't create.
-        for stale in dest.glob("out_*_000000"):
-            if stale.is_dir():
-                shutil.rmtree(stale)
+        if current_write_mode() != "append":
+            for stale in dest.glob("out_*_000000"):
+                if stale.is_dir():
+                    remove_tree(stale)
         written: list[Path] = []
         for seq in dataset.sequences:
             written.extend(_write_sequence(dest, seq, labeler=labeler))
@@ -90,7 +92,7 @@ def _write_sequence(dest: Path, seq: VideoSequence, *, labeler: str) -> list[Pat
     # under an ``.mp4`` name (wrong container) and break the seq_<ext> dir.
     # Annotation-only snippets default to ``.mp4`` so the loader's filename
     # heuristic still recognises the JSON as a Scale annotation.
-    suffix = Path(seq.video_path).suffix.lower() if seq.video_path else ".mp4"
+    suffix = PurePosixPath(seq.video_path).suffix.lower() if seq.video_path else ".mp4"
     if suffix not in _VIDEO_EXTENSIONS:
         logger.warning(
             "sequence %s has video suffix %r which HMIE discovery does not recognise "
@@ -105,9 +107,10 @@ def _write_sequence(dest: Path, seq: VideoSequence, *, labeler: str) -> list[Pat
     # created (even with no video) so discovery still identifies the snippet.
     seq_dir = snippet_dir / f"seq_{suffix.lstrip('.')}"
     seq_dir.mkdir(parents=True, exist_ok=True)
-    if seq.video_path and Path(seq.video_path).exists():
+    source = source_path(seq.video_path) if seq.video_path else None
+    if source is not None and source.exists():
         video_out = seq_dir / video_filename
-        shutil.copyfile(seq.video_path, video_out)
+        copy_resource(source, video_out)
         written.append(video_out)
     else:
         logger.warning(

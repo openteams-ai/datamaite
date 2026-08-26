@@ -72,7 +72,7 @@ class TestVisDroneVideoHappyPath:
         ds = load_visdrone_video(split)
 
         assert ds.sequence_count == 1
-        assert len(ds) == 0  # VisDrone video is image-sequence based, not video-backed.
+        assert len(ds) == 1  # Frame-backed sequences now expose the lazy MAITE MOT surface.
         assert ds.num_boxes == 3
         assert ds.categories == {"visdrone_video/car": 4, "visdrone_video/others": 11}
         assert ds.index2label() == {4: "car", 11: "others"}

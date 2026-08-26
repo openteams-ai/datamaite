@@ -77,6 +77,7 @@ WRITABLE_FORMATS = sorted(
         fmt
         for fmt in set(available_formats(task=Task.MOT)) & set(available_output_formats(task=Task.MOT))
         if get_writer(fmt, task=Task.MOT).consumes is BoxTrackDataset
+        and "annotations" not in get_writer(fmt, task=Task.MOT).capabilities.lossy_without
     ),
     key=lambda fmt: fmt.value,
 )
