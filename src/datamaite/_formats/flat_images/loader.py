@@ -1,16 +1,11 @@
 """Flat-folder still-image loader (IR-3.2-S-1).
 
 IR-3.2-S-1 requires JATIC products that consume label-free CV image datasets
-to accept flat folders of images in ``.jpg``, ``.png``, and ``.tif`` formats.
-This loader intentionally models that narrow contract: it reads only the
-immediate image children of ``root`` (no recursive discovery, no annotations)
-and returns an *unlabeled* object-detection dataset -- every sample has zero
-detections and there is no taxonomy.
-
-The standard also names SafeTensors as an accepted image format; that is
-deliberately not implemented (see the tracking issue) because safetensors is
-a tensor container with no image-layout convention, not an image interchange
-format (#74).
+to accept flat folders of images in ``.jpg``, ``.png``, ``.tif``, and
+SafeTensors formats. This loader intentionally models that narrow contract: it
+reads only the immediate image children of ``root`` (no recursive discovery, no
+annotations) and returns an *unlabeled* object-detection dataset -- every sample
+has zero detections and there is no taxonomy.
 
 Per the dataset-structures policy (#40), this format is **explicit opt-in
 only**: ``sniff`` stays False so a bare folder of images is never
@@ -18,9 +13,13 @@ autodetected as a dataset. Load it with
 ``load_od(root, dataset_format="flat_images")``.
 
 Like the other loaders, this is best-effort: files whose magic bytes do not
-match their suffix are skipped with warnings rather than aborting the whole
-load. Images are validated by magic bytes only at load time and decoded
-lazily by the MAITE surface (``pip install datamaite[od]``).
+match their suffix, and safetensors files without a decodable image tensor,
+are skipped with warnings rather than aborting the whole load. Encoded images
+(``.jpg``/``.png``/``.tif``) are validated by magic bytes only at load time
+and decoded lazily by the MAITE surface (``pip install datamaite[od]``);
+safetensors files are validated by a header-only parse and their tensors
+decode with numpy alone. :mod:`datamaite._safetensors` documents the tensor
+layout conventions we accept, since safetensors itself defines none.
 """
 
 from __future__ import annotations
@@ -30,6 +29,13 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from datamaite._io import list_files, read_resource_prefix
+from datamaite._safetensors import (
+    SAFETENSORS_SUFFIX,
+    SafeTensorEntry,
+    image_entries,
+    layout_is_ambiguous,
+    read_entries,
+)
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
@@ -38,9 +44,9 @@ from datamaite.records import DatasetMetadata, ImageObjectDetectionSample
 
 logger = logging.getLogger(__name__)
 
-#: IR-3.2-S-1 names .jpg/.png/.tif (SafeTensors is deferred, #74); the
-#: long-suffix aliases are accepted because they are the same wire formats.
-IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff"})
+#: IR-3.2-S-1 names .jpg/.png/.tif/SafeTensors; the long-suffix aliases are
+#: accepted because they are the same wire formats.
+IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", SAFETENSORS_SUFFIX})
 
 #: Magic bytes for the encoded-image suffixes. Suffixes outside this table
 #: (user-supplied via ``image_extensions``) pass through unchecked; the real
@@ -85,15 +91,17 @@ class FlatImagesLoader(Loader):
             ignored by design because IR-3.2-S-1 is the flat-folder standard.
         image_extensions
             Optional extension spec overriding the defaults
-            (``.jpg``/``.jpeg``/``.png``/``.tif``/``.tiff``). Accepts a
-            string or an iterable of strings, with or without the leading
-            dot, case-insensitive.
+            (``.jpg``/``.jpeg``/``.png``/``.tif``/``.tiff``/``.safetensors``).
+            Accepts a string or an iterable of strings, with or without the
+            leading dot, case-insensitive.
 
         Returns
         -------
         ObjectDetectionDataset
             One sample per accepted image, each with zero detections and no
-            taxonomy, because this format carries no annotations.
+            taxonomy, because this format carries no annotations. A
+            ``.safetensors`` file contributes one sample per image-shaped
+            tensor it stores.
         """
         root_path = to_dataset_path(root, storage_options)
         if not root_path.is_dir():
@@ -108,9 +116,12 @@ class FlatImagesLoader(Loader):
 
         samples: list[ImageObjectDetectionSample] = []
         for path in files:
-            sample = _encoded_image_sample(path)
-            if sample is not None:
-                samples.append(sample)
+            if path.suffix.lower() == SAFETENSORS_SUFFIX:
+                samples.extend(_safetensors_samples(path))
+            else:
+                sample = _encoded_image_sample(path)
+                if sample is not None:
+                    samples.append(sample)
 
         logger.info("Loaded %d flat image(s) from %s", len(samples), root_path)
         return ObjectDetectionDataset(
@@ -135,7 +146,8 @@ def load_flat_images(
 def _normalize_extensions(image_extensions: Any) -> frozenset[str]:
     """Coerce a user-supplied extension spec to a lowercased, dot-prefixed set.
 
-    ``None`` yields the built-in defaults. A bare string (``".jpg"`` or ``"jpg"``)
+    ``None`` yields the built-in defaults (the encoded suffixes plus
+    ``.safetensors``). A bare string (``".jpg"`` or ``"jpg"``)
     is treated as a single extension, not iterated into characters; any other
     iterable of strings is normalized element-wise. Blank entries are dropped;
     an all-blank spec falls back to the defaults so a stray ``""`` never
@@ -181,4 +193,56 @@ def _encoded_image_sample(path: Path) -> ImageObjectDetectionSample | None:
         path_or_uri=str(path),
         file_name=path.name,
         metadata={"source_format": "flat_images", "source_file_name": path.name},
+    )
+
+
+def _safetensors_samples(path: Path) -> list[ImageObjectDetectionSample]:
+    """Build one sample per image-shaped tensor in a safetensors file.
+
+    Header-only parsing: dimensions come for free from the header, and tensor
+    bytes are only range-read at MAITE decode time. Each image tensor is
+    ``<file>#<tensor>`` even when the file holds only one.
+    """
+    try:
+        entries = read_entries(path)
+    except (OSError, ValueError) as exc:
+        logger.warning("Skipping malformed safetensors file %s: %s", path, exc)
+        return []
+    images = image_entries(entries)
+    if not images:
+        logger.warning(
+            "Skipping safetensors file with no image-shaped tensor of a supported dtype within the size cap: %s",
+            path,
+        )
+        return []
+    return [_safetensors_sample(path, entry, layout) for entry, layout in images]
+
+
+def _safetensors_sample(path: Path, entry: SafeTensorEntry, layout: tuple[int, int, str]) -> ImageObjectDetectionSample:
+    """Build one sample for an image tensor, taking its dimensions from the header.
+
+    Dimensions are set here (unlike encoded images, whose headers this loader
+    never parses) so MAITE metadata never needs a decode to learn them. The
+    layout is the one ``image_entries`` already resolved, not a second guess.
+    """
+    height, width, _ = layout
+    if layout_is_ambiguous(entry.shape):
+        logger.warning(
+            "SafeTensors tensor %r in %s has an ambiguous shape %s; assuming HWC. "
+            "safetensors has no image-layout convention, so this is a guess",
+            entry.name,
+            path,
+            entry.shape,
+        )
+    return ImageObjectDetectionSample(
+        image_id=f"{path.name}#{entry.name}",
+        path_or_uri=str(path),
+        file_name=path.name,
+        width=width,
+        height=height,
+        metadata={
+            "source_format": "flat_images",
+            "source_file_name": path.name,
+            "safetensors_key": entry.name,
+        },
     )

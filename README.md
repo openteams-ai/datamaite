@@ -53,7 +53,7 @@ yet.
 |---|---|---|---|
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
-| Flat folder still images (.jpg / .png / .tif) | ✅ | — | — |
+| Flat folder still images (.jpg / .png / .tif / .safetensors) | ✅ | — | ✅ encoded only |
 | Hugging Face Video Classification | ✅ | — | ✅ |
 | Hugging Face Vision (image classification) | ✅ | — | ✅ |
 | Hugging Face Vision (object detection) | ✅ | — | ✅ |
@@ -178,8 +178,8 @@ The flat MP4 loader does not recurse into subdirectories and carries no
 annotations, so `seq.boxes` is empty and `ds.categories == {}`.
 
 Load a flat folder of label-free still images (immediate children only;
-`.jpg`, `.png`, and `.tif`) as an unlabeled object-detection dataset. This
-format is explicit opt-in only — a bare folder of images is never
+`.jpg`, `.png`, `.tif`, and `.safetensors`) as an unlabeled object-detection
+dataset. This format is explicit opt-in only — a bare folder of images is never
 autodetected:
 
 ```python
@@ -195,6 +195,77 @@ image, target, meta = ds[0]  # MAITE indexing; requires datamaite[od]
 
 Every sample has zero detections and there is no taxonomy, because this
 format carries no annotations.
+
+#### SafeTensors image layout
+
+SafeTensors is a tensor container, not an image interchange format: it has no
+image-layout convention, so datamaite defines one. A `.safetensors` file
+contributes **one sample per image-shaped tensor**, and dimensions are read
+from the file header without decoding anything:
+
+Given a folder holding `frame.safetensors` with one `(480, 640, 3)` `uint8`
+tensor named `image`:
+
+```python
+from datamaite import load_od
+
+ds = load_od("/path/to/image-folder", dataset_format="flat_images")
+
+sample = ds.samples[0]
+print(sample.image_id, sample.width, sample.height)  # frame.safetensors#image 640 480
+print(sample.metadata["safetensors_key"])            # image
+
+image, target, meta = ds[0]  # (3, 480, 640) uint8 RGB — numpy only, no OpenCV needed
+```
+
+Reading the file requires nothing beyond datamaite's core dependencies. Writing
+one is your producer's business — any spec-conformant writer works, since only
+the wire format matters.
+
+- JPEG/PNG/TIFF `flat_images` datasets remain writable
+- SafeTensors ingestion and MAITE indexing are supported
+- SafeTensors-backed samples are not writable or convertible (`write` /
+  `convert` raise before the destination is touched). Direct
+  `Writer.write()` bypasses that check unless you call
+  `writer.validate_dataset(dataset)` first.
+
+A tensor is treated as an image when its shape and dtype match:
+
+| Accepted shape | Read as |
+|---|---|
+| `(H, W, C)`, `C` in `{1, 3, 4}` | HWC |
+| `(C, H, W)`, `C` in `{1, 3, 4}`, last dim not in `{1, 3, 4}` | CHW |
+| `(H, W)` | grayscale, replicated to three channels |
+
+Rank-4 and higher tensors (including a leading batch dim) are skipped, not
+fanned out.
+
+HWC is tried first, so CHW only wins when the last dimension is not
+channel-like. A shape whose first *and* last dimension are both channel-like
+(`(3, 3, 3)`, `(3, 480, 4)`) is ambiguous; it reads as HWC and the loader warns
+that HWC was assumed, so the guess is visible. Collisions only arise when a
+spatial extent is 1, 3, or 4 — tiny tiles and few-pixel strips, not
+photographs.
+
+Channel order is RGB (an alpha channel is dropped, grayscale is replicated).
+Dtypes are normalised to `uint8`: `uint8` passes through, `bool` maps to
+`{0, 255}`, floats in `[0, 1]` scale by 255 and wider floats clip, `uint16`
+**scales** by the type max (`value * 255 / 65535`), and signed integers
+(`int8` / `int16`) are **clamped** so a genuine `0` stays black. `uint32` /
+`uint64` / `int32` / `int64` are not images. `BF16` / `F8_*` are accepted in
+the container cover but never decoded as images. Sample ids are always
+`<file>#<tensor>`. SafeTensors samples carry `width`/`height` from the header;
+JPEG/PNG/TIFF siblings in the same folder leave those fields unset until
+decode.
+
+A file's `__metadata__` map is **ignored**. It is a single file-level
+string-to-string map, so it cannot describe the individual tensors of a
+multi-image file, and the ecosystem has no image vocabulary for it — honouring
+private layout keys would make files that load correctly here scramble for
+every other IR-3.2-S-1 consumer. A structurally invalid container (overlap,
+gap, unreadable offsets, unrecognized dtype) is skipped as a whole — siblings
+in that file do not load. Files that hold no image-shaped tensor are skipped
+with a warning like any other malformed input.
 
 Load a Hugging Face VideoFolder-style video classification repository (class
 folders, optional `train` / `validation` / `test` splits, or `metadata.csv` /

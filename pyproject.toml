@@ -119,6 +119,7 @@ dev = [
     "bandit[toml]>=1.7",
     "pyright>=1.1",
     "maite>=0.9,<0.10",
+    "safetensors>=0.4",
 ]
 # Docs toolchain plus notebook/runtime deps. myst-nb executes tutorial
 # notebooks during the Sphinx build, so their imports (cv2 / av / maite) and

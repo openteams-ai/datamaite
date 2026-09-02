@@ -20,10 +20,14 @@ import numpy as np
 from datamaite._upath import is_remote_path, local_open_target, storage_options_for, to_dataset_path
 
 _COPY_BUFFER_SIZE = 1024 * 1024
+# Private: bounds a whole-object encoded-image download. The safetensors reader
+# bounds a tensor span and its H*W*3 output, which is a different budget with a
+# coincidentally equal value -- see _safetensors.MAX_ENCODED_IMAGE_BYTES.
 _MAX_REMOTE_ENCODED_IMAGE_BYTES = 256 * 1024 * 1024
 _MAX_ENCODED_IMAGE_HEADER_BYTES = 256 * 1024
 _INITIAL_ENCODED_IMAGE_HEADER_BYTES = 32
-_MAX_DECODED_IMAGE_PIXELS = 200_000_000
+#: Public: :mod:`datamaite._safetensors` imports this as its pre-read early-out.
+MAX_DECODED_IMAGE_PIXELS = 200_000_000
 _SOURCE_STORAGE_OPTIONS: contextvars.ContextVar[Mapping[str, Any] | None] = contextvars.ContextVar(
     "datamaite_source_storage_options", default=None
 )
@@ -256,15 +260,34 @@ def resource_size(path: str | Path, storage_options: Mapping[str, Any] | None = 
         return None
 
 
+def read_resource_range(
+    path: str | Path, start: int, end: int, storage_options: Mapping[str, Any] | None = None
+) -> bytes:
+    """Read bytes ``[start, end)`` without remote read-ahead.
+
+    ``end`` is **exclusive**, the one convention shared by ``fs.cat_file``,
+    safetensors ``data_offsets``, and Python slicing. A range reaching past the
+    resource returns the short remainder rather than raising, so callers that
+    care validate the returned length themselves.
+    """
+    if start < 0:
+        raise ValueError(f"range start must be non-negative, got {start}")
+    if end < start:
+        raise ValueError(f"range end {end} must not precede start {start}")
+    resolved = to_dataset_path(path, storage_options)
+    if not is_remote_path(resolved):
+        with resolved.open("rb") as stream:
+            if start:
+                stream.seek(start)
+            return stream.read(end - start)
+    return bytes(resolved.fs.cat_file(resolved.path, start=start, end=end))  # type: ignore[attr-defined]
+
+
 def read_resource_prefix(path: str | Path, size: int, storage_options: Mapping[str, Any] | None = None) -> bytes:
     """Read at most ``size`` leading bytes without remote read-ahead."""
     if size < 0:
         raise ValueError(f"prefix size must be non-negative, got {size}")
-    resolved = to_dataset_path(path, storage_options)
-    if not is_remote_path(resolved):
-        with resolved.open("rb") as stream:
-            return stream.read(size)
-    return bytes(resolved.fs.cat_file(resolved.path, start=0, end=size))  # type: ignore[attr-defined]
+    return read_resource_range(path, 0, size, storage_options)
 
 
 def write_cv_image(path: Path, frame: np.ndarray, extension: str) -> None:
@@ -489,7 +512,7 @@ def decode_image_bytes(payload: bytes, *, color: bool = False) -> np.ndarray | N
     )
     if recognized and dimensions is None:
         return None
-    if dimensions is not None and dimensions[0] * dimensions[1] > _MAX_DECODED_IMAGE_PIXELS:
+    if dimensions is not None and dimensions[0] * dimensions[1] > MAX_DECODED_IMAGE_PIXELS:
         return None
     encoded = np.frombuffer(payload, dtype=np.uint8)
     flags = cv2.IMREAD_COLOR if color else cv2.IMREAD_UNCHANGED
@@ -497,7 +520,7 @@ def decode_image_bytes(payload: bytes, *, color: bool = False) -> np.ndarray | N
         decoded = cv2.imdecode(encoded, flags) if encoded.size else None
     except cv2.error:
         return None
-    if decoded is not None and decoded.shape[0] * decoded.shape[1] > _MAX_DECODED_IMAGE_PIXELS:
+    if decoded is not None and decoded.shape[0] * decoded.shape[1] > MAX_DECODED_IMAGE_PIXELS:
         return None
     return decoded
 

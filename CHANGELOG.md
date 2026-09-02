@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SafeTensors ingest in the `flat_images` loader (#74), completing IR-3.2-S-1:
+  `load_od(root, dataset_format="flat_images")` now picks up `.safetensors`
+  files alongside `.jpg`/`.png`/`.tif`. Layout is documented in the README:
+  `(H, W)` / HWC / CHW with `C` in `{1, 3, 4}`, RGB, `__metadata__` ignored,
+  one sample per image tensor with stable `<file>#<tensor>` ids. `uint16`
+  scales by type max; signed integers clamp so `0` stays black; wider integers
+  are not images. Containers follow official offset-cover rules (invalid files
+  are skipped whole). Decode is numpy-only, header-cached, and bounded by a
+  256 MiB source/output cap locally and remotely. `write` / `convert` of
+  SafeTensors-backed samples raise before the destination is touched; encoded
+  `flat_images` datasets remain writable.
+
 ## [0.5.0] - 2026-08-28
 
 ### Added

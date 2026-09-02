@@ -79,6 +79,28 @@ class Writer(ABC, Generic[_DatasetT]):
         """
         return
 
+    def validate_dataset(self, dataset: VisionDataset) -> None:
+        """Reject datasets this writer cannot serialise without silent corruption.
+
+        Concrete on the base class (not an overridable no-op): SafeTensors-backed
+        samples share a container ``path_or_uri``, so copy-by-file writers would
+        duplicate the whole file. ``write()`` / ``convert()`` call this before
+        the destination is touched. Direct ``Writer.write()`` bypasses it unless
+        the caller invokes this method first.
+        """
+        samples = getattr(dataset, "samples", None)
+        if samples is None:
+            return
+        for sample in samples:
+            metadata = getattr(sample, "metadata", None) or {}
+            if isinstance(metadata.get("safetensors_key"), str):
+                location = getattr(sample, "path_or_uri", None) or getattr(sample, "file_name", None) or ""
+                raise ValueError(
+                    "Writing or converting SafeTensors-backed image samples is not supported. "
+                    "Loading and MAITE indexing are supported. "
+                    f"First offending sample: {getattr(sample, 'image_id', None)!r} ({location})"
+                )
+
 
 _WRITERS: dict[WriterKey, type[Writer[Any]]] = {}
 _BUILTIN_WRITER_MODULES = (
@@ -408,9 +430,11 @@ def write(
     than restored; ``"append"`` writes into the existing destination, which
     may leave stale files behind that a reload of the destination would pick
     up. Calling a ``Writer`` instance's ``.write()`` directly bypasses this
-    policy. Writer-option validation (e.g. an invalid ``class_map`` or
-    ``split``) runs before the destination is touched, so an invalid option
-    raises without a ``mode="replace"`` clear having already deleted ``dest``.
+    policy and :meth:`Writer.validate_dataset` (SafeTensors rejection) unless
+    the caller invokes ``writer.validate_dataset(dataset)`` first. Writer-option
+    validation (e.g. an invalid ``class_map`` or ``split``) runs before the
+    destination is touched, so an invalid option raises without a
+    ``mode="replace"`` clear having already deleted ``dest``.
 
     ``verbose``: when ``True``, return the list of files written; when ``False``
     (default) write for side effects and return ``None``. The full file list can
@@ -444,6 +468,7 @@ def write(
     # Fix A1). Direct Writer.write() calls still re-validate inline (cheap),
     # which also covers callers who bypass this module-level write().
     writer.validate_options(**options)
+    writer.validate_dataset(dataset)
     resolved_dest = to_dataset_path(dest, storage_options)
     if resolved_mode == "replace":
         _reject_source_under_destination(dataset, resolved_dest)

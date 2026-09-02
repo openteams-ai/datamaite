@@ -46,10 +46,9 @@ hold the exact rules.
 | `visdrone` | OD / IC | `load_od` / `load_ic(dataset_format="visdrone")` | `images/*.jpg` + `annotations/*.txt` (VisDrone-DET layout) |
 | `huggingface_vision` | OD / IC | `load_od` / `load_ic(dataset_format="huggingface_vision")` | Hugging Face ImageFolder / parquet vision dataset |
 | `huggingface_video_classification` | VC | `load_vc(dataset_format="huggingface_video_classification")` | VideoFolder: `<split>/<class>/*.mp4` (+ optional metadata) |
-| `flat_images` | OD | `load_od(dataset_format="flat_images")` | a flat directory of loose images (`.jpg`/`.png`/`.tif` + aliases) → an unlabeled OD dataset (zero detections, no taxonomy). **Explicit opt-in only; never autodetected.** |
+| `flat_images` | OD | `load_od(dataset_format="flat_images")` | a flat directory of loose images (`.jpg`/`.png`/`.tif` + aliases, and `.safetensors`) → an unlabeled OD dataset (zero detections, no taxonomy). See the [SafeTensors image layout](https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite/-/blob/main/README.md#safetensors-image-layout) conventions. **Explicit opt-in only; never autodetected.** |
 
-Cloud (fsspec) roots are supported for the `hmie` format only; any other
-format with a remote root raises `ValueError`.
+Cloud (fsspec) roots are supported for every registered loader that declares `supports_remote` (including `flat_images`). Pass `storage_options` when the URL needs credentials.
 
 ## Rejected and error structures
 

@@ -9,7 +9,7 @@ JSON with its video → run checks on each pair → aggregate findings into a
 `ValidationResult` → render a report**. The only validation format currently
 implemented is HMIE (Scale Video Playback JSON + snippet folder layout). On
 the loading side, flat-folder MP4 video, flat-folder still images
-(.jpg/.png/.tif), Hugging Face Video Classification,
+(.jpg/.png/.tif/.safetensors), Hugging Face Video Classification,
 Hugging Face Vision (still-image classification + object detection),
 MOTChallenge, TAO, VisDrone Video, COCO object detection, YOLO image
 classification, and YOLO object detection are also implemented loaders.
