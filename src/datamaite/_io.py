@@ -205,8 +205,8 @@ def remove_tree(path: Path) -> None:
         # Delete exactly the inventoried keys; S3-like backends can batch them.
         filesystem.rm(names)
     except OSError:
-        # The pinned Apache-licensed MinIO rejects modern DeleteObjects
-        # checksum negotiation, so fall back to bounded individual deletes.
+        # Some S3-compatible backends reject modern DeleteObjects checksum
+        # negotiation, so fall back to bounded individual deletes.
         def delete_one(name: str) -> None:
             with contextlib.suppress(FileNotFoundError):
                 filesystem.rm_file(name)

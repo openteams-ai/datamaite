@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Manual MinIO/real-S3 benchmarks for datamaite object-storage I/O.
+"""Manual S3-compatible/real-S3 benchmarks for datamaite object-storage I/O.
 
 The measured sections exclude fixture generation and cleanup. Results emphasize
-S3 operation counts and body bytes; localhost MinIO wall time is comparative,
+S3 operation counts and body bytes; localhost object-store wall time is comparative,
 not representative of a managed cloud.
 """
 
@@ -150,8 +150,8 @@ def _cold_cache(fs: Any) -> None:
 
 
 def _remove_prefix(fs: Any, prefix: str) -> None:
-    # DeleteObjects on the deliberately old Apache-licensed MinIO image can
-    # reject modern SDK checksum negotiation. Individual deletes are portable
+    # Some S3-compatible servers reject modern DeleteObjects checksum
+    # negotiation. Individual deletes are portable
     # and cleanup is outside every measured section.
     for path in fs.find(prefix):
         fs.rm_file(path)

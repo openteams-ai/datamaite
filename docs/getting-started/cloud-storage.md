@@ -125,7 +125,7 @@ video regardless of file size (see the transport benchmark under
 sampled, not the length of the clip.
 
 The same fsspec code path serves every backend, so behavior is identical on
-S3, GCS, and Azure. S3 is exercised end-to-end in CI against a MinIO
+S3, GCS, and Azure. S3 is exercised end-to-end in CI against a SeaweedFS
 service; GCS and Azure are supported but not yet CI-tested.
 
 Validation findings always report the dataset's logical path (the

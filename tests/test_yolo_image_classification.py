@@ -267,7 +267,7 @@ class TestYoloImageClassificationLoader:
         ]
 
     def test_nested_only_split_is_not_empty(self, tmp_path: Path) -> None:
-        # (#90) The checkmaite regression scenario: a split whose class dirs
+        # (#90) The CheckMAITE regression scenario: a split whose class dirs
         # hold only nested images used to load as an empty dataset.
         _write_image(tmp_path / "train" / "cat" / "roll-01" / "a.jpg", b"cat-a")
         _write_image(tmp_path / "train" / "dog" / "roll-02" / "b.jpg", b"dog-b")

@@ -5,7 +5,7 @@ cloud bucket the caller already has) and the coverage-gated unit suite's cloud
 tests (``tests/test_loaders.py`` et al., which exercise the cloud code paths
 against fsspec's in-process ``memory://`` filesystem so they stay hermetic and
 count toward the 90% coverage gate), this module talks to an actual S3 API
-server -- a MinIO container -- over the network. It proves the ranged-read
+server -- a SeaweedFS container -- over the network. It proves the ranged-read
 video streaming and the ``storage_options``-driven credential/endpoint plumbing
 work against real S3 semantics, not just against a filesystem that happens to
 share fsspec's interface.
@@ -15,7 +15,7 @@ default ``pytest`` invocation: it is opt-in via the ``integration`` marker
 (deselected by default, see ``pyproject.toml``'s ``addopts``) and self-skips
 unless ``DATAMAITE_S3_E2E_ENDPOINT`` / ``DATAMAITE_S3_E2E_KEY`` /
 ``DATAMAITE_S3_E2E_SECRET`` are set. See ``tests/README.md`` for how to run it
-locally and how CI wires it up against a MinIO service container.
+locally and how CI wires it up against a SeaweedFS service container.
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def test_registry_read_write_roundtrip(
 def test_replace_mode_uses_portable_single_object_deletes(
     tmp_path: Path, s3_fs: Any, bucket: str, storage_options: dict[str, Any]
 ) -> None:
-    """Replace works with the pinned MinIO image and modern SDK checksums."""
+    """Replace works with the S3-compatible service and modern SDK checksums."""
     dataset = _dataset_for(Task.IC, tmp_path / "replace-source")
     root = f"s3://{bucket}/replace-mode"
     write(dataset, root, output_format="yolo", storage_options=storage_options)

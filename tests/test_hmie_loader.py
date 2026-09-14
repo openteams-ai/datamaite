@@ -131,7 +131,7 @@ class TestMultiTrack:
 
 
 class TestPrototypeParity:
-    """Coverage of reader outputs the ported prototype produced (checkmaite#635)."""
+    """Coverage of reader outputs the ported prototype produced (CheckMAITE#635)."""
 
     def _ann(self, **top: Any) -> dict[str, Any]:
         data: dict[str, Any] = {

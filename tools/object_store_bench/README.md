@@ -16,7 +16,7 @@ It reports logical S3 SDK operations, requested object-body bytes, wall time,
 and sampled scenario-local process RSS. Counts are logical operations, not raw
 HTTP attempts, so transport retries are not counted separately. API counts and
 bytes are the durable comparison metrics. Wall time against
-localhost MinIO is useful only for comparing revisions on the same machine.
+localhost object storage is useful only for comparing revisions on the same machine.
 
 ## Install
 
@@ -27,15 +27,15 @@ uv sync --extra dev --extra aws --extra fmv
 The run command below adds `psutil` ephemerally for scenario-local RSS
 sampling; it is a benchmark-tool dependency, not a datamaite package extra.
 
-## Run against MinIO
+## Run against SeaweedFS
 
-Start the same pinned Apache-2.0 MinIO version used by the S3 E2E CI job:
+Start the same pinned Apache-2.0 SeaweedFS version used by the S3 E2E CI job:
 
 ```bash
-docker run -d --rm --name datamaite-minio-bench -p 9123:9000 \
-  -e MINIO_ROOT_USER=datamaite-e2e \
-  -e MINIO_ROOT_PASSWORD=datamaite-e2e-secret \
-  minio/minio:RELEASE.2021-04-22T15-44-28Z server /data
+docker run -d --rm --name datamaite-seaweedfs-bench -p 9123:8333 \
+  -e AWS_ACCESS_KEY_ID=datamaite-e2e \
+  -e AWS_SECRET_ACCESS_KEY=datamaite-e2e-secret \
+  ghcr.io/chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62
 
 export DATAMAITE_S3_E2E_ENDPOINT=http://127.0.0.1:9123
 export DATAMAITE_S3_E2E_KEY=datamaite-e2e
@@ -44,7 +44,7 @@ export DATAMAITE_S3_E2E_SECRET=datamaite-e2e-secret
 uv run --with psutil --extra aws --extra fmv python tools/object_store_bench/bench.py \
   --root s3://datamaite-bench/scratch --create-bucket
 
-docker stop datamaite-minio-bench
+docker stop datamaite-seaweedfs-bench
 ```
 
 Use `--objects`, `--object-bytes`, and `--video-frames` to change scale. Repeat
@@ -71,7 +71,7 @@ arguments or committed result files.
   useful.
 
 For latency-sensitive experiments, place Toxiproxy between the runner and
-MinIO rather than adding sleeps to this script. Run each revision against the
+SeaweedFS rather than adding sleeps to this script. Run each revision against the
 same proxy settings and compare the JSON outputs.
 
 `metrics.py` instruments aiobotocore's private logical API-call boundary. That

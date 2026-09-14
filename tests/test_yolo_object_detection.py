@@ -867,7 +867,7 @@ class TestYoloOdLoaderOptionSafety:
 
     def test_nested_yaml_without_path_resolves_against_its_own_directory(self, tmp_path: Path) -> None:
         # 'train: images/train' in configs/custom.yaml means configs/images/train,
-        # matching Ultralytics (and checkmaite's loader), not <root>/images/train.
+        # matching Ultralytics (and CheckMAITE's loader), not <root>/images/train.
         _write_image(tmp_path / "configs" / "images" / "train" / "a.png")
         (tmp_path / "configs" / "labels" / "train").mkdir(parents=True, exist_ok=True)
         (tmp_path / "configs" / "labels" / "train" / "a.txt").write_text("0 0.5 0.5 0.2 0.4\n", encoding="utf-8")
@@ -948,7 +948,7 @@ class TestYoloOdLoaderOptionSafety:
         assert "claimed by 2 images" in caplog.text
 
     def test_flat_ann_dir_is_unambiguous_for_a_single_split(self, tmp_path: Path) -> None:
-        # checkmaite's historical ann_dir shape: one split, flat <stem>.txt.
+        # CheckMAITE's historical ann_dir shape: one split, flat <stem>.txt.
         _write_image(tmp_path / "images" / "train" / "same.png")
         _write_image(tmp_path / "images" / "val" / "same.png")
         (tmp_path / "ann").mkdir(parents=True, exist_ok=True)

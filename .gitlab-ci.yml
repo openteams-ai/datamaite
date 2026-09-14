@@ -95,7 +95,7 @@ variables:
     # Trust the GitLab checkout for build backends that call git to derive package metadata.
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     # Acquire uv from PyPI, matching the publish job below and both sibling repos
-    # (checkmaite, modelmaite). Preferred over astral.sh's install script: that
+    # (CheckMAITE, modelmaite). Preferred over astral.sh's install script: that
     # script performs no integrity check on the binary it downloads ("no
     # checksums to verify"), and pins only a *name* on a GitHub release asset,
     # which can be replaced in place -- whereas a PyPI filename is immutable.
@@ -412,7 +412,7 @@ build:
 
       # Do not let --skip-existing hide a conflicting artifact. Wait for the
       # package index to become consistent, then compare every remote digest
-      # with the artifact built from the release tag (checkmaite !610 pattern).
+      # with the artifact built from the release tag (CheckMAITE !610 pattern).
       python - "$PYPI_ENVIRONMENT_NAME" "$RELEASE_TAG" <<'PY'
       import hashlib
       import json
@@ -736,13 +736,13 @@ integration:
     - uv run --no-sync pytest tests/e2e -m integration -v -s --cov-fail-under=0
 
 # ---------------------------------------------------------------------------
-# E2E: S3 object storage tier, against a real S3-API server (MinIO), not the
-# fsspec memory:// filesystem the coverage-gated unit suite's cloud tests use.
-# This is a separate TIER from the coverage-gated matrix, not a separate
+# E2E: S3 object storage tier, against a real S3-API server (SeaweedFS), not
+# the fsspec memory:// filesystem the coverage-gated unit suite's cloud tests
+# use. This is a separate TIER from the coverage-gated matrix, not a separate
 # stage: the separation is structural (integration marker, --no-cov, only
-# tests/e2e/test_s3_minio.py), so the job shares the `test` stage with the
-# matrix -- like the `integration` job above -- and runs concurrently with
-# it instead of serializing behind it. See tests/README.md for the local run
+# tests/e2e/test_s3_compatible.py), so the job shares the `test` stage with the
+# matrix -- like the `integration` job above -- and runs concurrently with it
+# instead of serializing behind it. See tests/README.md for the local run
 # instructions and the two-tier rationale.
 # The job also mirrors the shared example HMIE dataset into the S3 service to
 # assert cloud/local parity on real data (TestExampleDatasetParity).
@@ -758,36 +758,28 @@ e2e-s3:
   allow_failure: false
   variables:
     VERSION: "3.12"
-    # Pinned to the last MinIO release under the Apache License 2.0 -- the
-    # project relicensed to AGPLv3 immediately after this tag. License
-    # verified at this tag; do not bump past it. Hoisted to a variable so the
-    # service image and the tests/README.md local-run docker command stay in
-    # sync from one place (keep them in sync when this changes).
-    MINIO_E2E_IMAGE: "minio/minio:RELEASE.2021-04-22T15-44-28Z"
-    MINIO_ROOT_USER: "datamaite-e2e"
-    MINIO_ROOT_PASSWORD: "datamaite-e2e-secret"
-    DATAMAITE_S3_E2E_ENDPOINT: "http://s3:9000"
-    # Throwaway, service-local credentials: intentionally inline and unmasked
-    # because they only authenticate against the ephemeral MinIO service in
-    # this job. NEVER copy this pattern with real credentials -- those belong
-    # in masked/protected CI/CD variables.
+    # SeaweedFS is an actively maintained Apache-2.0 S3-compatible object
+    # store. Pin both its release and multi-platform manifest digest so CI
+    # cannot silently consume a replaced tag. Keep tests/README.md and the
+    # benchmark instructions in sync when this changes.
+    S3_E2E_IMAGE: "ghcr.io/chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
+    # SeaweedFS `weed mini` creates an administrator identity from the standard
+    # AWS credential variables. These throwaway credentials only authenticate
+    # against this job's ephemeral service. NEVER copy this pattern with real
+    # credentials; those belong in masked/protected CI/CD variables.
+    AWS_ACCESS_KEY_ID: "datamaite-e2e"
+    AWS_SECRET_ACCESS_KEY: "datamaite-e2e-secret"
+    DATAMAITE_S3_E2E_ENDPOINT: "http://s3:8333"
     DATAMAITE_S3_E2E_KEY: "datamaite-e2e"
     DATAMAITE_S3_E2E_SECRET: "datamaite-e2e-secret"
-    # Stream the MinIO service container's logs into the job trace, so a
-    # service that fails to start is diagnosable from the trace alone.
+    # Stream the service container's logs into the job trace, so a service that
+    # fails to start is diagnosable from the trace alone.
     CI_DEBUG_SERVICES: "true"
   services:
-    # GitLab expands variables in `services:name`, so the pinned image lives in
-    # MINIO_E2E_IMAGE (see the license-pin comment there).
-    - name: "${MINIO_E2E_IMAGE}"
+    # The pinned image's default command starts `weed mini -dir=/data`, a
+    # complete single-process object store with its S3 API on port 8333.
+    - name: "${S3_E2E_IMAGE}"
       alias: "s3"
-      command: ["server", "/data"]
-    # NOTE: this pulls minio/minio anonymously from Docker Hub, which is
-    # subject to Docker Hub's anonymous pull-rate limits. A follow-up could
-    # route it through the GitLab dependency proxy
-    # (${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/minio/minio:...), but that
-    # requires verifying the group has the dependency proxy enabled first --
-    # do NOT switch the image path until that is confirmed.
   script:
     - |
       # Mirrors the .clone_example_data anchor but must NOT fail the job: only
@@ -808,25 +800,30 @@ e2e-s3:
     # aws (s3fs) for the storage_options plumbing under test, fmv (opencv/av)
     # for the factory-built mp4s and video probing; dev for the toolchain.
     - uv sync --locked --extra dev --extra aws --extra fmv
-    # The slim image has no curl, so poll the MinIO health endpoint from
-    # Python (~30 x 2s) and fail loudly if the service never comes up.
+    # Poll an authenticated S3 operation rather than a vendor-specific health
+    # endpoint, then fail loudly if the service never becomes usable.
     - |
       uv run --no-sync python -c '
-      import os, sys, time, urllib.request
-      url = os.environ["DATAMAITE_S3_E2E_ENDPOINT"].rstrip("/") + "/minio/health/live"
+      import os, sys, time
+      import s3fs
+      filesystem = s3fs.S3FileSystem(
+          key=os.environ["DATAMAITE_S3_E2E_KEY"],
+          secret=os.environ["DATAMAITE_S3_E2E_SECRET"],
+          client_kwargs={"endpoint_url": os.environ["DATAMAITE_S3_E2E_ENDPOINT"]},
+          config_kwargs={"connect_timeout": 2, "read_timeout": 2, "retries": {"max_attempts": 0}},
+      )
       for attempt in range(30):
           try:
-              with urllib.request.urlopen(url, timeout=2) as resp:
-                  if resp.status == 200:
-                      print("MinIO ready after %d attempt(s)" % attempt)
-                      break
+              filesystem.ls("")
+              print("S3 service ready after %d attempt(s)" % (attempt + 1))
+              break
           except Exception as exc:
-              print("waiting for MinIO (%d/30): %s" % (attempt + 1, type(exc).__name__))
+              print("waiting for S3 service (%d/30): %s" % (attempt + 1, type(exc).__name__))
           time.sleep(2)
       else:
-          sys.exit("MinIO service at %s never became ready" % url)
+          sys.exit("S3 service never became ready")
       '
-    - uv run --no-sync pytest tests/e2e/test_s3_minio.py -m integration --no-cov -q
+    - uv run --no-sync pytest tests/e2e/test_s3_compatible.py -m integration --no-cov -q
 
 # ---------------------------------------------------------------------------
 # DR Compliance (JATIC program requirement)

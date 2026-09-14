@@ -979,7 +979,7 @@ def _ann_relative_path(image_path: Path, image_base: Path, root: Path) -> Path:
 def _resolve_ann_dir_labels(records: list[_OdRecord], *, labels_base: Path) -> list[_OdRecord]:
     """Resolve label candidates while refusing every multiply-claimed file.
 
-    checkmaite's historical ``ann_dir`` is a flat directory of ``<stem>.txt``
+    CheckMAITE's historical ``ann_dir`` is a flat directory of ``<stem>.txt``
     files for a *single* split, so that layout must keep working. A structured
     path is preferred; otherwise the flat path is considered. Claims include
     already-resolved structured paths as well as flat fallbacks: absolute YAML

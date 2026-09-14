@@ -75,7 +75,7 @@ all = [
 ]
 # Cloud object-storage backends for loading datasets from s3:// / gs:// / az://
 # URLs. Core ships fsspec + universal-pathlib; each provider's filesystem is
-# opt-in, mirroring checkmaite's extras.
+# opt-in, mirroring CheckMAITE's extras.
 aws = [
     "s3fs>=2023.1.0",
 ]
