@@ -5,9 +5,10 @@ validation. It acts as a bridge: a **loader** reads an input format into a
 source-preserving in-memory dataset, a **validator** checks a format on disk,
 and a **writer** serialises supported datasets out to an output format.
 
-New here? Start with [Installation](installation.md), then work through the
-[Tutorials](../tutorials/index.md) and consult the
-[Reference](../reference/index.md) for the architecture and CLI details.
+New here? Start with [Installation](installation.md), then pick the
+[tutorial](../tutorials/index.md) matching your data — full-motion video,
+image classification, or object detection. The
+[Reference](../reference/index.md) covers the architecture and CLI details.
 
 - [Loading from cloud object storage](cloud-storage.md) — use `s3://` / `gs://` / `az://` URLs as dataset roots.
 
@@ -24,6 +25,12 @@ hmie_datadir = Path('path/to/datasets')  # replace this with your local dataset
 
 hmie_dataset = load(hmie_datadir, dataset_format='hmie')
 ```
+
+The same shape serves still images: `load_ic(root, dataset_format="yolo")`
+for classification folders and `load_od(root, dataset_format="coco")` for
+detection. [Working with IC Datasets](../tutorials/Working_with_IC_datasets.ipynb)
+and [Working with OD Datasets](../tutorials/Working_with_OD_datasets.ipynb)
+walk through both on synthetic data; the rest of this page stays with HMIE.
 
 Convert to another format:
 

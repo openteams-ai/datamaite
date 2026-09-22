@@ -110,6 +110,86 @@ use the backend's native copy when available. Remote image/video decoding stays
 lazy. Empty YOLO class directories are represented by hidden marker objects,
 because an empty object-store prefix does not exist.
 
+## Test locally against a MinIO bucket
+
+To develop the S3 path without touching a real AWS bucket, run
+[MinIO](https://min.io) — an S3-compatible server — in a container. This is
+the same setup the repo's `e2e-s3` CI tier uses. The image tag is pinned in
+one place, `MINIO_E2E_IMAGE` in `.gitlab-ci.yml` (the last Apache-2.0 MinIO
+release); `tests/README.md` carries the canonical recipe. Read the tag from
+there rather than copying it:
+
+```bash
+MINIO_E2E_IMAGE=$(sed -n 's/.*MINIO_E2E_IMAGE: *"\(.*\)"/\1/p' .gitlab-ci.yml)
+docker run -d --rm --name datamaite-minio -p 9123:9000 \
+  -e MINIO_ROOT_USER=datamaite-e2e -e MINIO_ROOT_PASSWORD=datamaite-e2e-secret \
+  "$MINIO_E2E_IMAGE" server /data
+```
+
+Create a bucket, upload a dataset, and point datamaite at the URL.
+`client_kwargs.endpoint_url` is the only thing distinguishing the local
+container from AWS:
+
+```python
+import datamaite
+import s3fs  # installed by datamaite[aws]
+
+storage_options = {
+    "key": "datamaite-e2e",
+    "secret": "datamaite-e2e-secret",
+    "client_kwargs": {"endpoint_url": "http://127.0.0.1:9123"},
+}
+
+fs = s3fs.S3FileSystem(**storage_options)
+fs.mkdir("my-datasets")
+fs.put("path/to/local/hmie-batch-01", "my-datasets/hmie-batch-01", recursive=True)
+
+ds = datamaite.load_mot("s3://my-datasets/hmie-batch-01", storage_options=storage_options)
+result = datamaite.validate("s3://my-datasets/hmie-batch-01", storage_options=storage_options)
+```
+
+To run the identical code against real AWS, drop `client_kwargs` and let
+`key`/`secret` come from the environment or an AWS profile — the `s3://`
+URL and everything else stay the same. Stop the container with
+`docker stop datamaite-minio` when you're done (`--rm` removes it).
+
+The runnable real-S3 cell in
+[HMIE Datasets from Cloud Storage](../tutorials/HMIE_Cloud_Storage.ipynb)
+targets this container via the same variables the `e2e-s3` CI tier uses:
+
+```bash
+export DATAMAITE_S3_E2E_ENDPOINT=http://127.0.0.1:9123
+export DATAMAITE_S3_E2E_KEY=datamaite-e2e
+export DATAMAITE_S3_E2E_SECRET=datamaite-e2e-secret
+```
+
+## Troubleshooting
+
+- **`CERTIFICATE_VERIFY_FAILED` reaching S3** — managed hosts often preset
+  CA-bundle environment variables (`AWS_CA_BUNDLE`, `SSL_CERT_FILE`,
+  `REQUESTS_CA_BUNDLE`, …) to an organization-only bundle that lacks the
+  Amazon root CAs. Clear those variables (or point them at a bundle that
+  includes both the org and Amazon roots) rather than disabling
+  verification. For the CLI and your own scripts do that in the shell —
+  neither the library nor `datamaite validate s3://…` reads any datamaite
+  variable for this:
+
+  ```bash
+  env -u AWS_CA_BUNDLE -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u CURL_CA_BUNDLE \
+    datamaite validate s3://bucket/prefix
+  ```
+
+  The runnable cell in the
+  [Cloud Storage tutorial](../tutorials/HMIE_Cloud_Storage.ipynb) is the one
+  place that offers a shortcut, `DATAMAITE_S3_CA_BUNDLE=system` (or a
+  replacement bundle path): it is a notebook-only convenience that clears or
+  replaces those same variables before creating the filesystem. Restart the
+  kernel first — an already-created S3 filesystem keeps its old SSL context.
+- **`NoCredentialsError` in cluster pods** — Kubernetes pods have no ambient
+  AWS identity unless one is wired up (EKS Pod Identity or IRSA on the pod's
+  service account, or explicit credentials). Node-role fallback via IMDS is
+  typically blocked by a hop limit of 1.
+
 ## How video integrity checks work on cloud data
 
 Annotation (JSON) checks stream directly from object storage. Video

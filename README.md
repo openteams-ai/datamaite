@@ -461,8 +461,8 @@ or `convert(..., input_format="yolo", output_format="yolo")` calls should pass
 `task="ic"` or `task="od"`; the task-first `load_ic` / `load_od` helpers set
 that discriminator for you.
 
-For a full load → verify → export-ready walkthrough on synthetic data, see
-[docs/tutorials/Working_with_FMV_datasets.ipynb](docs/tutorials/Working_with_FMV_datasets.ipynb).
+For runnable per-task walkthroughs — FMV, image classification, and object
+detection — see the tutorials under [docs/tutorials](docs/tutorials).
 
 ## MAITE interoperability
 
