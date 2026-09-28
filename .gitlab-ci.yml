@@ -203,6 +203,38 @@ lint:
         exit 1
       fi
 
+# DR-3.3-H-4: dead-link check over the repo's Markdown, internal and external.
+# markdownlint (DR-3.3-H-3) runs in pre-commit, i.e. in `lint` above.
+# .markdown-link-check.json ignores only links a CI runner cannot resolve:
+#   - localhost      -- the sphinx-autobuild dev server in docs/README.md
+#   - gitlab.jatic.net -- private instance, 403 without a login session
+#   - ../example-validation-report.html -- exists only in the built site
+#     (html_extra_path in docs/conf.py copies it to the build root)
+# Not run on tags: a transient external outage must not block a release whose
+# commit already passed this check on its MR and on main.
+markdown-link-check:
+  stage: lint
+  image: node:22-slim
+  timeout: 10m
+  interruptible: true
+  needs: []
+  dependencies: []
+  variables:
+    MARKDOWN_LINK_CHECK_VERSION: "3.15.0"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - when: never
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    # Every tracked Markdown file except the verbatim license text.
+    - git ls-files -z '*.md' ':!:LICENSE.md' |
+      xargs -0 npx --yes "markdown-link-check@${MARKDOWN_LINK_CHECK_VERSION}" -q -c .markdown-link-check.json
+
 # ---------------------------------------------------------------------------
 # Type checking
 # ---------------------------------------------------------------------------

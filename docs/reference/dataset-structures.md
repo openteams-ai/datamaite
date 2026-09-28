@@ -34,7 +34,7 @@ Each supported format expects a specific on-disk layout; the loader docstrings
 hold the exact rules.
 
 | Format | Task | Entry point | Expected layout (sketch) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `hmie` | MOT | `load_mot(dataset_format="hmie")` | `<video>/<snippet>/{<labeler>/*.json, seq_mp4/*.mp4}` — Scale JSON + snippet videos under one root |
 | `motchallenge` | MOT | `load_mot(dataset_format="motchallenge")` | `<split>/<seq>/{seqinfo.ini, gt/gt.txt, img1/*.jpg}` |
 | `visdrone_video` | MOT | `load_mot(dataset_format="visdrone_video")` | `sequences/<seq>/*.jpg` + `annotations/<seq>.txt` |
@@ -48,12 +48,14 @@ hold the exact rules.
 | `huggingface_video_classification` | VC | `load_vc(dataset_format="huggingface_video_classification")` | VideoFolder: `<split>/<class>/*.mp4` (+ optional metadata) |
 | `flat_images` | OD | `load_od(dataset_format="flat_images")` | a flat directory of loose images (`.jpg`/`.png`/`.tif` + aliases, and `.safetensors`) → an unlabeled OD dataset (zero detections, no taxonomy). See the [SafeTensors image layout](https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite/-/blob/main/README.md#safetensors-image-layout) conventions. **Explicit opt-in only; never autodetected.** |
 
-Cloud (fsspec) roots are supported for every registered loader that declares `supports_remote` (including `flat_images`). Pass `storage_options` when the URL needs credentials.
+Cloud (fsspec) roots are supported for every registered loader that declares
+`supports_remote` (including `flat_images`). Pass `storage_options` when the URL
+needs credentials.
 
 ## Rejected and error structures
 
 | Scenario | Behavior |
-|---|---|
+| --- | --- |
 | Path does not exist | `FileNotFoundError` |
 | Root is a file — including archives (`.zip`, `.tar`, `.gz`, …) | `NotADirectoryError`. datamaite reads **directories only**; archives are not supported and will not be. Extract the archive yourself and point datamaite at the extracted directory. |
 | Unknown / arbitrary folder structure (autodetect) | `ValueError: Could not autodetect…` listing the registered loaders; pass `dataset_format=` explicitly |

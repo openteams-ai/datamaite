@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Markdown is checked in CI (#120, DR-3.3-H-3/H-4): markdownlint-cli2 runs in
+  pre-commit (and so in the `lint` job) with `.markdownlint-cli2.yaml`, and a
+  new `markdown-link-check` job checks internal and external links. Existing
+  docs were brought into compliance (line wrapping, table style, fence
+  languages, heading levels); no wording changed.
 - SafeTensors ingest in the `flat_images` loader (#74), completing IR-3.2-S-1:
   `load_od(root, dataset_format="flat_images")` now picks up `.safetensors`
   files alongside `.jpg`/`.png`/`.tif`. Layout is documented in the README:
@@ -134,7 +139,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relative to the installed file — so a placeholder install inside an unrelated
   repository reported *that* repository's tag — and it ran a `git` subprocess at
   import time. Placeholder metadata is now reported as-is.
-- Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation, publishes to TestPyPI automatically with digest verification, gates PyPI behind one manual approval in the same pipeline, and creates the GitLab Release from this changelog's section for the tag. The package version is derived from the git tag (uv-dynamic-versioning); `[project].version` and the version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline is retired. Release tags must be canonically spelled — leading zeros in any numeric component (`01.02.03`, `0.5.0-rc01`) are rejected so the published version can never differ from the tag.
+- Releases are tag-driven (#85): pushing an `X.Y.Z` tag runs validation,
+  publishes to TestPyPI automatically with digest verification, gates PyPI
+  behind one manual approval in the same pipeline, and creates the GitLab
+  Release from this changelog's section for the tag. The package version is
+  derived from the git tag (uv-dynamic-versioning); `[project].version` and the
+  version-bump commit are gone, and the manual `RELEASE_TAG` web-form pipeline
+  is retired. Release tags must be canonically spelled — leading zeros in any
+  numeric component (`01.02.03`, `0.5.0-rc01`) are rejected so the published
+  version can never differ from the tag.
 
 ### Removed
 
@@ -148,7 +161,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flat images and supported Flat MP4 codecs, including MPEG-2.
 - Repeated IC and OD input access now returns independent image arrays,
   preventing caller mutations from affecting later reads.
-
 
 ## [0.4.1] - 2026-07-31
 

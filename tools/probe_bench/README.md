@@ -11,7 +11,7 @@ Four transports, each replicating the probe's real access pattern (open +
 metadata + first frame + 10 sampled seeks + mid frame + last frame):
 
 | Transport | What it is |
-|---|---|
+| --- | --- |
 | `stream_pyav` | **Real shipped code.** `datamaite.probe_video(UPath(url))` -- PyAV decoding over a seekable fsspec file object, fsspec's default block size. |
 | `stream_pyav_1mb` | **Real shipped code**, same call with `UPath(url, block_size=1 << 20)` -- the `storage_options` tune recommended for probe-style seek-heavy access. |
 | `full_download` | **Emulation** of a rejected download-first design: `fsspec.get_file()` to a temp file, then `probe_video()` on the local copy. |
@@ -86,7 +86,7 @@ are unaffected and are left as originally measured.
 Bytes transferred per approach, as a percentage of the full file size:
 
 | Transport | 93 MB | 308 MB | 692 MB |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | PyAV streaming, 1 MiB blocks | 12.7 MB (13.7%) | 12.9 MB (4.2%) | 13.3 MB (1.9%) |
 | PyAV streaming, default blocks | 97.9 MB (105.7%) | 59.0 MB (19.2%) | 59.4 MB (8.6%) |
 | cv2 over URL (emulation) | 49.0 MB (52.9%) | 47.6 MB (15.5%) | 50.1 MB (7.2%) |

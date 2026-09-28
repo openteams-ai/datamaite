@@ -2,7 +2,8 @@
 
 ## Scale Video Annotation Schema
 
-JSON Schema for Scale AI Video annotations. It covers the completed task response, including annotation tracks and per-frame bounding boxes.
+JSON Schema for Scale AI Video annotations. It covers the completed task
+response, including annotation tracks and per-frame bounding boxes.
 
 ```{note}
 This schema is a human-readable description of the Scale Video Playback format.

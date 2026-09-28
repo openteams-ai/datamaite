@@ -50,7 +50,7 @@ non-HMIE formats load and write but are not validated by `datamaite validate`
 yet.
 
 | Format | Load | Validate | Write |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
 | Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
 | Flat folder still images (.jpg / .png / .tif / .safetensors) | ✅ | — | ✅ encoded only |
@@ -66,8 +66,8 @@ yet.
 | COCO object detection | ✅ | — | ✅ |
 | YOLO object detection | ✅ | — | ✅ |
 
-See [docs/reference/architecture.md](docs/reference/architecture.md) for the loader / writer design
-and how to add a new loader or writer.
+See [docs/reference/architecture.md](docs/reference/architecture.md) for the
+loader / writer design and how to add a new loader or writer.
 
 ## Installation extras
 
@@ -82,7 +82,7 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 `numpy`. Pixel/media decoding is selected by task extras:
 
 | Install | Adds | Enables |
-|---|---|---|
+| --- | --- | --- |
 | `datamaite` | `pydantic`, `numpy` | load/convert IRs, HMIE structure/annotation validation, MAITE target objects |
 | `datamaite[fmv]` | OpenCV + PyAV | FMV integrity checks, flat MP4 probing, video-backed MOT decode/export |
 | `datamaite[od]` | OpenCV | still-image OD pixel decode |
@@ -97,8 +97,9 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 `maite` itself is not a core runtime dependency; datamaite datasets conform to
 MAITE protocols structurally. The `maite` extra is available for consumers and
 conformance tests that want the MAITE package installed alongside the adapters;
-it includes PyAV because the MOT MAITE view decodes video-backed sequences.
-See [docs/getting-started/installation.md](docs/getting-started/installation.md) for the dependency contract.
+it includes PyAV because the MOT MAITE view decodes video-backed sequences. See
+[docs/getting-started/installation.md](docs/getting-started/installation.md) for
+the dependency contract.
 
 ### Cloud object storage
 
@@ -196,7 +197,7 @@ image, target, meta = ds[0]  # MAITE indexing; requires datamaite[od]
 Every sample has zero detections and there is no taxonomy, because this
 format carries no annotations.
 
-#### SafeTensors image layout
+### SafeTensors image layout
 
 SafeTensors is a tensor container, not an image interchange format: it has no
 image-layout convention, so datamaite defines one. A `.safetensors` file
@@ -232,7 +233,7 @@ the wire format matters.
 A tensor is treated as an image when its shape and dtype match:
 
 | Accepted shape | Read as |
-|---|---|
+| --- | --- |
 | `(H, W, C)`, `C` in `{1, 3, 4}` | HWC |
 | `(C, H, W)`, `C` in `{1, 3, 4}`, last dim not in `{1, 3, 4}` | CHW |
 | `(H, W)` | grayscale, replicated to three channels |
@@ -325,19 +326,19 @@ write(od, "out/hf-od", output_format="huggingface_vision")   # images + per-spli
 
 The OD writer places `metadata.jsonl` *inside* each split directory
 (`train/metadata.jsonl`, `data/metadata.jsonl` for unsplit samples) with
-directory-relative `file_name`s — once split directories exist, Hugging
-Face's ImageFolder only associates metadata files within each split's tree,
-so a root-level metadata file would silently lose the `objects` column when
-loaded with `datasets`. The writers only emit split directories ImageFolder split inference
-recognizes (`train`/`validation`/`test`, with aliases such as `val`, `dev`,
-and `eval` normalised); samples with any other split name fall back to the
-default split with a warning, since a custom split directory would reload as
+directory-relative `file_name`s — once split directories exist, Hugging Face's
+ImageFolder only associates metadata files within each split's tree, so a
+root-level metadata file would silently lose the `objects` column when loaded
+with `datasets`. The writers only emit split directories ImageFolder split
+inference recognizes (`train`/`validation`/`test`, with aliases such as `val`,
+`dev`, and `eval` normalised); samples with any other split name fall back to
+the default split with a warning, since a custom split directory would reload as
 a class folder (IC) or lose its split (OD). Detections that carry a category
-name write the name into `objects.categories` (the layout has no ClassLabel
-name table to put it in), so reloads keep `"person"` rather than a bare id.
-The OD writer's `metadata_format="csv"` (JSON-encoded `objects`) is a
-datamaite extension read back by the matching loader — keep the default
-`metadata.jsonl` for Hugging Face-standard output.
+name write the name into `objects.categories` (the layout has no ClassLabel name
+table to put it in), so reloads keep `"person"` rather than a bare id. The OD
+writer's `metadata_format="csv"` (JSON-encoded `objects`) is a datamaite
+extension read back by the matching loader — keep the default `metadata.jsonl`
+for Hugging Face-standard output.
 
 Load a standard MOTChallenge benchmark root (with `train/` and/or `test/`
 splits) the same way:
@@ -490,8 +491,8 @@ so the quick snippet above needs `datamaite[fmv]`. Loading with
 `empty_frame_policy="all"` view requires) additionally uses the OpenCV probe;
 that is also included in `datamaite[fmv]`.
 
-To configure the MOT view, copy the dataset with options (it's not a conversion —
-the dataset is already MAITE):
+To configure the MOT view, copy the dataset with options (it's not a conversion
+— the dataset is already MAITE):
 
 ```python
 ds = ds.with_mot_options(empty_frame_policy="all", dataset_id="my-set")
@@ -595,7 +596,7 @@ subclass + `@register_writer` — see [docs/reference/architecture.md](docs/refe
 
 ## CLI Usage
 
-```
+```text
 datamaite validate <path> [options]
 
 Options:
@@ -628,7 +629,7 @@ Hugging Face VC do not imply on-disk validation support yet.
 For HMIE/Scale, the validator runs four checks against each dataset:
 
 | Check | What it verifies |
-|---|---|
+| --- | --- |
 | **Folder structure** | Snippet directories found with `seq_*` video containers |
 | **FMV integrity** | Video files can be opened, frames decoded, not corrupted |
 | **Annotation coverage** | Every annotation has a matching video and vice versa |
@@ -663,7 +664,7 @@ The validator is snippet-centric. Snippet dirs are identified by the
 presence of a `seq_*/` video container; everything else is discovered
 relative to that.
 
-```
+```text
 <batch_dir>/
     <snippet_name>_<id>_<seq>/           snippet directory
         <snippet_name>.json              snippet-level metadata (NOT a Scale annotation)

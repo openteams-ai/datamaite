@@ -1,13 +1,16 @@
 # HMIE Validation CLI
 
-The `datamaite` CLI provides two commands — validate to check a dataset's structure, video integrity, annotation coverage, and schema compliance, and stats to summarize its duration/frame/box distributions — with global flags for verbosity and JSON/HTML output.
+The `datamaite` CLI provides two commands — validate to check a dataset's
+structure, video integrity, annotation coverage, and schema compliance, and
+stats to summarize its duration/frame/box distributions — with global flags for
+verbosity and JSON/HTML output.
 
 `datamaite [-v] [-q] [--debug] <command> ...`
 
-**Global flags:** `-v/--verbose` (show individual findings), `-q/--quiet` (suppress progress, for scripts), `--debug` (detailed logging).
+**Global flags:** `-v/--verbose` (show individual findings), `-q/--quiet`
+(suppress progress, for scripts), `--debug` (detailed logging).
 
 ## **Commands**
-
 
 ### `datamaite validate <path> [options]`
 

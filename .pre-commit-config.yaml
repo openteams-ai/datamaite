@@ -47,3 +47,14 @@ repos:
     rev: "0.7.1"
     hooks:
       - id: nbstripout
+
+  # -----------------------------------------------------------------------
+  # markdownlint-cli2 -- Markdown style (DR-3.3-H-3)
+  # -----------------------------------------------------------------------
+  # Config (enabled rules, MyST exemptions, globs) lives in
+  # .markdownlint-cli2.yaml so editors and the CLI pick up the same rules.
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.3
+    hooks:
+      - id: markdownlint-cli2
+        args: ["--fix"]

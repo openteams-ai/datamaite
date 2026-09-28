@@ -154,7 +154,7 @@ writer contract.
 
 ## Project layout
 
-```
+```text
 src/datamaite/
     __init__.py              Public API surface
     _cli.py                  CLI entrypoint (`datamaite validate ...`)
@@ -240,7 +240,7 @@ The on-disk layout that `discovery.py` walks is snippet-centric. Snippet dirs
 are identified by the presence of a `seq_*/` video container; everything else
 is discovered relative to that.
 
-```
+```text
 <batch_dir>/
     <snippet_name>_<id>_<seq>/           snippet directory
         <snippet_name>.json              snippet-level metadata (NOT a Scale annotation)
@@ -370,7 +370,6 @@ flowchart TD
     class CACHE store;
 ```
 
-
 ## Discovery — how pairs are built
 
 `discovery.py` runs in two phases: a single `os.walk` that *classifies*
@@ -463,8 +462,6 @@ Key invariants worth remembering while reading `discovery.py`:
   videos share a basename, and non-annotation JSON (e.g. `metadata.json`) in
   a `scale/` dir is skipped. Batch-level pairs carry the matched video's
   `snippet_dir` so `validation.py`'s `snippet_count` stays correct.
-
-
 
 ## Inside one pair's validation
 
@@ -690,7 +687,7 @@ the other consumer of the discovery + schema layers.
 Where `validate()` runs *checks* on each pair, the loader *parses* each
 pair into the neutral in-memory model defined in `model.py`:
 
-```
+```text
 discover_hmie_pairs(root) ─► [SnippetPair]
                                   │  (per pair)
                                   ▼
@@ -704,11 +701,12 @@ discover_hmie_pairs(root) ─► [SnippetPair]
 ```
 
 `BoxTrackDataset` / `VideoSequence` / `BoxAnnotation` live in `model.py`, not in
-`_formats/hmie/loader.py`, on purpose: the model is the **format-neutral hub** of the
-bridge. `HmieLoader` (via `load_mot(dataset_format="hmie")`) is one loader that produces
-it; the other MOT loaders produce the same `BoxTrackDataset`, and converters consume it
-without depending on any loader. That is what makes datamaite an N-to-M
-bridge (loaders × converters) rather than an HMIE-to-X path.
+`_formats/hmie/loader.py`, on purpose: the model is the **format-neutral hub**
+of the bridge. `HmieLoader` (via `load_mot(dataset_format="hmie")`) is one
+loader that produces it; the other MOT loaders produce the same
+`BoxTrackDataset`, and converters consume it without depending on any loader.
+That is what makes datamaite an N-to-M bridge (loaders × converters) rather than
+an HMIE-to-X path.
 
 Design points:
 
@@ -787,14 +785,14 @@ flowchart TB
 
 Mechanics that keep this honest:
 
-- **`datamaite.maite` is optional and lazy.** Core `import datamaite`,
-  `load`, and `validate` never import `maite` or a media decoder (core includes `numpy` for target arrays).
-  The view machinery is imported lazily inside `ds[i]`; indexing without the
-  `datamaite[fmv]` extra raises an actionable error for MOT video decode. Conformance is
-  *structural* (no runtime `maite` import) — `BoxTrackDataset` satisfies
-  `maite.protocols.multiobject_tracking.Dataset` by shape. (The `maite`
-  package itself is only used in development/conformance tests; runtime code is
-  structurally compatible and does not depend on it.)
+- **`datamaite.maite` is optional and lazy.** Core `import datamaite`, `load`,
+  and `validate` never import `maite` or a media decoder (core includes `numpy`
+  for target arrays). The view machinery is imported lazily inside `ds[i]`;
+  indexing without the `datamaite[fmv]` extra raises an actionable error for MOT
+  video decode. Conformance is *structural* (no runtime `maite` import) —
+  `BoxTrackDataset` satisfies `maite.protocols.multiobject_tracking.Dataset` by
+  shape. (The `maite` package itself is only used in development/conformance
+  tests; runtime code is structurally compatible and does not depend on it.)
 - **MOT is the surface for video box-tracks** (`ds[i]` is one video). Still-image
   object detection is a *separate task* with its own dataset class and MAITE
   surface (see [Task-aware datasets](#task-aware-datasets--ic-od-and-vc)), not a
@@ -898,12 +896,13 @@ flowchart TD
   and type-checks the dataset against `Writer.consumes`. A plain `variant=...`
   keyword remains a writer option for formats such as VisDrone. `mode` accepts
   either a `WriteMode` member or the equivalent string (see Destination policy).
-- **`convert(src, dest, *, input_format, output_format, task=..., input_variant=..., output_variant=..., mode=...)`**
-  (`conversion.py`). End-to-end: `write(load(src, ...), dest, ...)`. It is
-  task-closed; cross-task requests raise instead of fabricating data.
-  Conversion is **same-task by default**: `convert` never changes task.
-  Task-changing projections (e.g. MOT → video classification, #53) are
-  separate, explicitly named transforms — not `convert` options.
+- **`convert(src, dest, *, ...)`** (`conversion.py`); keywords include
+  `input_format`, `output_format`, `task`, `input_variant`, `output_variant`,
+  `mode`. End-to-end: `write(load(src, ...), dest, ...)`. It is
+  task-closed; cross-task requests raise instead of fabricating data. Conversion
+  is **same-task by default**: `convert` never changes task. Task-changing
+  projections (e.g. MOT → video classification, #53) are separate, explicitly
+  named transforms — not `convert` options.
 
 ### Writer conventions
 
@@ -941,7 +940,7 @@ flowchart TD
 `HmieWriter` (`_formats/hmie/writer.py`) is the first reference writer. Because
 datamaite also has the HMIE *loader*, it closes a full round trip:
 
-```
+```text
 load_mot(src, dataset_format="hmie")
   → BoxTrackDataset
   → write(…, output_format="hmie")
@@ -1032,7 +1031,7 @@ polymorphic `VisionDataset` could not itself be a native MAITE dataset and would
 force an adapter back.
 
 | datamaite class | MAITE protocol (0.9.5) | `ds[i]` input | `ds[i]` target |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `BoxTrackDataset` (today) | `multiobject_tracking` | `VideoStream` | `MultiobjectTrackingTarget` (per-frame `boxes/labels/scores/track_ids`) |
 | `ObjectDetectionDataset` | `object_detection` | `Image` (single) | `ObjectDetectionTarget{boxes,labels,scores}` |
 | `ImageClassificationDataset` | `image_classification` | `Image` (single) | one-hot / prob vector |
@@ -1043,8 +1042,9 @@ protocol modules exist). OD/IC inputs are single images → they need an **image
 decoder** (PIL/opencv), distinct from MOT's PyAV video decoder. VC is explicitly
 not exposed as MAITE until a real protocol exists.
 
-Each datamaite dataset class is a native dataset of a **different MAITE protocol object** —
-they are *not* interchangeable, which is why MOT's `BoxTrackDataset` cannot serve OD:
+Each datamaite dataset class is a native dataset of a **different MAITE protocol
+object** — they are *not* interchangeable, which is why MOT's `BoxTrackDataset`
+cannot serve OD:
 
 ```mermaid
 flowchart LR
@@ -1070,10 +1070,10 @@ the dataset against it — so conversion stays task-closed.
 
 ### Conversion is task-closed
 
-Conversion stays within a task (any input format of a task → its IR → any output format
-of the *same* task). Cross-task conversion is refused rather than fabricated. If
-a lossy bridge such as MOT→OD per-frame export is ever added, it should be an
-explicit opt-in operation, not implicit writer dispatch.
+Conversion stays within a task (any input format of a task → its IR → any output
+format of the *same* task). Cross-task conversion is refused rather than
+fabricated. If a lossy bridge such as MOT→OD per-frame export is ever added, it
+should be an explicit opt-in operation, not implicit writer dispatch.
 
 ```mermaid
 flowchart LR
@@ -1095,11 +1095,13 @@ labels from box or clip-label presence).
 
 ### Format and task are independent axes — `(Task, Format, variant)`
 
-One wire format can serve multiple tasks (VisDrone → MOT or OD; HuggingFace → OD, IC, or VC),
-so `Task` is a separate enum from `DatasetFormat`, and the loader/writer registries
-key on the triple `(Task, DatasetFormat, variant)`. Validation remains HMIE-only. The `variant` axis is required because
-VisDrone's VID/MOT/DET layouts are otherwise indistinguishable (the current
-`DatasetFormat.VISDRONE_VIDEO` value already smuggled this discriminator into the format).
+One wire format can serve multiple tasks (VisDrone → MOT or OD; HuggingFace →
+OD, IC, or VC), so `Task` is a separate enum from `DatasetFormat`, and the
+loader/writer registries key on the triple `(Task, DatasetFormat, variant)`.
+Validation remains HMIE-only. The `variant` axis is required because VisDrone's
+VID/MOT/DET layouts are otherwise indistinguishable (the current
+`DatasetFormat.VISDRONE_VIDEO` value already smuggled this discriminator into
+the format).
 
 **Public API — task-first loaders, format as a parameter:**
 
@@ -1111,16 +1113,18 @@ load_vc (root, *, dataset_format="huggingface_video_classification", registry_va
 # generic dispatch underneath: load(root, *, task, dataset_format, registry_variant)
 ```
 
-The task lives in the call (pins the return type, disambiguates multi-task formats);
-`variant` selects among same-task layouts. Per-format `load_*` helpers remain internal;
-the top-level public API uses task-first wrappers (`load_mot`, `load_od`, `load_ic`,
-`load_vc`) instead of forcing each wire format to own a public function.
-Writers stay object-driven (`write(dataset, format)` infers task from the dataset type).
+The task lives in the call (pins the return type, disambiguates multi-task
+formats); `variant` selects among same-task layouts. Per-format `load_*` helpers
+remain internal; the top-level public API uses task-first wrappers (`load_mot`,
+`load_od`, `load_ic`, `load_vc`) instead of forcing each wire format to own a
+public function. Writers stay object-driven (`write(dataset, format)` infers
+task from the dataset type).
 
 ### Generalized reader/writer interfaces
 
-The `Loader`/`Writer` ABCs have `task` and `variant` ClassVars alongside `format`, and writers
-have a **`WriterCapabilities`** descriptor documenting their re-emit contract:
+The `Loader`/`Writer` ABCs have `task` and `variant` ClassVars alongside
+`format`, and writers have a **`WriterCapabilities`** descriptor documenting
+their re-emit contract:
 
 ```python
 class Loader(ABC):
@@ -1135,26 +1139,29 @@ class WriterCapabilities:
     emits_empty_label_files: bool = False           # YOLO/KITTI/VisDrone: empty image still writes an empty label
 ```
 
-The FMV `Loader`/`Writer` classes in the tree are the `task=MOT` instances of this same
-contract. Each per-format issue (COCO/YOLO/VOC/KITTI/VisDrone-DET/HF) is
-"implement a reader and/or writer against this interface and register it under
-`(task, format, variant)`".
+The FMV `Loader`/`Writer` classes in the tree are the `task=MOT` instances of
+this same contract. Each per-format issue (COCO/YOLO/VOC/KITTI/VisDrone-DET/HF)
+is "implement a reader and/or writer against this interface and register it
+under `(task, format, variant)`".
 
 ### Categories and boxes (landed primitives)
 
-- **`Taxonomy`** (`taxonomy.py`) is the source-preserving category table for task datasets.
-  OD/IC use it directly in `DatasetMetadata`; `BoxTrackDataset` now materializes a taxonomy
-  view from its legacy `categories: dict[str, int]` so MOT has the same category metadata
-  surface while existing writers continue to consume `categories`. It preserves the *source*
-  id (int **or** string/synset **or** none), `supercategory`/`synset` provenance, and
-  per-format flags, and derives dense contiguous ids (needed by YOLO) as a projection rather
-  than mutating stored ids. Identity is `(source_dataset, source_id)` so merging two datasets'
-  class `0` does not silently fuse them.
-- **`geometry.py`** keeps every box in one canonical form — absolute-pixel `xywh` — and
-  converts to/from format-native shapes (VOC `xyxy` inclusive corners, YOLO normalized
-  `cxcywh`, ...) **only at the format boundary**. YOLO's normalized boxes need image
-  dimensions to materialize; loaders that cannot read the image keep the native normalized
-  values rather than fabricating an absolute box.
+- **`Taxonomy`** (`taxonomy.py`) is the source-preserving category table for
+  task datasets. OD/IC use it directly in `DatasetMetadata`; `BoxTrackDataset`
+  now materializes a taxonomy view from its legacy `categories: dict[str, int]`
+  so MOT has the same category metadata surface while existing writers continue
+  to consume `categories`. It preserves the *source* id (int **or**
+  string/synset **or** none), `supercategory`/`synset` provenance, and
+  per-format flags, and derives dense contiguous ids (needed by YOLO) as a
+  projection rather than mutating stored ids. Identity is
+  `(source_dataset, source_id)` so merging two datasets' class `0` does not
+  silently fuse them.
+- **`geometry.py`** keeps every box in one canonical form — absolute-pixel
+  `xywh` — and converts to/from format-native shapes (VOC `xyxy` inclusive
+  corners, YOLO normalized `cxcywh`, ...) **only at the format boundary**.
+  YOLO's normalized boxes need image dimensions to materialize; loaders that
+  cannot read the image keep the native normalized values rather than
+  fabricating an absolute box.
 
 A condensed view of the per-format field requirements lives with each format's reader/writer
 issue; `WriterCapabilities` is where those requirements become a checkable contract.

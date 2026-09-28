@@ -2,7 +2,8 @@
 
 `datamaite` ships as one package with task-oriented extras. The core install is
 kept deliberately small so annotation loading, conversion dispatch, and HMIE
-structure/annotation validation do not pull in native media stacks. `datamaite` supports Python 3.10–3.14.
+structure/annotation validation do not pull in native media stacks. `datamaite`
+supports Python 3.10–3.14.
 
 ## With pip
 
@@ -39,7 +40,7 @@ Optional dependencies are exposed as PEP 621 extras; install only the ones you
 need with `--extra <name>` (repeat the flag to combine):
 
 | Extra | Adds | Enables |
-|---|---|---|
+| --- | --- | --- |
 | _(none)_ | `pydantic`, `numpy` | load registered datasets into the in-memory model, build MAITE target arrays, run HMIE structure/annotation validation |
 | `all` | union of task extras | all supported media/pixel decode paths |
 | `fmv` | core + OpenCV + PyAV | FMV/video integrity checks, flat MP4 probing, video-backed MOT MAITE decode, video-backed MOT writer frame extraction |

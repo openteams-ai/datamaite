@@ -23,12 +23,12 @@ not parse `uv.lock`. The `lint` job fails on drift:
 scripts/export-requirements.sh
 ```
 
-### Where dependencies are declared
+## Where dependencies are declared
 
 One place, with two files derived from it:
 
 | File | Role | Who maintains it |
-|---|---|---|
+| --- | --- | --- |
 | `pyproject.toml` `[project]` / `[project.optional-dependencies]` | **Source of truth** for runtime deps and every extra | edit by hand |
 | `uv.lock` | Lock file of record; pins the resolved graph with hashes | `uv lock` |
 | `requirements.txt` | Generated projection for DR-compliance dependency scanning only — never an install path | `scripts/export-requirements.sh` |

@@ -3,7 +3,7 @@
 Two tiers, by directory:
 
 | Tier | Location | Runs | Needs |
-|------|----------|------|-------|
+| ------ | ---------- | ------ | ------- |
 | **Unit / hermetic** | `tests/*.py` | always (default `pytest`) | nothing — synthetic `tmp_path` fixtures, offline, in-process |
 | **End-to-end (e2e)** | `tests/e2e/*.py` | opt-in only | a real external dataset checkout + the `video`/`maite` extras |
 | **S3 end-to-end (e2e)** | `tests/e2e/test_s3_compatible.py` | opt-in only | a real S3-API server (SeaweedFS) + the `aws`/`fmv` extras |
@@ -84,9 +84,9 @@ uv run pytest tests/e2e/test_s3_compatible.py -m integration --no-cov -v
 docker stop datamaite-seaweedfs-e2e
 ```
 
-CI runs this tier in its own `e2e-s3` job (in the `test` stage, concurrent with the matrix),
-against a SeaweedFS service container, with coverage disabled — it is deliberately
-kept out of the coverage-gated `test` matrix.
+CI runs this tier in its own `e2e-s3` job (in the `test` stage, concurrent with
+the matrix), against a SeaweedFS service container, with coverage disabled — it
+is deliberately kept out of the coverage-gated `test` matrix.
 
 `TestExampleDatasetParity` (in the same file) additionally mirrors the shared
 example-data repo's `hmie/valid` dataset into the SeaweedFS bucket and asserts

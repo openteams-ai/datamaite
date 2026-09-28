@@ -1,4 +1,4 @@
-## Documentation (HTML)
+# Documentation (HTML)
 
 Sphinx source lives in `docs/`. Output goes to `public/` (git-ignored).
 
@@ -15,7 +15,7 @@ uv run sphinx-build -b html . public
 
 Open `docs/public/index.html` to preview locally.
 
-### Live reload
+## Live reload
 
 For local editing, `sphinx-autobuild` watches the source, rebuilds on save, and
 live-reloads the browser. Run from the `docs/` directory:

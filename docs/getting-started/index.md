@@ -10,7 +10,8 @@ New here? Start with [Installation](installation.md), then pick the
 image classification, or object detection. The
 [Reference](../reference/index.md) covers the architecture and CLI details.
 
-- [Loading from cloud object storage](cloud-storage.md) — use `s3://` / `gs://` / `az://` URLs as dataset roots.
+- [Loading from cloud object storage](cloud-storage.md) — use `s3://` / `gs://`
+  / `az://` URLs as dataset roots.
 
 ## Quick start
 
