@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new `markdown-link-check` job checks internal and external links. Existing
   docs were brought into compliance (line wrapping, table style, fence
   languages, heading levels); no wording changed.
+- MAITE Dataset components are advertised via `pyproject.toml` entry points
+  (#99, IR-1-H-3): `BoxTrackDataset`, `ObjectDetectionDataset`, and
+  `ImageClassificationDataset` register under the matching
+  `maite.protocols.<task>.Dataset` groups, prefixed `datamaite_`.
 - SafeTensors ingest in the `flat_images` loader (#74), completing IR-3.2-S-1:
   `load_od(root, dataset_format="flat_images")` now picks up `.safetensors`
   files alongside `.jpg`/`.png`/`.tif`. Layout is documented in the README:

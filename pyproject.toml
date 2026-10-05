@@ -143,6 +143,19 @@ docs = [
 [project.scripts]
 datamaite = "datamaite._cli:main"
 
+# IR-1-H-3: advertise every MAITE component so tooling (Centralized
+# Components, statically_verify_exposed_component_entrypoints) can discover
+# them. Names carry the `datamaite_` prefix so they cannot clobber another
+# product's entries in the shared maite.protocols.* groups.
+[project.entry-points."maite.protocols.multiobject_tracking.Dataset"]
+datamaite_BoxTrackDataset = "datamaite.model:BoxTrackDataset"
+
+[project.entry-points."maite.protocols.object_detection.Dataset"]
+datamaite_ObjectDetectionDataset = "datamaite.object_detection:ObjectDetectionDataset"
+
+[project.entry-points."maite.protocols.image_classification.Dataset"]
+datamaite_ImageClassificationDataset = "datamaite.image_classification:ImageClassificationDataset"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/datamaite"]
 
