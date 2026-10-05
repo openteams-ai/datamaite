@@ -55,6 +55,7 @@ _KEY = os.environ.get("DATAMAITE_S3_E2E_KEY")
 _SECRET = os.environ.get("DATAMAITE_S3_E2E_SECRET")
 
 pytestmark = [
+    pytest.mark.optional,
     pytest.mark.integration,
     pytest.mark.skipif(s3fs is None, reason="s3fs not installed (pip install datamaite[aws])"),
     pytest.mark.skipif(

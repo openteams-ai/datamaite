@@ -31,6 +31,8 @@ from datamaite.writers import available_writer_keys
 
 from ._maite_factory import CATEGORIES, WIDGET, box, sequence
 
+pytestmark = pytest.mark.optional
+
 
 def _png(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)

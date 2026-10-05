@@ -334,6 +334,7 @@ class TestMotChallengeMalformedInputs:
         assert "Ignoring classes filter" in caplog.text
 
 
+@pytest.mark.optional
 class TestMotChallengeImageProbe:
     def test_probe_images_uses_opencv_when_available(self, tmp_path: Path) -> None:
         cv2 = pytest.importorskip("cv2")

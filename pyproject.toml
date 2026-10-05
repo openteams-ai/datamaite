@@ -254,6 +254,8 @@ addopts = [
 markers = [
     "integration: marks tests requiring external resources (opt-in via -m integration; e.g. the example-data conversion matrix, needs DATAMAITE_DATASETS_ROOT)",
     "real_data: marks tests that require real HMIE data on SUNet (opt-in via -m real_data)",
+    "required: tests of required features; runs on a core install with no optional extras; applied automatically in tests/conftest.py to every test not marked optional (TR-4-H-3)",
+    "optional: tests of optional features; needs an optional extra such as fmv, od, ic, maite, aws, gcs, or azure (TR-4-H-4)",
 ]
 
 # ---------------------------------------------------------------------------

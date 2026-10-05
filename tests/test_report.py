@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from datamaite._report import (
     _aggregate_batches,
     prepare_report_data,
@@ -583,6 +585,7 @@ def test_multi_report_no_skip_clean() -> None:
     assert agg["video_checks_skipped"] is False
 
 
+@pytest.mark.optional
 class TestReportE2E:
     def test_html_report_from_validation(self, tmp_path: Path) -> None:
         from datamaite.validation import validate

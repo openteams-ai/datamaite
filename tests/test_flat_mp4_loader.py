@@ -215,6 +215,7 @@ class TestFlatMp4MalformedInputs:
         assert ds.sequence_count == 0
 
 
+@pytest.mark.optional
 class TestFlatMp4RealProbe:
     """Exercise the real OpenCV probe (``_probe_mp4_video``) end to end.
 

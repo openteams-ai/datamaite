@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from datamaite._types import Severity
 from datamaite.validation import validate
 from tests._hmie_factory import (
@@ -23,6 +25,7 @@ from tests._hmie_factory import (
 from tests._scale_factory import default_frame, one_track_annotation
 
 
+@pytest.mark.optional
 class TestHappyPath:
     def test_full_dataset_passes(self, tmp_path: Path) -> None:
         root = default_happy_dataset(tmp_path / "hmie")
@@ -76,6 +79,7 @@ class TestFindingCaps:
         orphan_findings_in_list = [f for f in result.findings if f.check == "orphan_annotation"]
         assert len(orphan_findings_in_list) == 1
 
+    @pytest.mark.optional
     def test_cap_does_not_mask_pass_fail(self, tmp_path: Path) -> None:
         """Even when ERROR findings are capped out of .findings, passed=False."""
         root = single_video_dataset(
@@ -116,6 +120,7 @@ class TestFindingCaps:
         assert coverage["errors"] == 5
 
 
+@pytest.mark.optional
 class TestParallelValidation:
     def test_parallel_workers_produce_same_result_as_serial(self, tmp_path: Path) -> None:
         """Parallel validation must produce the same findings and histogram as serial."""
@@ -147,6 +152,7 @@ class TestParallelValidation:
         assert any(f.check == "video_open" for f in result.findings)
 
 
+@pytest.mark.optional
 class TestLabelHistogram:
     def test_histogram_aggregates_across_pairs(self, tmp_path: Path) -> None:
         """validate() should sum label counts from all snippets in the tree."""
@@ -162,6 +168,7 @@ class TestLabelHistogram:
         assert "vehicle" in result.summary()
 
 
+@pytest.mark.optional
 class TestBrokenVideos:
     def test_corrupt_video_fails(self, tmp_path: Path) -> None:
         root = single_video_dataset(
@@ -206,6 +213,7 @@ class TestOrphans:
         assert orphans[0].severity == Severity.ERROR
         assert result.passed is False
 
+    @pytest.mark.optional
     def test_orphan_video_warns(self, tmp_path: Path) -> None:
         """Video with no matching CDAO annotation."""
         root = single_video_dataset(
@@ -220,6 +228,7 @@ class TestOrphans:
         assert len(warnings) == 1
 
 
+@pytest.mark.optional
 class TestBadAnnotations:
     def test_invalid_json_fails(self, tmp_path: Path) -> None:
         root = single_video_dataset(
@@ -283,6 +292,7 @@ def _write_hand_rolled_snippet(
     return root
 
 
+@pytest.mark.optional
 class TestConsistency:
     """These tests hand-roll the annotation JSON rather than going through
     _hmie_factory.make_annotation_dict. The factory and the validator share
@@ -312,6 +322,7 @@ class TestConsistency:
         assert any(f.check == "consistency_bbox_bounds" for f in result.findings)
 
 
+@pytest.mark.optional
 class TestWorkerCrashResilience:
     def test_worker_crash_becomes_finding_not_exception(self, tmp_path: Path, monkeypatch) -> None:
         """One bad pair must not kill the entire validation run.
@@ -358,6 +369,7 @@ class TestWorkerCrashResilience:
         assert result.passed is False
 
 
+@pytest.mark.optional
 class TestConsistencyNotSkippedOnDecodeErrors:
     def test_consistency_still_runs_when_flat_frames_error(self, tmp_path: Path) -> None:
         """A video with valid metadata but flat frames triggers video_flat_frames
@@ -408,6 +420,7 @@ class TestFactoryMultiTrack:
         assert len(tracks["track-uuid-001"]["frames"]) == 4
 
 
+@pytest.mark.optional
 class TestMultiLabeler:
     def test_same_snippet_multiple_labelers(self, tmp_path: Path) -> None:
         """Two labelers on the same snippet produces two annotation files.

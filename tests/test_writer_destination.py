@@ -26,7 +26,7 @@ from .test_coco_writer import _coco_root
 from .test_coco_writer import _fingerprint as _od_fingerprint
 from .test_conversion_matrix import (
     SOURCE_BUILDERS,
-    WRITABLE_FORMATS,
+    WRITABLE_FORMAT_PARAMS,
     _neutral_fingerprint,
     _reload_root,
 )
@@ -435,7 +435,7 @@ class TestConvertMode:
         assert (out / "stale.txt").read_text(encoding="utf-8") == "old"
 
 
-@pytest.mark.parametrize("output_format", WRITABLE_FORMATS, ids=lambda f: f.value)
+@pytest.mark.parametrize("output_format", WRITABLE_FORMAT_PARAMS)
 class TestReplaceLeavesOnlyTheNewDataset:
     """Issue #55 contamination scenario for the box-track matrix formats.
 

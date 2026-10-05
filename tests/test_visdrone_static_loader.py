@@ -226,6 +226,7 @@ class TestImageClassification:
         assert ds.sample_count == 3
         assert len(ds.dataset_metadata.taxonomy.entries) == 12
 
+    @pytest.mark.optional
     def test_maite_crop_indexing(self, tmp_path: Path) -> None:
         pytest.importorskip("cv2")
         import cv2
@@ -265,6 +266,7 @@ class TestImageClassification:
         assert od.sample_count == 1
         assert od.samples[0].detections[0].category_id == 0  # class 0 retained in OD
 
+    @pytest.mark.optional
     def test_maite_crop_metadata_matches_clamped_crop(self, tmp_path: Path) -> None:
         pytest.importorskip("cv2")
         import cv2
@@ -348,6 +350,7 @@ class TestSniff:
         assert datamaite.VisDroneImageClassificationLoader is VisDroneImageClassificationLoader
 
 
+@pytest.mark.optional
 class TestVisDroneOdPerBoxAttributes:
     """#80: per-box truncation/occlusion/raw-score surface as flat per-detection
     lists on the OD MAITE datum metadata (dataeval per-object factors)."""

@@ -289,6 +289,7 @@ class TestRegistryDispatch:
             load_mot(tmp_path, dataset_format="coco")
 
 
+@pytest.mark.optional
 class TestCocoDatumMetadata:
     """#79: full COCO images[] fields surface on the MAITE OD datum metadata."""
 

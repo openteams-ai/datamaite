@@ -498,6 +498,7 @@ class TestSafeTensorsLayoutConvention:
         np.testing.assert_array_equal(np.transpose(image, (1, 2, 0)), np.arange(27, dtype=np.uint8).reshape(3, 3, 3))
 
 
+@pytest.mark.optional
 class TestImageHeaderDimensions:
     @pytest.mark.parametrize("extension", [".png", ".jpg", ".webp", ".tiff"])
     def test_real_encoded_dimensions(self, extension: str) -> None:
@@ -511,6 +512,7 @@ class TestImageHeaderDimensions:
 
 
 class TestFlatImagesMaiteDecode:
+    @pytest.mark.optional
     def test_encoded_image_decodes_through_opencv(self, tmp_path: Path) -> None:
         cv2 = pytest.importorskip("cv2")
         source = np.arange(4 * 6 * 3, dtype=np.uint8).reshape(4, 6, 3)
@@ -533,6 +535,7 @@ class TestFlatImagesMaiteDecode:
         # surfaced on the datum metadata as flat keys.
         assert meta["source_format"] == "flat_images"
 
+    @pytest.mark.optional
     def test_memory_root_loads_and_decodes_through_shared_fsspec_path(self, memory_root) -> None:  # type: ignore[no-untyped-def]
         """Format discovery and lazy media decode share one UPath."""
         cv2 = pytest.importorskip("cv2")
@@ -560,6 +563,7 @@ class TestFlatImagesMaiteDecode:
         assert target.boxes.shape == (0, 4)  # type: ignore[attr-defined]
         assert meta["id"] == "remote.png"
 
+    @pytest.mark.optional
     def test_remote_metadata_reads_bounded_header_without_decoding(self, memory_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         cv2 = pytest.importorskip("cv2")
         source = np.zeros((64, 96, 3), dtype=np.uint8)
@@ -1073,6 +1077,7 @@ class TestSafeTensorsWriteReject:
         with pytest.raises(ValueError, match="not supported"):
             write(ds, dest, output_format="flat_images")
 
+    @pytest.mark.optional
     def test_encoded_flat_images_still_writes(self, tmp_path: Path) -> None:
         cv2 = pytest.importorskip("cv2")
         ok, buf = cv2.imencode(".png", np.zeros((4, 6, 3), dtype=np.uint8))

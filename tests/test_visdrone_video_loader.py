@@ -268,6 +268,7 @@ class TestVisDroneVideoMalformedInputs:
             load_visdrone_video(tmp_path, fps=-1)
 
 
+@pytest.mark.optional
 class TestVisDroneVideoImageProbe:
     def test_probe_images_uses_opencv_when_available(self, tmp_path: Path) -> None:
         cv2 = pytest.importorskip("cv2")

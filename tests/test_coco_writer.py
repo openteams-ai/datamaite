@@ -164,6 +164,7 @@ class TestTaskClosedDispatch:
         with pytest.raises(TypeError, match="consumes ObjectDetectionDataset"):
             write(BoxTrackDataset(sequences=(), categories={}), tmp_path, output_format="coco")
 
+    @pytest.mark.optional
     def test_convert_mot_to_coco_raises(self, tmp_path: Path) -> None:
         single_video_dataset(tmp_path / "src", [SnippetSpec(name="video_001_000001")])
         with pytest.raises(TypeError, match="consumes ObjectDetectionDataset"):

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from datamaite import convert, write
 from datamaite._formats.hmie.loader import load_hmie
 from datamaite.model import BoxTrackDataset, VideoSequence
@@ -78,6 +80,7 @@ def _meta_fingerprint(ds: BoxTrackDataset) -> list:
 
 
 class TestHmieWriter:
+    @pytest.mark.optional
     def test_write_produces_a_reloadable_tree(self, tmp_path: Path) -> None:
         src = tmp_path / "src"
         default_happy_dataset(src)
@@ -91,6 +94,7 @@ class TestHmieWriter:
         ds2 = load_hmie(out)
         assert ds2.sequence_count == ds.sequence_count
 
+    @pytest.mark.optional
     def test_round_trip_preserves_box_content(self, tmp_path: Path) -> None:
         src = tmp_path / "src"
         default_happy_dataset(src)
@@ -104,6 +108,7 @@ class TestHmieWriter:
         assert ds.num_boxes == ds2.num_boxes
         assert _fingerprint(ds) == _fingerprint(ds2)
 
+    @pytest.mark.optional
     def test_round_trip_preserves_video_and_task_metadata(self, tmp_path: Path) -> None:
         """The writer round-trips video_meta / task metadata / global attributes.
 
@@ -149,6 +154,7 @@ class TestHmieWriter:
         assert seq.video_meta["global_attributes"] == {"weather": "clear", "scene": "daytime"}
         assert seq.metadata["original_filename"] == "video_001.mp4"
 
+    @pytest.mark.optional
     def test_convert_hmie_to_hmie_end_to_end(self, tmp_path: Path) -> None:
         src = tmp_path / "src"
         default_happy_dataset(src)
@@ -185,6 +191,7 @@ class TestHmieWriter:
         assert all(s.video_path is None for s in ds2.sequences)
         assert _fingerprint(ds) == _fingerprint(ds2)
 
+    @pytest.mark.optional
     def test_rewrite_to_same_dest_does_not_keep_stale_snippets(self, tmp_path: Path) -> None:
         """Re-writing fewer sequences to an existing dest drops the stale ones.
 

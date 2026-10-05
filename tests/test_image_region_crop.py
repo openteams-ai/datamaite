@@ -7,6 +7,8 @@ import pytest
 
 from datamaite.records import ImageClassificationSample, ImageRecord
 
+pytestmark = pytest.mark.optional
+
 cv2 = pytest.importorskip("cv2")
 
 

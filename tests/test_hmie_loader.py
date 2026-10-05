@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from datamaite import BoxAnnotation, BoxTrackDataset, VideoSequence
 from datamaite._formats.hmie.loader import load_hmie
 
@@ -28,6 +30,7 @@ def _write_annotation(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2))
 
 
+@pytest.mark.optional
 class TestDefaultLoad:
     def test_loads_all_snippets(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
@@ -79,6 +82,7 @@ class TestDefaultLoad:
         assert box.attributes  # is_truncated / is_occluded carried through
 
 
+@pytest.mark.optional
 class TestMultiTrack:
     def test_tracks_get_distinct_ids_uuids_and_categories(self, tmp_path: Path) -> None:
         # The common real-data case: several tracks per snippet. Verify
@@ -235,6 +239,7 @@ class TestPrototypeParity:
 class TestExtendedReaderFields:
     """Fields the loader surfaces beyond the prototype, for downstream consumers."""
 
+    @pytest.mark.optional
     def test_keyframe_fields_carried_onto_boxes(self, tmp_path: Path) -> None:
         # keyframeType / isInferredKeyframe are provenance a MAITE OD adapter
         # needs to tell human-labeled keyframes from interpolated ones.
@@ -244,6 +249,7 @@ class TestExtendedReaderFields:
         assert boxes[0].keyframe_type == "start"
         assert all(b.is_inferred is False for b in boxes)
 
+    @pytest.mark.optional
     def test_status_exposed_on_sequence(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
         ds = load_hmie(tmp_path)
@@ -271,6 +277,7 @@ class TestExtendedReaderFields:
         assert ds.sequences[0].metadata == {"original_filename": "SRC1_100001.mp4"}
 
 
+@pytest.mark.optional
 class TestBatchLevelScaleLayout:
     """Default-mode load of the prototype's batch-root scale/ layout."""
 
@@ -295,6 +302,7 @@ class TestBatchLevelScaleLayout:
         assert len(seq.boxes) == 5
 
 
+@pytest.mark.optional
 class TestCategoryMap:
     def test_single_label_one_category(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
@@ -333,6 +341,7 @@ class TestCategoryMap:
 
 
 class TestRequireVideo:
+    @pytest.mark.optional
     def test_uses_video_frame_count(self, tmp_path: Path) -> None:
         # Video reports fps=24/24 frames; the annotation deliberately claims a
         # different fps (30) so the assertions can only pass if the probe
@@ -372,6 +381,7 @@ class TestRequireVideo:
 
 
 class TestTolerance:
+    @pytest.mark.optional
     def test_unparseable_annotation_skipped(self, tmp_path: Path) -> None:
         single_video_dataset(
             tmp_path,
@@ -495,6 +505,7 @@ class TestOverrideMode:
             make_video(video_dir / "clip_a.mp4", video_spec)
         return ann_dir, video_dir
 
+    @pytest.mark.optional
     def test_pairs_annotation_to_video(self, tmp_path: Path) -> None:
         ann_dir, video_dir = self._make_flat(tmp_path, with_video=True)
         ds = load_hmie(tmp_path, annotation_dir=ann_dir, video_dir=video_dir)
@@ -503,6 +514,7 @@ class TestOverrideMode:
         assert ds.sequences[0].video_path is not None
         assert ds.sequences[0].video_path.endswith("clip_a.mp4")
 
+    @pytest.mark.optional
     def test_matches_exact_stem_not_substring_prefix(self, tmp_path: Path) -> None:
         # Two videos whose stems are prefixes of one another: "clip" and
         # "clip_a". The annotation is for clip_a; a substring match would
@@ -524,6 +536,7 @@ class TestOverrideMode:
         assert ds.sequences[0].video_path is not None
         assert ds.sequences[0].video_path.endswith("clip_a.mp4")
 
+    @pytest.mark.optional
     def test_unanchored_substring_does_not_match(self, tmp_path: Path) -> None:
         # "lip.mp4" occurs inside the annotation's embedded "clip.mp4" but is
         # not anchored on a separator (preceded by 'c'), so it must NOT pair.
@@ -627,6 +640,7 @@ class TestMalformedInputs:
         ds = load_hmie(tmp_path, annotation_dir=ann_dir)
         assert len(ds.sequences) == 1
 
+    @pytest.mark.optional
     def test_deeply_nested_json_skipped_default_mode(self, tmp_path: Path) -> None:
         # Same pathological input reached through discovery (default mode),
         # where it lands in check_annotation_schema rather than the
@@ -639,6 +653,7 @@ class TestMalformedInputs:
         assert len(ds.sequences) == 0
 
 
+@pytest.mark.optional
 class TestDatasetContainer:
     def test_sequences_len_and_num_boxes(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)

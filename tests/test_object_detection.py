@@ -135,6 +135,7 @@ class TestModel:
         assert isinstance(ds.samples, tuple)
 
 
+@pytest.mark.optional
 class TestStructuralConformance:
     def test_is_maite_od_dataset(self) -> None:
         from maite.protocols import object_detection as od_protocols
@@ -157,6 +158,7 @@ class TestStructuralConformance:
         assert isinstance(target, od_protocols.ObjectDetectionTarget)
 
 
+@pytest.mark.optional
 class TestMaiteOdSurface:
     def test_getitem_decodes_and_builds_target(self, tmp_path) -> None:
         cv2 = pytest.importorskip("cv2")
@@ -244,6 +246,7 @@ class TestObjectDetectionFieldwise:
         empty = ds.get_target(1)
         assert empty.boxes.shape == (0, 4)
 
+    @pytest.mark.optional
     def test_fieldwise_matches_getitem(self, tmp_path) -> None:
         cv2 = pytest.importorskip("cv2")
         import numpy as np
@@ -268,6 +271,7 @@ class TestObjectDetectionFieldwise:
         assert ds.get_metadata(0) == metadata
 
 
+@pytest.mark.optional
 class TestOdDatumMetadataExtras:
     """#79: source-preserving per-image metadata is surfaced as flat datum-metadata keys."""
 

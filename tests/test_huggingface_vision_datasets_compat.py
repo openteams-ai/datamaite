@@ -26,6 +26,8 @@ from datamaite.records import (
 )
 from datamaite.writers import get_writer
 
+pytestmark = pytest.mark.optional
+
 datasets = pytest.importorskip("datasets")
 
 # A real, decodable 1x1 PNG so ``datasets`` image-feature inference succeeds.

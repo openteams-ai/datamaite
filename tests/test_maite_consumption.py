@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from datamaite.maite._common import EMPTY_BOXES, boxes_array
 from datamaite.maite._decode import DecodedFrame, PyAVDecoder, VideoInfo
 from datamaite.maite._mot import _EMPTY_FRAME_TARGET
@@ -42,6 +44,7 @@ class SpyDecoder:
         return self._inner.decode_one(video_path, source_index)
 
 
+@pytest.mark.optional
 class TestMotLazyTargets:
     def test_all_policy_streams_all_without_selection_set(self, tmp_path: Path) -> None:
         ds, _ = sample_dataset(tmp_path)  # exact 6-frame mp4, boxes on 0 and 2

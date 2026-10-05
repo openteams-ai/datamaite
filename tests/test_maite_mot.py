@@ -20,6 +20,8 @@ from datamaite.model import BoxTrackDataset
 
 from ._maite_factory import WIDGET, box, make_mp4, sample_dataset, sequence
 
+pytestmark = pytest.mark.optional
+
 
 class TestStructuralConformance:
     def test_is_maite_mot_dataset(self, tmp_path: Path) -> None:

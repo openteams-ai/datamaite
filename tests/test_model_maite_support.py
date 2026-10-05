@@ -89,6 +89,7 @@ class TestDecodeBackend:
         assert isinstance(PyAVDecoder(), Decoder)
         assert isinstance(default_decoder(), Decoder)
 
+    @pytest.mark.optional
     def test_info_reads_dimensions_and_time_base(self, tmp_path: Path) -> None:
         from datamaite.maite._decode import PyAVDecoder
 
@@ -98,6 +99,7 @@ class TestDecodeBackend:
         assert isinstance(info.time_base, Fraction)
         assert info.size_bytes == video_path.stat().st_size
 
+    @pytest.mark.optional
     def test_stream_none_yields_all_frames(self, tmp_path: Path) -> None:
         from datamaite.maite._decode import PyAVDecoder
 
@@ -106,6 +108,7 @@ class TestDecodeBackend:
         assert len(frames) == 6
         assert [f.frame_index for f in frames] == list(range(6))
 
+    @pytest.mark.optional
     def test_decode_one_out_of_range_raises(self, tmp_path: Path) -> None:
         from datamaite.maite._decode import PyAVDecoder
 
@@ -137,6 +140,7 @@ class TestDecodeBackend:
         assert (info2.width, info2.height, info2.size_bytes) == (0, 0, 0)
 
 
+@pytest.mark.optional
 class TestDefaultMaiteSurface:
     """The loaded object IS a MAITE MOT dataset — no adapter call."""
 
@@ -177,6 +181,7 @@ class TestDefaultMaiteSurface:
         assert boat.is_inferred is False
 
 
+@pytest.mark.optional
 class TestEndToEndFromLoader:
     def test_load_hmie_is_directly_maite_indexable(self, tmp_path: Path) -> None:
         from datamaite._formats.hmie.loader import load_hmie

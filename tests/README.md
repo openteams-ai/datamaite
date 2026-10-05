@@ -94,8 +94,39 @@ example-data repo's `hmie/valid` dataset into the SeaweedFS bucket and asserts
 `DATAMAITE_DATASETS_ROOT` pointing at an example-datasets checkout and skips
 cleanly without it.
 
+## Required and optional features
+
+Every test carries exactly one of two feature markers (TR-4-H-3 / TR-4-H-4):
+
+- `@pytest.mark.optional`: the test needs an optional extra (`fmv`, `od`,
+  `ic`, `maite`, `aws` / `gcs` / `azure`, or the pixel/video stack those pull
+  in), either for the feature under test or to synthesise its fixtures (e.g.
+  the HMIE factory encodes a real MP4 with OpenCV). Add this marker yourself.
+- `@pytest.mark.required`: the test runs on a core install (`datamaite[dev]`
+  with no optional extras) and exercises a required feature. Do not add it by
+  hand: a collection hook in `tests/conftest.py` applies it to every test that
+  is not marked `optional`, and fails collection if a test carries both.
+
+The markers are orthogonal to the tier markers above: an e2e test is also
+`required` or `optional`. Mark a whole module `optional` with `pytestmark`, or
+individual classes/tests when a module mixes both; parametrized cases can carry
+the marker via `pytest.param(..., marks=...)` (see `WRITABLE_FORMAT_PARAMS` in
+`test_conversion_matrix.py`). A new test that needs an extra but is not marked
+`optional` is treated as `required`, and `pytest -m required` on a core install
+then fails, which is how such a test is caught.
+
+```bash
+uv run pytest -m required --no-cov   # required features only
+uv run pytest -m optional --no-cov   # optional features only
+# Every collected test must have exactly one marker; both of these must collect 0:
+uv run pytest --co -q -m "not required and not optional"
+uv run pytest --co -q -m "required and optional"
+```
+
 ## Adding tests
 
-- New unit test → `tests/test_<thing>.py`, no marker. Must run offline.
+- New unit test → `tests/test_<thing>.py`, no tier marker. Must run offline.
 - New e2e test → `tests/e2e/test_<thing>.py`, `pytestmark = pytest.mark.integration`,
   and skip cleanly when its external dependency is unavailable.
+- Either way, add `required` or `optional` (see above). If it can't run without
+  an optional extra installed, it is `optional`.

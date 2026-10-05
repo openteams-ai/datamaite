@@ -195,6 +195,7 @@ class TestFileRoots:
                 load(stray, dataset_format=None)
 
 
+@pytest.mark.optional
 class TestEquivalenceWithLoadMot:
     def test_load_dispatch_matches_load_mot(self, tmp_path: Path) -> None:
         default_happy_dataset(tmp_path)
@@ -225,6 +226,7 @@ class TestLoadVc:
         with pytest.raises(FileNotFoundError):
             load_vc(tmp_path / "nope")
 
+    @pytest.mark.optional
     def test_load_vc_rejects_non_vc_dataset(self, tmp_path: Path) -> None:
         # An HMIE root resolves to a BoxTrackDataset (MOT), not a VC dataset:
         # load_vc must reject it at the call site rather than mistype it.

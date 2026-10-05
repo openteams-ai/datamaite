@@ -135,6 +135,7 @@ class TestMotChallengeWriterHappyPath:
             load_motchallenge(tmp_path / "src")
         )
 
+    @pytest.mark.optional
     def test_convert_hmie_to_motchallenge_keeps_every_track(self, tmp_path: Path) -> None:
         # Regression: HMIE track ids are 1-based on purpose. With 0-based ids
         # the GT writer -- which reserves non-positive ids for "no usable

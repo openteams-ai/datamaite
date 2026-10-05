@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from datamaite._cache import ValidationCache
 from datamaite.validation import validate
 from tests._hmie_factory import FullVideoSpec, SnippetSpec, make_hmie_dataset
+
+pytestmark = pytest.mark.optional
 
 
 class TestCacheIntegration:

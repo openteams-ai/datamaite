@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from datamaite import dataset_stats
 from datamaite._cli import main
 from datamaite._stats import _percentiles, format_stats
@@ -95,6 +97,7 @@ class TestDatasetStats:
         assert "(no data)" in text
 
 
+@pytest.mark.optional
 class TestStatsCli:
     def test_stats_command_text(self, tmp_path: Path, capsys) -> None:
         from tests._hmie_factory import SnippetSpec, single_video_dataset

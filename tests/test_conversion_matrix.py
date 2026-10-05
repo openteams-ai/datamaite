@@ -82,6 +82,18 @@ WRITABLE_FORMATS = sorted(
     key=lambda fmt: fmt.value,
 )
 
+# TR-4-H-3/H-4 (#113): the HMIE source builder synthesises a real MP4, which
+# needs the optional video stack; every other format builds from text/JSON, so
+# those cells exercise only required features.
+WRITABLE_FORMAT_PARAMS = [
+    pytest.param(
+        fmt,
+        id=fmt.value,
+        marks=pytest.mark.optional if fmt is DatasetFormat.HMIE else (),
+    )
+    for fmt in WRITABLE_FORMATS
+]
+
 
 # Each writable format -> a zero-knob builder that lays a small valid source
 # dataset on disk and returns the path to load. The builders themselves live
@@ -181,7 +193,7 @@ class TestMatrixIntegrity:
 
 
 @pytest.mark.parametrize("output_format", WRITABLE_FORMATS, ids=lambda f: f.value)
-@pytest.mark.parametrize("input_format", WRITABLE_FORMATS, ids=lambda f: f.value)
+@pytest.mark.parametrize("input_format", WRITABLE_FORMAT_PARAMS)
 class TestConversionMatrix:
     """Every (input -> output) pair: convert, reload from disk, compare geometry."""
 
@@ -206,6 +218,7 @@ class TestConversionMatrix:
         )
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize("output_format", _FRAME_EXTRACTING_FORMATS, ids=lambda f: f.value)
 class TestVideoBackedConversionIsLossless:
     """Converting a video-backed HMIE dataset must not drop boxes.
@@ -253,6 +266,7 @@ def _fps_mismatch_hmie_dataset(root: Path) -> Path:
     return make_hmie_dataset(root, [FullVideoSpec(name="video_001_000000", snippets=[snippet])])
 
 
+@pytest.mark.optional
 class TestFpsMismatchDropsOutOfRangeBoxesWithWarning:
     """Regression: HMIE -> frame format on fps-mismatch data.
 

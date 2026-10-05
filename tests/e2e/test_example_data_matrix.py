@@ -53,7 +53,7 @@ from datamaite.loaders import load_mot
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.optional, pytest.mark.integration]
 
 # input id -> (dataset dir relative to DATAMAITE_DATASETS_ROOT, dataset_format,
 #              expected sequence_count, expected num_boxes)

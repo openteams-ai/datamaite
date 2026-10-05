@@ -398,6 +398,7 @@ class TestHuggingFaceVisionClassLabel:
         pq.write_table(table, path)
         return path
 
+    @pytest.mark.optional
     def test_ic_parquet_classlabel_ints_decode_to_names(self, tmp_path: Path) -> None:
         # `ds.to_parquet()` stores ClassLabel labels as ints; the names live in
         # the parquet header's features schema and must be decoded on load.
@@ -424,6 +425,7 @@ class TestHuggingFaceVisionClassLabel:
         assert taxonomy.ordered_names == ("cat", "dog")
         assert taxonomy.id_density == "dense"
 
+    @pytest.mark.optional
     def test_ic_parquet_classlabel_keeps_unobserved_classes(self, tmp_path: Path) -> None:
         # ClassLabel is the full label space: a class with no sample in this
         # split must still appear in the taxonomy at its ClassLabel index.
@@ -442,6 +444,7 @@ class TestHuggingFaceVisionClassLabel:
         assert taxonomy is not None
         assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "cat"), (1, "dog"), (2, "fish")]
 
+    @pytest.mark.optional
     def test_ic_parquet_out_of_range_label_keeps_int_with_warning(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
         _touch_image(tmp_path / "train" / "a.jpg")
         self._write_parquet(
@@ -456,6 +459,7 @@ class TestHuggingFaceVisionClassLabel:
         assert ds.samples[0].labels[0].category_name == "5"
         assert "outside its ClassLabel name table" in caplog.text
 
+    @pytest.mark.optional
     def test_od_parquet_classlabel_categories_decode_to_names(self, tmp_path: Path) -> None:
         _touch_image(tmp_path / "train" / "a.jpg")
         self._write_parquet(

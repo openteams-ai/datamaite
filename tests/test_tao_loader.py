@@ -361,6 +361,7 @@ class TestTaoMalformedInputs:
         assert "deriving dense frame order" in caplog.text
 
 
+@pytest.mark.optional
 class TestTaoImageProbe:
     def test_probe_images_uses_opencv_when_available(self, tmp_path: Path) -> None:
         cv2 = pytest.importorskip("cv2")

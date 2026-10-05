@@ -241,6 +241,7 @@ class TestTaoWriterHappyPath:
         assert len(reloaded.sequences[0].boxes) == 1
         assert reloaded.sequences[0].boxes[0].category_name == "unlabeled"
 
+    @pytest.mark.optional
     def test_video_backed_sequence_extracts_frames_with_video_extra(self, tmp_path: Path) -> None:
         cv2 = pytest.importorskip("cv2")
         np = pytest.importorskip("numpy")

@@ -56,6 +56,7 @@ def corrupt_video(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.mark.optional
 class TestMidAndLastFrameFailure:
     """Mid/last-frame decode failures are the flagship HMIE failure mode.
 
@@ -185,6 +186,7 @@ class TestMidAndLastFrameFailure:
         assert "simulated codec crash" in error.message
 
 
+@pytest.mark.optional
 class TestProbeVideo:
     def test_valid_video_properties(self, synthetic_video: Path) -> None:
         props, findings = probe_video(synthetic_video)
@@ -305,23 +307,27 @@ class TestCheckVideoAnnotationConsistency:
         )
         return ScaleAnnotation.model_validate(data)
 
+    @pytest.mark.optional
     def test_consistent(self, synthetic_video: Path) -> None:
         ann = self._make_annotation(fps=30.0, afr=5.0, max_key=4)
         findings = self._consistency(synthetic_video, ann)
         errors = [f for f in findings if f.severity == Severity.ERROR]
         assert len(errors) == 0
 
+    @pytest.mark.optional
     def test_fps_mismatch(self, synthetic_video: Path) -> None:
         ann = self._make_annotation(fps=60.0, afr=5.0, max_key=4)
         findings = self._consistency(synthetic_video, ann)
         assert any(f.check == "consistency_fps" for f in findings)
 
+    @pytest.mark.optional
     def test_frame_bounds_exceeded(self, synthetic_video: Path) -> None:
         # 30 frame video, fps=30, afr=5 -> max_key of 100 maps to frame 600, way beyond 30
         ann = self._make_annotation(fps=30.0, afr=5.0, max_key=100)
         findings = self._consistency(synthetic_video, ann)
         assert any(f.check == "consistency_frame_bounds" for f in findings)
 
+    @pytest.mark.optional
     def test_frame_bounds_boundary_case(self, synthetic_video: Path) -> None:
         """Max key that maps exactly to the last valid frame must pass.
 
@@ -332,6 +338,7 @@ class TestCheckVideoAnnotationConsistency:
         findings = self._consistency(synthetic_video, ann)
         assert not any(f.check == "consistency_frame_bounds" for f in findings)
 
+    @pytest.mark.optional
     def test_frame_bounds_just_over(self, synthetic_video: Path) -> None:
         """max_key that maps to frame index == video_frame_count triggers the warning."""
         # 30 frame video, fps=30, afr=5 -> max_key=5 -> frame# = 30 (out of bounds, valid is 0..29)
@@ -339,6 +346,7 @@ class TestCheckVideoAnnotationConsistency:
         findings = self._consistency(synthetic_video, ann)
         assert any(f.check == "consistency_frame_bounds" for f in findings)
 
+    @pytest.mark.optional
     def test_consistency_uses_cached_props_without_reopen(self, synthetic_video: Path, monkeypatch) -> None:
         """Passing video_props to consistency check must not open the video again."""
         import cv2
@@ -409,6 +417,7 @@ class TestCheckVideoAnnotationConsistency:
         # comparison — that was the silent-false-negative bug.
         assert not any(f.check == "consistency_fps" for f in findings)
 
+    @pytest.mark.optional
     def test_fps_tolerance_within_bounds(self, tmp_path: Path) -> None:
         """29.97 vs 30.00 (NTSC vs clean 30) is within the 0.5 tolerance."""
         import cv2
@@ -429,6 +438,7 @@ class TestCheckVideoAnnotationConsistency:
         # 29.97 vs 30.00 diff is 0.03, well under 0.5
         assert not any(f.check == "consistency_fps" for f in findings)
 
+    @pytest.mark.optional
     def test_bbox_at_tolerance_boundary_passes(self, synthetic_video: Path) -> None:
         """A bbox ending exactly at (video_width + 1) must not trigger the warning.
 
@@ -446,6 +456,7 @@ class TestCheckVideoAnnotationConsistency:
         # Exactly at the 1-pixel tolerance -- must NOT warn
         assert not any(f.check == "consistency_bbox_bounds" for f in findings)
 
+    @pytest.mark.optional
     def test_bbox_just_past_tolerance_fails(self, synthetic_video: Path) -> None:
         """A bbox ending at (video_width + 2) exceeds the 1-pixel tolerance and must warn."""
         data = one_track_annotation(
@@ -456,6 +467,7 @@ class TestCheckVideoAnnotationConsistency:
         findings = self._consistency(synthetic_video, ann)
         assert any(f.check == "consistency_bbox_bounds" for f in findings)
 
+    @pytest.mark.optional
     def test_bbox_outside_frame(self, synthetic_video: Path) -> None:
         # Video is 320x240, put bbox way outside
         data = one_track_annotation(
@@ -466,6 +478,7 @@ class TestCheckVideoAnnotationConsistency:
         assert any(f.check == "consistency_bbox_bounds" for f in findings)
 
 
+@pytest.mark.optional
 class TestRemoteProbeStreaming:
     """probe_video over a cloud-style (fsspec memory://) root.
 

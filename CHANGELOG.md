@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vulnerability reporting), supported versions, the CI security scanners, and
   how false positives are dismissed. Outside users can now report bugs and
   request features on the GitHub issue tracker.
+- Every test is marked `required` or `optional` (#113, TR-4-H-3/H-4). Both
+  markers are registered in `pyproject.toml` (`--strict-markers` stays on). A
+  test is `optional` when it cannot run without an optional extra installed,
+  and is marked as such in the test source; a collection hook in
+  `tests/conftest.py` marks every other test `required` and rejects a test
+  marked both. `pytest -m required` passes on a core install. The convention
+  is documented in `tests/README.md`.
 - Markdown is checked in CI (#120, DR-3.3-H-3/H-4): markdownlint-cli2 runs in
   pre-commit (and so in the `lint` job) with `.markdownlint-cli2.yaml`, and a
   new `markdown-link-check` job checks internal and external links. Existing

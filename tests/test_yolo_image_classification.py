@@ -123,6 +123,7 @@ class TestYoloImageClassificationLoader:
         assert load_ic(tmp_path, dataset_format="yolo").sample_count == 2
         assert load_ic(tmp_path, dataset_format="yolo", split="train").sample_count == 0
 
+    @pytest.mark.optional
     def test_memory_root_loads_taxonomy_and_decodes_lazily(self, memory_root) -> None:  # type: ignore[no-untyped-def]
         """A second format uses the same backend-neutral path/decode seam."""
         cv2 = pytest.importorskip("cv2")

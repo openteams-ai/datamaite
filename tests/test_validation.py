@@ -128,6 +128,7 @@ class TestValidateAnnotation:
         assert result.passed is True
 
 
+@pytest.mark.optional
 class TestParallelWorkerCrash:
     def test_worker_side_exception_surfaces_as_finding(self, single_snippet_hmie: Path, monkeypatch) -> None:
         """A real ProcessPoolExecutor worker crash must become a worker_crash
@@ -383,6 +384,7 @@ class TestCloudValidation:
         assert result.passed
         assert result.annotation_count == 2
 
+    @pytest.mark.optional
     def test_validate_memory_root_with_video_integrity(self, memory_root: Path, tmp_path: Path) -> None:
         pytest.importorskip("cv2")
         from tests._hmie_factory import SnippetSpec, single_video_dataset
@@ -443,6 +445,7 @@ class TestCloudValidation:
         assert str(batch_path).endswith("video_001_000000")
         assert str(batch_path).startswith("memory://")
 
+    @pytest.mark.optional
     def test_cache_hit_round_trips_cloud_finding_paths(self, memory_root: Path, tmp_path: Path) -> None:
         from datamaite._cache import ValidationCache
         from tests._hmie_factory import SnippetSpec, VideoSpec, single_video_dataset

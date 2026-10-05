@@ -24,6 +24,8 @@ from datamaite import (
 from datamaite.loaders import LoaderKey, available_formats, available_loader_keys, get_loader
 from datamaite.taxonomy import CategoryEntry, Taxonomy
 
+pytestmark = pytest.mark.optional
+
 
 def _png_bytes(width: int = 3, height: int = 2) -> bytes:
     ok, encoded = cv2.imencode(".png", np.zeros((height, width, 3), dtype=np.uint8))

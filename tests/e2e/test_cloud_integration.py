@@ -18,6 +18,7 @@ from datamaite import load_mot, validate
 _CLOUD_ROOT = os.environ.get("DATAMAITE_CLOUD_TEST_ROOT")
 
 pytestmark = [
+    pytest.mark.optional,
     pytest.mark.integration,
     pytest.mark.skipif(not _CLOUD_ROOT, reason="DATAMAITE_CLOUD_TEST_ROOT not set"),
 ]
