@@ -43,6 +43,10 @@ variables:
   # Full clone history + tags: uv-dynamic-versioning derives the package
   # version from the git tag (#85), so every build needs real history.
   GIT_DEPTH: "0"
+  # GitLab's security templates (secret detection, #115) run only in branch
+  # pipelines unless this is set; the workflow above only creates MR and
+  # default-branch pipelines, so without it the scanner never runs on MRs.
+  AST_ENABLE_MR_PIPELINES: "true"
   # Pin uv to avoid silent drift.
   UV_PIN: "0.10.6"
   # Never download a managed interpreter: each job runs on the Python that ships
@@ -881,3 +885,13 @@ include:
       image: ${DR_COMPLIANCE_IMAGE}
       full_execution_on_commit: true
       allow_failure: true
+  # DSOR-4-H-1/H-2 (#115): GitLab secret detection. dr-compliance covers
+  # SAST and dependency scanning only, so the stock template adds the secrets
+  # scanner. It runs in MR and default-branch pipelines (see workflow above).
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# Run secret detection alongside the other compliance scans rather than in
+# `test`, and without waiting on earlier stages. Same placement as CheckMAITE.
+secret_detection:
+  stage: dr-compliance
+  needs: []

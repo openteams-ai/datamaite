@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- GitLab secret detection runs in CI (#115, DSOR-4-H-1/H-2): the stock
+  `Jobs/Secret-Detection.gitlab-ci.yml` template is included and its
+  `secret_detection` job runs in the `dr-compliance` stage on MR and
+  default-branch pipelines. A full-history gitleaks scan (143 commits) found
+  no hard-coded secrets.
 - Markdown is checked in CI (#120, DR-3.3-H-3/H-4): markdownlint-cli2 runs in
   pre-commit (and so in the `lint` job) with `.markdownlint-cli2.yaml`, and a
   new `markdown-link-check` job checks internal and external links. Existing
