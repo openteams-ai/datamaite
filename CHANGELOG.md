@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `secret_detection` job runs in the `dr-compliance` stage on MR and
   default-branch pipelines. A full-history gitleaks scan (143 commits) found
   no hard-coded secrets.
+- `CONTRIBUTING.md`, linked from the README (#116, GR-2-H-1 / GR-3-H-1 /
+  GR-4-S-3): who can contribute, how to report bugs and request features in
+  GitLab Issues, the issue-to-merge-request workflow, and the GitHub Flow
+  branching strategy with its deviations.
+- `SECURITY.md`, linked from the README and `CONTRIBUTING.md`: how to report a
+  vulnerability privately (a confidential GitLab issue, or GitHub private
+  vulnerability reporting), supported versions, the CI security scanners, and
+  how false positives are dismissed. Outside users can now report bugs and
+  request features on the GitHub issue tracker.
 - Markdown is checked in CI (#120, DR-3.3-H-3/H-4): markdownlint-cli2 runs in
   pre-commit (and so in the `lint` job) with `.markdownlint-cli2.yaml`, and a
   new `markdown-link-check` job checks internal and external links. Existing

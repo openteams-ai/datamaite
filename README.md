@@ -658,6 +658,16 @@ For a walk-through of how the code is organized — project layout,
 reading order, and data-flow diagrams — see
 [docs/reference/architecture.md](docs/reference/architecture.md).
 
+## Contributing
+
+How to report bugs, request features, and contribute changes, and the branching
+strategy the project follows, are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+Report security vulnerabilities privately, as described in
+[SECURITY.md](SECURITY.md). Do not open an ordinary issue.
+
 ## Dataset layout on disk
 
 The validator is snippet-centric. Snippet dirs are identified by the
