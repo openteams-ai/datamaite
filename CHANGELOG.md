@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/conftest.py` marks every other test `required` and rejects a test
   marked both. `pytest -m required` passes on a core install. The convention
   is documented in `tests/README.md`.
+- Every tutorial now opens with a "Who this is for and where it fits" section
+  (#109, DR-2.3-H-2) naming its persona (data engineer, T&E engineer, model
+  developer, or data curator) and the higher-level T&E workflow its task sits
+  in. The tutorials index lists each tutorial's persona.
 - Markdown is checked in CI (#120, DR-3.3-H-3/H-4): markdownlint-cli2 runs in
   pre-commit (and so in the `lint` job) with `.markdownlint-cli2.yaml`, and a
   new `markdown-link-check` job checks internal and external links. Existing

@@ -6,7 +6,8 @@ to run them yourself.
 
 Each tutorial covers one part of `datamaite`: pick the chapter for your task --
 full-motion video, image classification, or object detection -- or go straight
-to validation or cloud I/O.
+to validation or cloud I/O. Each one opens with the persona it is written for
+and where its task fits in the wider test-and-evaluation workflow.
 
 For full-motion video datasets -- loading, writing, and converting between
 formats on real example data -- see [Working with FMV
@@ -38,6 +39,8 @@ as `s3://`/`gs://`/`az://`.
 
 Load, inspect, and convert full motion video datasets between formats with
 MAITE-compliant dataset wrappers.
+
+*For data engineers preparing video data for T&E.*
 :::
 
 :::{grid-item-card} {octicon}`tag` Working with IC Datasets
@@ -46,6 +49,8 @@ MAITE-compliant dataset wrappers.
 
 Round-trip YOLO classification folders and load VisDrone crop samples, all on
 tiny synthetic data.
+
+*For T&E engineers and model developers.*
 :::
 
 :::{grid-item-card} {octicon}`image` Working with OD Datasets
@@ -54,6 +59,8 @@ tiny synthetic data.
 
 Load, inspect, and convert object-detection datasets (COCO, YOLO, VisDrone) on
 tiny synthetic data.
+
+*For T&E engineers and model developers.*
 :::
 
 :::{grid-item-card} {octicon}`checklist` HMIE Validation
@@ -62,6 +69,8 @@ tiny synthetic data.
 
 Validate HMIE/Scale datasets for structure, coverage, video integrity, and spec
 compliance, then roll the results into a shareable HTML report.
+
+*For T&E engineers and data curators receiving HMIE batches.*
 :::
 
 :::{grid-item-card} {octicon}`cloud` HMIE Datasets from Cloud Storage
@@ -70,6 +79,8 @@ compliance, then roll the results into a shareable HTML report.
 
 Validate and load HMIE datasets directly from S3/GCS/Azure-style object storage,
 with streaming video integrity checks.
+
+*For T&E engineers and data curators working from cloud storage.*
 :::
 
 ::::
