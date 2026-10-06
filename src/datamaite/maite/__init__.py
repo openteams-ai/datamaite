@@ -27,6 +27,21 @@ this package does not import ``maite`` at runtime; the runtime dependencies are
 The view machinery lives in :mod:`datamaite.maite._mot`,
 :mod:`datamaite.maite._od`, and :mod:`datamaite.maite._ic` (imported lazily
 from the core dataset classes).
+
+The OD and IC datum-metadata types are exported for annotating downstream
+code, since they declare keys MAITE's ``DatumMetadata`` does not
+(``height``/``width``, plus ``file_name`` or ``split``)::
+
+    from datamaite.maite import OdDatumMetadata
+
+For targets, frames and MOT datum metadata, annotate with MAITE's own protocol
+types (e.g. ``maite.protocols.object_detection.ObjectDetectionTarget``);
+datamaite's concrete classes add nothing beyond them and stay private.
 """
 
 from __future__ import annotations
+
+from datamaite.maite._ic import IcDatumMetadata
+from datamaite.maite._od import OdDatumMetadata
+
+__all__ = ["IcDatumMetadata", "OdDatumMetadata"]

@@ -20,14 +20,32 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
+from typing_extensions import NotRequired, TypedDict
 
 from datamaite.geometry import to_xyxy
 from datamaite.maite._common import EMPTY_BOXES, EMPTY_LABELS, EMPTY_SCORES
 from datamaite.maite._image import decode_image
 from datamaite.records import ImageObjectDetectionSample, ObjectDetectionAnnotation
+
+
+class OdDatumMetadata(TypedDict, extra_items=Any):
+    """OD datum metadata: MAITE ``DatumMetadata`` plus the keys datamaite always sets.
+
+    ``id``/``height``/``width`` are always present; ``file_name`` when the
+    source has one. Format passthrough keys (COCO ``license``/``coco_url``,
+    VisDrone ``occlusion``, ...) and per-box attribute lists vary by format, so
+    they are not declared; ``extra_items=Any`` (PEP 728) lets type checkers
+    read them as ``Any`` instead of rejecting them. Assignable to MAITE's
+    ``DatumMetadata`` (a structural TypedDict with only ``id`` required).
+    """
+
+    id: int | str
+    height: int
+    width: int
+    file_name: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -92,7 +110,7 @@ def od_metadata(
     *,
     dimensions: tuple[int, int] | None = None,
     storage_options: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> OdDatumMetadata:
     """Build one OD sample's MAITE datum metadata.
 
     The source-preserving per-image passthrough (``sample.metadata`` -- e.g. COCO
@@ -113,6 +131,10 @@ def od_metadata(
     meta.update(_detection_attributes(sample.detections))
     if sample.file_name is not None:
         meta["file_name"] = sample.file_name
+    else:
+        # ``file_name`` is declared ``str`` in OdDatumMetadata; never let an
+        # unvalidated same-named passthrough/attribute value stand in for it.
+        meta.pop("file_name", None)
     meta["id"] = sample.image_id
     height, width = sample.height, sample.width
     if height is None or width is None:
@@ -128,12 +150,14 @@ def od_metadata(
             width = sample.width if sample.width is not None else int(image.shape[2])
     meta["height"] = height
     meta["width"] = width
-    return meta
+    # The passthrough keys are open-ended, so the dict is built untyped and
+    # narrowed once ``id`` (MAITE's only required key) is set.
+    return cast(OdDatumMetadata, meta)
 
 
 def build_od_item(
     sample: ImageObjectDetectionSample, *, storage_options: Mapping[str, Any] | None = None
-) -> tuple[np.ndarray, ObjectDetectionTarget, dict[str, Any]]:
+) -> tuple[np.ndarray, ObjectDetectionTarget, OdDatumMetadata]:
     """Build one MAITE OD item ``(image, target, datum_metadata)`` for ``sample``."""
     image = od_input(sample, storage_options=storage_options)
     return image, od_target(sample), od_metadata(sample, image, storage_options=storage_options)

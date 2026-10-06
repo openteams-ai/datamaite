@@ -48,6 +48,10 @@ dependencies = [
     # lets pip resolve an fsspec too old for the UPath surface we depend on.
     "fsspec>=2024.5.0",
     "universal-pathlib>=0.3.8",
+    # PEP 728 ``extra_items`` on the OD datum-metadata TypedDict needs 4.13.
+    # Already installed via pydantic, whose own floor (4.6.1 for pydantic 2.0)
+    # is too low to guarantee it.
+    "typing_extensions>=4.13",
 ]
 
 [project.optional-dependencies]
@@ -272,8 +276,9 @@ omit = [
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
-include = ["src"]
-exclude = ["tests"]
+# tests/type_checks holds static-only protocol conformance checks (not pytest
+# tests); the rest of tests/ is outside `include` and stays unchecked.
+include = ["src", "tests/type_checks"]
 reportMissingImports = "warning"
 reportMissingTypeStubs = false
 

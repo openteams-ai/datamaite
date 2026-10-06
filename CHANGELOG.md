@@ -55,6 +55,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SafeTensors-backed samples raise before the destination is touched; encoded
   `flat_images` datasets remain writable.
 
+### Changed
+
+- Type-checked code that consumes datamaite's MAITE items now sees concrete
+  types instead of `Any` (#124), so some reads that used to pass are now
+  flagged, correctly: OD `meta["file_name"]` and IC `meta["split"]` are
+  optional keys (use `.get()`); `ds.metadata["index2label"]` is `NotRequired`
+  in MAITE's `DatasetMetadata` (use `ds.index2label()`); and a datum's metadata
+  is a TypedDict, not a `dict` subtype, so annotate it with the TypedDict or
+  `Mapping[str, object]` rather than `dict[...]`.
+- OD datum metadata no longer surfaces a `file_name` key from a sample's
+  format passthrough metadata when the sample itself has no `file_name` (#124).
+  `file_name` is now typed `str`, so only the sample's own validated value is
+  emitted; no built-in loader writes `file_name` into passthrough metadata.
+
+### Fixed
+
+- `ObjectDetectionDataset`, `ImageClassificationDataset` and `BoxTrackDataset`
+  now pass static type checking (pyright and mypy) as MAITE `Dataset` /
+  `FieldwiseDataset` implementations (#124). Type checkers now see `metadata`
+  as the writable attribute MAITE declares; at runtime it is still rebuilt on
+  each access, and assigning to it still raises `FrozenInstanceError`. Items
+  are typed concretely instead of `tuple[Any, Any, dict[str, Any]]`:
+  - OD: `(np.ndarray, ObjectDetectionTarget, OdDatumMetadata)`
+  - IC: `(np.ndarray, np.ndarray, IcDatumMetadata)`
+  - MOT: `(Iterable[DecodedFrame], MotTarget, MotDatumMetadata)`
+
+  The datum-metadata TypedDicts declare `id`/`height`/`width` (plus optional
+  `file_name`, `split`; MOT `time_base`/`size`). OD's also allows undeclared keys
+  (PEP 728 `extra_items=Any`), so format-specific passthrough keys such as
+  COCO `coco_url` still type-check, as `Any`, under pyright; mypy does not
+  support `extra_items` yet and flags them. CI type-checks the conformance in
+  `tests/type_checks/`. MAITE is only imported for type checking.
+  `OdDatumMetadata` and `IcDatumMetadata` are importable from
+  `datamaite.maite` for annotating downstream code; for targets, frames and MOT
+  datum metadata, annotate with MAITE's own protocol types.
+- Slicing a MOT target's `frame_tracks` (e.g. `target.frame_tracks[0:3]`) now
+  returns a sequence of frame targets. Previously it raised `TypeError` or
+  silently returned a single frame target, depending on the frame order.
+- `typing_extensions>=4.13` is now a declared dependency (already installed
+  via pydantic; the floor is the first release supporting `extra_items`).
+
 ## [0.5.0] - 2026-08-28
 
 ### Added

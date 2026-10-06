@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 
 from datamaite.maite._image import decode_image
 from datamaite.records import ClassificationLabel, ImageClassificationSample
 from datamaite.taxonomy import Taxonomy
+
+
+class _IcDatumMetadataBase(TypedDict):
+    id: int | str
+    height: int
+    width: int
+
+
+class IcDatumMetadata(_IcDatumMetadataBase, total=False):
+    """IC datum metadata: MAITE ``DatumMetadata`` plus ``height``/``width`` and optional ``split``.
+
+    Assignable to MAITE's ``DatumMetadata`` (a structural TypedDict with only
+    ``id`` required).
+    """
+
+    split: str
 
 
 def _candidate_source_id(label: ClassificationLabel) -> int | str | None:
@@ -93,7 +109,7 @@ def ic_metadata(
     dimensions: tuple[int, int] | None = None,
     storage_options: Mapping[str, Any] | None = None,
     base_cache: dict[str, np.ndarray] | None = None,
-) -> dict[str, Any]:
+) -> IcDatumMetadata:
     """Build one IC sample's MAITE datum metadata (``id``/``split``/``height``/``width``).
 
     The image is decoded only when the true dimensions cannot be known without
@@ -101,9 +117,6 @@ def ic_metadata(
     or a sample missing stored ``height``/``width``. When ``build_ic_item`` has
     already decoded the image it is passed in via ``image`` to avoid a re-decode.
     """
-    meta: dict[str, Any] = {"id": sample.image_id}
-    if sample.split is not None:
-        meta["split"] = sample.split
     has_region = getattr(sample, "region", None) is not None
     if has_region or sample.height is None or sample.width is None:
         if image is None and (has_region or dimensions is None):
@@ -127,8 +140,9 @@ def ic_metadata(
                 width = sample.width if sample.width is not None else int(image.shape[2])
     else:
         height, width = sample.height, sample.width
-    meta["height"] = height
-    meta["width"] = width
+    meta: IcDatumMetadata = {"id": sample.image_id, "height": height, "width": width}
+    if sample.split is not None:
+        meta["split"] = sample.split
     return meta
 
 
@@ -138,7 +152,7 @@ def build_ic_item(
     *,
     storage_options: Mapping[str, Any] | None = None,
     base_cache: dict[str, np.ndarray] | None = None,
-) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+) -> tuple[np.ndarray, np.ndarray, IcDatumMetadata]:
     """Build one MAITE IC item ``(image, target, datum_metadata)`` for ``sample``."""
     image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
     return (

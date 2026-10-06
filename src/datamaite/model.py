@@ -32,11 +32,12 @@ from collections.abc import Iterator, Mapping
 from dataclasses import InitVar, dataclass, field, replace
 from functools import cached_property
 from pathlib import Path, PurePosixPath
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 # Bounding box as (left, top, width, height) in pixels. Single definition lives
 # in geometry.py (with the conversion helpers); re-exported here for the model's
 # callers. geometry imports only stdlib, so this is import-cycle-free.
+from datamaite._maite_typing import MaiteDatasetMetadataField
 from datamaite._types import Task
 from datamaite._upath import to_dataset_path
 from datamaite.geometry import BBox
@@ -44,6 +45,12 @@ from datamaite.image_classification import ImageClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import DatasetMetadata
 from datamaite.taxonomy import CategoryEntry, Taxonomy
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from datamaite.maite._decode import DecodedFrame
+    from datamaite.maite._mot import MotDatumMetadata, MotTarget
 
 
 def category_name_from_uri(category_uri: str) -> str:
@@ -306,7 +313,7 @@ class VideoClassificationDataset:
 
 
 @dataclass(frozen=True)
-class BoxTrackDataset:
+class BoxTrackDataset(MaiteDatasetMetadataField):
     """A loaded box-track dataset that *is* a MAITE multi-object-tracking dataset.
 
     ``sequences`` + ``categories`` are the source-preserving records every
@@ -394,7 +401,7 @@ class BoxTrackDataset:
         # MAITE item count == number of video-bearing sequences (O(1), cached).
         return len(self._mot_sequences)
 
-    def __getitem__(self, index: int) -> tuple[Any, Any, dict[str, Any]]:
+    def __getitem__(self, index: int) -> tuple[Iterable[DecodedFrame], MotTarget, MotDatumMetadata]:
         seq = self._mot_sequences[index]  # IndexError past the end -> stops iteration
         try:
             from datamaite.maite._mot import build_mot_item
@@ -409,11 +416,6 @@ class BoxTrackDataset:
                 "video stack. Install it with: pip install datamaite[fmv]"
             ) from exc
         return build_mot_item(self, seq)
-
-    @property
-    def metadata(self) -> dict[str, Any]:
-        """MAITE ``DatasetMetadata``: dataset id + ``index2label`` map."""
-        return {"id": self.dataset_id, "index2label": self.index2label()}
 
     def with_mot_options(
         self,

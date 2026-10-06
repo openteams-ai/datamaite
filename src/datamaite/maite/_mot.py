@@ -17,7 +17,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast, overload
 
 import numpy as np
 
@@ -43,8 +43,22 @@ logger = logging.getLogger(__name__)
 EmptyFramePolicy = Literal["annotated", "all"]
 
 
+class MotDatumMetadata(TypedDict):
+    """MOT datum metadata, key-for-key MAITE's MOT ``DatumMetadata``.
+
+    Declared locally (mutable items are assignable to MAITE's ``ReadOnly``
+    ones) so item types resolve without ``maite`` installed.
+    """
+
+    id: int | str
+    height: int
+    width: int
+    time_base: Fraction
+    size: int
+
+
 @dataclass(frozen=True)
-class _FrameTarget:
+class FrameTarget:
     """One frame's detections; satisfies ``SingleFrameObjectTrackingTarget``."""
 
     boxes: np.ndarray
@@ -55,7 +69,7 @@ class _FrameTarget:
 
 # Shared target for unlabeled frames: zero detections, no per-frame allocation.
 # Reused across every empty frame (common under empty_frame_policy="all").
-_EMPTY_FRAME_TARGET = _FrameTarget(
+_EMPTY_FRAME_TARGET = FrameTarget(
     boxes=EMPTY_BOXES,
     labels=EMPTY_LABELS,
     scores=EMPTY_SCORES,
@@ -63,10 +77,10 @@ _EMPTY_FRAME_TARGET = _FrameTarget(
 )
 
 
-def _frame_target(boxes: list[BoxAnnotation]) -> _FrameTarget:
+def _frame_target(boxes: list[BoxAnnotation]) -> FrameTarget:
     if not boxes:
         return _EMPTY_FRAME_TARGET
-    return _FrameTarget(
+    return FrameTarget(
         boxes=boxes_array(boxes),
         labels=labels_array(boxes),
         scores=scores_array(boxes),
@@ -74,7 +88,7 @@ def _frame_target(boxes: list[BoxAnnotation]) -> _FrameTarget:
     )
 
 
-class _FrameTracks(Sequence):
+class _FrameTracks(Sequence[FrameTarget]):
     """Lazy ``Sequence[SingleFrameObjectTrackingTarget]`` over a video's frames.
 
     Builds a frame target on access rather than materializing one per frame up
@@ -91,15 +105,24 @@ class _FrameTracks(Sequence):
     def __len__(self) -> int:
         return len(self._frame_order)
 
-    def __getitem__(self, index: int) -> _FrameTarget:  # type: ignore[override]
+    @overload
+    def __getitem__(self, index: int) -> FrameTarget: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> _FrameTracks: ...
+
+    def __getitem__(self, index: int | slice) -> FrameTarget | _FrameTracks:
+        if isinstance(index, slice):
+            # Stay lazy: a slice is a view over the sliced frame order.
+            return _FrameTracks(self._frame_order[index], self._by_frame)
         return _frame_target(self._by_frame.get(self._frame_order[index], []))
 
 
 @dataclass(frozen=True)
-class _MotTarget:
+class MotTarget:
     """Tracks over a video's frames; satisfies ``MultiobjectTrackingTarget``."""
 
-    frame_tracks: Sequence[_FrameTarget]
+    frame_tracks: Sequence[FrameTarget]
 
 
 def _frame_plan(
@@ -181,7 +204,7 @@ class _ImageSequenceStream:
 
 def build_mot_item(
     dataset: BoxTrackDataset, seq: VideoSequence
-) -> tuple[Iterable[DecodedFrame], _MotTarget, dict[str, Any]]:
+) -> tuple[Iterable[DecodedFrame], MotTarget, MotDatumMetadata]:
     """Build one MAITE MOT item ``(VideoStream, MotTarget, DatumMetadata)`` for ``seq``.
 
     ``seq`` is one video-bearing sequence, selected by the caller
@@ -191,7 +214,7 @@ def build_mot_item(
     """
     by_frame = seq.boxes_by_frame()
     frame_order, source_indices = _frame_plan(seq, by_frame, dataset.empty_frame_policy)
-    target = _MotTarget(frame_tracks=_FrameTracks(frame_order, by_frame))
+    target = MotTarget(frame_tracks=_FrameTracks(frame_order, by_frame))
 
     if seq.video_path is not None:
         decoder = dataset._decoder or default_decoder(dataset._runtime_storage_options)
@@ -217,7 +240,7 @@ def build_mot_item(
             time_base=Fraction(1, round(seq.fps)) if seq.fps > 0 else fallback.time_base,
             size_bytes=fallback.size_bytes,
         )
-    metadata: dict[str, Any] = {
+    metadata: MotDatumMetadata = {
         "id": seq.video_id,
         "height": info.height,
         "width": info.width,

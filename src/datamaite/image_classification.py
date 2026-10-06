@@ -12,20 +12,27 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import InitVar, dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from datamaite._io import probe_image_dimensions
+from datamaite._maite_typing import MaiteDatasetMetadataField
 from datamaite._types import DatasetFormat, Task
 from datamaite.records import DatasetMetadata, ImageClassificationSample
 
+if TYPE_CHECKING:
+    import numpy as np
+
+    from datamaite.maite._ic import IcDatumMetadata
+
 
 @dataclass(frozen=True)
-class ImageClassificationDataset:
+class ImageClassificationDataset(MaiteDatasetMetadataField):
     """A loaded still-image IC dataset that structurally satisfies MAITE IC.
 
     ``samples`` are source-preserving image-level records. ``dataset_metadata``
     carries a :class:`datamaite.taxonomy.Taxonomy`; its dense projection is used
-    for MAITE's one-hot/probability target vector and ``index2label`` metadata.
+    for MAITE's one-hot/probability target vector and the ``index2label`` in
+    ``metadata`` (the MAITE ``DatasetMetadata``, rebuilt on each access).
     """
 
     samples: tuple[ImageClassificationSample, ...]
@@ -59,7 +66,7 @@ class ImageClassificationDataset:
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index: int) -> tuple[Any, Any, dict[str, Any]]:
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, IcDatumMetadata]:
         sample = self.samples[index]  # IndexError past the end -> stops iteration
         try:
             from datamaite.maite._ic import build_ic_item
@@ -77,7 +84,7 @@ class ImageClassificationDataset:
             base_cache=self._base_image_cache,
         )
 
-    def get_input(self, index: int, /) -> Any:
+    def get_input(self, index: int, /) -> np.ndarray:
         """MAITE ``FieldwiseDataset.get_input``: a fresh image array for ``index``."""
         from datamaite.maite._ic import ic_input
 
@@ -87,13 +94,13 @@ class ImageClassificationDataset:
             base_cache=self._base_image_cache,
         )
 
-    def get_target(self, index: int, /) -> Any:
+    def get_target(self, index: int, /) -> np.ndarray:
         """MAITE ``FieldwiseDataset.get_target``: the class vector for ``index`` (no image decode)."""
         from datamaite.maite._ic import ic_target
 
         return ic_target(self.samples[index], self.dataset_metadata.taxonomy)
 
-    def get_metadata(self, index: int, /) -> dict[str, Any]:
+    def get_metadata(self, index: int, /) -> IcDatumMetadata:
         """MAITE ``FieldwiseDataset.get_metadata``: datum metadata for ``index`` (decodes only if dims unknown)."""
         from datamaite.maite._ic import ic_metadata
 
@@ -120,11 +127,6 @@ class ImageClassificationDataset:
     def with_storage_options(self, storage_options: Mapping[str, Any] | None) -> ImageClassificationDataset:
         """Return a copy bound to explicit process-local storage options."""
         return replace(self, _storage_options=storage_options)
-
-    @property
-    def metadata(self) -> dict[str, Any]:
-        """MAITE ``DatasetMetadata``: dataset id + dense ``index2label`` map."""
-        return {"id": self.dataset_id, "index2label": self.index2label()}
 
     def index2label(self) -> dict[int, str]:
         """Dense class index to label name map (empty if no taxonomy)."""

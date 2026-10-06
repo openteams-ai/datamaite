@@ -62,6 +62,17 @@ class TestMotLazyTargets:
         assert target.frame_tracks[1] is _EMPTY_FRAME_TARGET
         assert target.frame_tracks[0] is not _EMPTY_FRAME_TARGET  # frame 0 has a box
 
+    def test_frame_tracks_slice_is_a_sequence_of_frame_targets(self, tmp_path: Path) -> None:
+        ds, _ = sample_dataset(tmp_path)  # boxes on frames 0 and 2
+        _stream, target, _meta = ds.with_mot_options(empty_frame_policy="all")[0]
+        tracks = target.frame_tracks
+        sliced = tracks[0:3]
+        assert len(sliced) == 3
+        assert [t.boxes.shape[0] for t in sliced] == [t.boxes.shape[0] for t in (tracks[0], tracks[1], tracks[2])]
+        assert sliced[1] is _EMPTY_FRAME_TARGET
+        assert len(tracks[::-1]) == len(tracks)
+        assert tracks[-1].boxes.shape == tracks[len(tracks) - 1].boxes.shape
+
     def test_annotated_passes_explicit_indices(self, tmp_path: Path) -> None:
         ds, _ = sample_dataset(tmp_path)
         spy = SpyDecoder()

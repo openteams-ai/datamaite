@@ -20,21 +20,29 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import InitVar, dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from datamaite._io import probe_image_dimensions
+from datamaite._maite_typing import MaiteDatasetMetadataField
 from datamaite._types import DatasetFormat, Task
 from datamaite.records import DatasetMetadata, ImageObjectDetectionSample
 
+if TYPE_CHECKING:
+    import numpy as np
+
+    from datamaite.maite._od import ObjectDetectionTarget, OdDatumMetadata
+
 
 @dataclass(frozen=True)
-class ObjectDetectionDataset:
+class ObjectDetectionDataset(MaiteDatasetMetadataField):
     """A loaded still-image OD dataset that *is* a MAITE object-detection dataset.
 
     ``samples`` are the source-preserving per-image records every converter
     consumes. ``dataset_metadata`` carries the category :class:`~datamaite.taxonomy.Taxonomy`
     plus dataset-level provenance (COCO ``info``/``licenses``). ``dataset_id`` is
-    the MAITE ``DatasetMetadata['id']``.
+    the MAITE ``DatasetMetadata['id']``; ``metadata`` (the MAITE
+    ``DatasetMetadata`` itself) is rebuilt from it and the taxonomy on each
+    access.
     """
 
     samples: tuple[ImageObjectDetectionSample, ...]
@@ -68,7 +76,7 @@ class ObjectDetectionDataset:
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index: int) -> tuple[Any, Any, dict[str, Any]]:
+    def __getitem__(self, index: int) -> tuple[np.ndarray, ObjectDetectionTarget, OdDatumMetadata]:
         sample = self.samples[index]  # IndexError past the end -> stops iteration
         try:
             from datamaite.maite._od import build_od_item
@@ -81,19 +89,19 @@ class ObjectDetectionDataset:
             ) from exc
         return build_od_item(sample, storage_options=self._runtime_storage_options)
 
-    def get_input(self, index: int, /) -> Any:
+    def get_input(self, index: int, /) -> np.ndarray:
         """MAITE ``FieldwiseDataset.get_input``: a freshly decoded image for ``index``."""
         from datamaite.maite._od import od_input
 
         return od_input(self.samples[index], storage_options=self._runtime_storage_options)
 
-    def get_target(self, index: int, /) -> Any:
+    def get_target(self, index: int, /) -> ObjectDetectionTarget:
         """MAITE ``FieldwiseDataset.get_target``: the OD target for ``index`` (no image decode)."""
         from datamaite.maite._od import od_target
 
         return od_target(self.samples[index])
 
-    def get_metadata(self, index: int, /) -> dict[str, Any]:
+    def get_metadata(self, index: int, /) -> OdDatumMetadata:
         """MAITE ``FieldwiseDataset.get_metadata``: datum metadata for ``index`` (decodes only if dims unknown)."""
         from datamaite.maite._od import od_metadata
 
@@ -118,11 +126,6 @@ class ObjectDetectionDataset:
     def with_storage_options(self, storage_options: Mapping[str, Any] | None) -> ObjectDetectionDataset:
         """Return a copy bound to explicit process-local storage options."""
         return replace(self, _storage_options=storage_options)
-
-    @property
-    def metadata(self) -> dict[str, Any]:
-        """MAITE ``DatasetMetadata``: dataset id + ``index2label`` map."""
-        return {"id": self.dataset_id, "index2label": self.index2label()}
 
     def index2label(self) -> dict[int, str]:
         """Map integer ``category_id`` to label name (from the taxonomy; empty if none)."""

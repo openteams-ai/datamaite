@@ -967,6 +967,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pydantic" },
+    { name = "typing-extensions" },
     { name = "universal-pathlib" },
 ]
 
@@ -1093,6 +1094,7 @@ requires-dist = [
     { name = "sphinx-autobuild", marker = "extra == 'docs'", specifier = ">=2024.0" },
     { name = "sphinx-design", marker = "extra == 'docs'", specifier = ">=0.5" },
     { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=0.9" },
+    { name = "typing-extensions", specifier = ">=4.13" },
     { name = "universal-pathlib", specifier = ">=0.3.8" },
 ]
 provides-extras = ["all", "aws", "azure", "cloud", "dev", "docs", "fmv", "gcs", "ic", "maite", "notebook", "od"]

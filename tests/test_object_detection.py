@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pickle
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -114,6 +114,25 @@ class TestModel:
         ds = _ds()
         assert ds.index2label() == {1: "person", 3: "car"}
         assert ds.metadata == {"id": "datamaite", "index2label": {1: "person", 3: "car"}}
+
+    def test_metadata_is_rebuilt_on_each_access(self) -> None:
+        # Type checkers see a writable attribute (#124), but at runtime it is
+        # derived from the fields, so edits never reach the dataset and it
+        # tracks ``dataset_id`` through replace() and pickle.
+        ds = _ds()
+        assert "metadata" not in vars(ds)
+        ds.metadata["id"] = "edited"
+        assert ds.metadata["id"] == "datamaite"
+        assert replace(ds, dataset_id="renamed").metadata["id"] == "renamed"
+        restored = pickle.loads(pickle.dumps(ds))  # noqa: S301 - trusted in-process round-trip
+        assert restored.metadata == ds.metadata
+
+    def test_metadata_cannot_be_replaced_at_runtime(self) -> None:
+        # The one static/runtime mismatch, documented in datamaite._maite_typing.
+        from dataclasses import FrozenInstanceError
+
+        with pytest.raises(FrozenInstanceError):
+            _ds().metadata = {"id": "x"}  # type: ignore[misc]
 
     def test_index2label_empty_without_taxonomy(self) -> None:
         ds = ObjectDetectionDataset(samples=(ImageObjectDetectionSample(image_id=0),))
@@ -308,6 +327,23 @@ class TestOdDatumMetadataExtras:
         assert meta["flickr_url"] == "http://f/x"
         assert meta["coco_url"] == "http://c/x"
         assert ds.get_metadata(0) == meta
+
+    def test_datum_metadata_type_allows_extra_items(self) -> None:
+        # Guards the typing_extensions>=4.13 floor: older versions reject
+        # ``extra_items`` with a TypeError when datamaite.maite._od is imported.
+        from typing import Any
+
+        from datamaite.maite._od import OdDatumMetadata
+
+        assert OdDatumMetadata.__extra_items__ is Any  # type: ignore[attr-defined]
+
+    def test_passthrough_file_name_never_stands_in_for_typed_file_name(self) -> None:
+        # OdDatumMetadata declares ``file_name: str``; with no typed file name, a
+        # same-named passthrough value must be dropped, not surfaced unvalidated.
+        from datamaite.maite._od import od_metadata
+
+        sample = ImageObjectDetectionSample(image_id=1, width=2, height=2, metadata={"file_name": 42})
+        assert "file_name" not in od_metadata(sample)
 
     def test_bare_sample_metadata_is_exactly_id_height_width(self, tmp_path) -> None:
         cv2 = pytest.importorskip("cv2")

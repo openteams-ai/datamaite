@@ -252,7 +252,8 @@ pyright:
     # Task extras (all) + maite so cv2/numpy/av/maite resolve and pyright
     # stays at 0 warnings; dev for the toolchain.
     - uv sync --locked --extra dev --extra maite --extra all
-    - uv run --no-sync pyright src/
+    # tests/type_checks: static MAITE protocol conformance of the dataset models.
+    - uv run --no-sync pyright src/ tests/type_checks/
 
 # ---------------------------------------------------------------------------
 # Build
