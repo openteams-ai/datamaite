@@ -24,7 +24,7 @@ from datamaite._formats.hmie.video_checks import probe_video
 from datamaite._types import DatasetFormat, Finding, Severity, ValidationResult
 from datamaite._upath import to_dataset_path
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def validate(

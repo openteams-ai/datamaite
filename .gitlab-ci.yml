@@ -255,6 +255,9 @@ pyright:
     - uv sync --locked --extra dev --extra maite --extra all
     # tests/type_checks: static MAITE protocol conformance of the dataset models.
     - uv run --no-sync pyright src/ tests/type_checks/
+    # TR-8-S-1 (#103): the public API must stay 100% type-complete. Exits
+    # non-zero below 100%, so a new unannotated public symbol fails here.
+    - uv run --no-sync pyright --verifytypes datamaite --ignoreexternal
 
 # ---------------------------------------------------------------------------
 # Build

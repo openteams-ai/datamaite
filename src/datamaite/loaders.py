@@ -48,7 +48,7 @@ from datamaite._types import DatasetFormat, Task
 from datamaite._upath import is_remote_path, sanitized_uri, to_dataset_path
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset, VisionDataset
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

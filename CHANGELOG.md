@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The public API is 100% type-complete and CI keeps it there (#103, TR-8-S-1):
+  the `pyright` job now also runs `pyright --verifytypes datamaite
+  --ignoreexternal`. Three missing annotations (`ValidationCache.stats` and the
+  `loaders` / `validation` module loggers) took the score from 98.4% to 100%.
 - GitLab secret detection runs in CI (#115, DSOR-4-H-1/H-2): the stock
   `Jobs/Secret-Detection.gitlab-ci.yml` template is included and its
   `secret_detection` job runs in the `dr-compliance` stage on MR and

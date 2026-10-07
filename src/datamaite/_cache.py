@@ -93,7 +93,7 @@ class ValidationCache:
     """SQLite-backed validation result cache."""
 
     def __init__(self, db_path: Path | None = None) -> None:
-        self.stats = CacheStats()
+        self.stats: CacheStats = CacheStats()
         self._db: sqlite3.Connection | None = None
         self._pending_writes: int = 0
         if db_path is None:
