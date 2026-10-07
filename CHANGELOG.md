@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-07
+
 ### Added
 
 - The public API is 100% type-complete and CI keeps it there (#103, TR-8-S-1):
@@ -38,9 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#109, DR-2.3-H-2) naming its persona (data engineer, T&E engineer, model
   developer, or data curator) and the higher-level T&E workflow its task sits
   in. The tutorials index lists each tutorial's persona.
-- CDAO funding acknowledgment (#107, DR-2.2-H-2): the program's standard text,
-  with the contract number, is in the README and included on the docs landing
-  page from that single source.
 - CDAO funding acknowledgment (#107, DR-2.2-H-2), laid out as in CheckMAITE:
   an "Authors and acknowledgment" section in the README holds the program's
   standard text with the contract number, and the docs landing page gains an
