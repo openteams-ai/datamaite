@@ -45,6 +45,33 @@ The codebase architecture and the `datamaite` command-line interface.
 
 ::::
 
+## About the JATIC program and CDAO
+
+The Joint AI Test Infrastructure Capability (JATIC) program develops software
+products for AI Test & Evaluation (T&E) and AI Assurance. The program is managed
+by the Assessment & Assurance Division of the
+DoD Chief Digital and Artificial Intelligence Office (CDAO).
+It is funded from FY23-FY29.
+
+:::{admonition} Program Mission
+
+Develop software to accelerate and enable AI model test and evaluation for
+testers across the Department of Defense (DoD) enterprise, including DoD
+programs, research laboratories, industry partners, and academia in order to
+provide insight on the performance, effectiveness, robustness, and safety of the
+DoD's AI-enabled systems.
+:::
+
+Learn more in the
+[CDAO JATIC program documentation](https://cdao.pages.jatic.net/public/).
+
+### CDAO Funding Acknowledgment
+
+```{include} ../README.md
+:start-after: <!-- --8<-- [start:acknowledgment] -->
+:end-before: <!-- --8<-- [end:acknowledgment] -->
+```
+
 ```{toctree}
 :maxdepth: 2
 :hidden:

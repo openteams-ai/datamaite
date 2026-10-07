@@ -2,6 +2,7 @@
   "ignorePatterns": [
     { "pattern": "^https?://(127\\.0\\.0\\.1|localhost)(:\\d+)?" },
     { "pattern": "^https://gitlab\\.jatic\\.net/" },
+    { "pattern": "^https://cdao\\.pages\\.jatic\\.net/" },
     { "pattern": "^\\.\\./example-validation-report\\.html$" }
   ],
   "timeout": "20s",

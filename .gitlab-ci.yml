@@ -212,6 +212,7 @@ lint:
 # .markdown-link-check.json ignores only links a CI runner cannot resolve:
 #   - localhost      -- the sphinx-autobuild dev server in docs/README.md
 #   - gitlab.jatic.net -- private instance, 403 without a login session
+#   - cdao.pages.jatic.net -- JATIC program docs, 403 without a login session
 #   - ../example-validation-report.html -- exists only in the built site
 #     (html_extra_path in docs/conf.py copies it to the build root)
 # Not run on tags: a transient external outage must not block a release whose
