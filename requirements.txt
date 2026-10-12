@@ -1625,6 +1625,7 @@ numpy==2.2.6 ; python_full_version < '3.11' \
     #   datamaite
     #   maite
     #   opencv-python-headless
+    #   tifffile
 numpy==2.4.4 ; python_full_version >= '3.11' \
     --hash=sha256:07077278157d02f65c43b1b26a3886bce886f95d20aabd11f87932750dfb14ed \
     --hash=sha256:08f2e31ed5e6f04b118e49821397f12767934cfdd12a1ce86a058f91e004ee50 \
@@ -1702,6 +1703,7 @@ numpy==2.4.4 ; python_full_version >= '3.11' \
     #   datamaite
     #   maite
     #   opencv-python-headless
+    #   tifffile
 oauthlib==3.3.1 \
     --hash=sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9 \
     --hash=sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1
@@ -2753,6 +2755,18 @@ terminado==0.18.1 \
     # via
     #   jupyter-server
     #   jupyter-server-terminals
+tifffile==2025.5.10 ; python_full_version < '3.11' \
+    --hash=sha256:018335d34283aa3fd8c263bae5c3c2b661ebc45548fde31504016fcae7bf1103 \
+    --hash=sha256:e37147123c0542d67bc37ba5cdd67e12ea6fbe6e86c52bee037a9eb6a064e5ad
+    # via datamaite
+tifffile==2026.3.3 ; python_full_version == '3.11.*' \
+    --hash=sha256:d9a1266bed6f2ee1dd0abde2018a38b4f8b2935cb843df381d70ac4eac5458b7 \
+    --hash=sha256:e8be15c94273113d31ecb7aa3a39822189dd11c4967e3cc88c178f1ad2fd1170
+    # via datamaite
+tifffile==2026.9.20 ; python_full_version >= '3.12' \
+    --hash=sha256:30e145a7042ce7143ae50a50fe8b7221b0070aae22adab8f9e79a264be6b5cdc \
+    --hash=sha256:9b913167b8f66a57f2e7c0454486c4c4607196d494797461226166bd0755c0e6
+    # via datamaite
 tinycss2==1.5.1 \
     --hash=sha256:3415ba0f5839c062696996998176c4a3751d18b7edaaeeb658c9ce21ec150661 \
     --hash=sha256:d339d2b616ba90ccce58da8495a78f46e55d4d25f9fd71dfd526f07e7d53f957

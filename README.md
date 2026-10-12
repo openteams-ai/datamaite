@@ -85,8 +85,8 @@ validation, conversion dispatch, and MAITE target arrays: `pydantic` and
 | --- | --- | --- |
 | `datamaite` | `pydantic`, `numpy` | load/convert IRs, HMIE structure/annotation validation, MAITE target objects |
 | `datamaite[fmv]` | OpenCV + PyAV | FMV integrity checks, flat MP4 probing, video-backed MOT decode/export |
-| `datamaite[od]` | OpenCV | still-image OD pixel decode |
-| `datamaite[ic]` | OpenCV | still-image IC pixel decode |
+| `datamaite[od]` | OpenCV, `tifffile` | still-image OD pixel decode (`tifffile`: multispectral/SAR TIFFs) |
+| `datamaite[ic]` | OpenCV, `tifffile` | still-image IC pixel decode (`tifffile`: multispectral/SAR TIFFs) |
 | `datamaite[all]` | union of task extras | all task pixel/media paths |
 | `datamaite[maite]` | MAITE + PyAV | optional MAITE package plus MOT-video runtime for interoperability/conformance checks |
 | `datamaite[aws]` | `s3fs` | read/write datasets on `s3://` roots |
@@ -509,6 +509,52 @@ OpenCV, which ships in the task extras (`numpy` is part of the lean core), so
 those tasks need `pip install datamaite[od]` or `datamaite[ic]` (or
 `datamaite[all]`). `VideoClassificationDataset` is source-record-only until MAITE
 grows a video-classification protocol.
+
+Still-image OD and IC samples decode to `(3, H, W)` RGB by default: grayscale
+is replicated and alpha is dropped. MAITE fixes only the `(C, H, W)` axis
+order, not the channel count, so you can opt out per dataset:
+
+```python
+ds = load_od("/path/to/coco").with_image_options(color_mode="gray")
+```
+
+| `color_mode` | Image array |
+| --- | --- |
+| `"rgb"` (default) | `(3, H, W)` RGB, `uint8` |
+| `"gray"` | `(1, H, W)` luma, `uint8` |
+| `"native"` | every stored band, stored dtype, RGB(A) order |
+
+`"native"` returns gray+alpha PNGs as 4-channel RGBA, as OpenCV decodes them.
+
+Use `"gray"` for single-channel models. Use `"native"` for multispectral and
+SAR rasters, alpha, or 16-bit data. TIFFs that OpenCV cannot read as stored
+(non-RGB multi-band, multi-band float, RGBA, or 1-bit, `uint32`, 64-bit, and
+`float16` samples) decode with `tifffile`, so any band count works (e.g.
+13-band `uint16` Sentinel-2 or 2-band `float32` Sentinel-1), and values are not
+rescaled. Other encodings are limited to 1, 3, or 4 channels.
+
+Only `"native"` keeps every band of a multi-band TIFF. `"rgb"` and `"gray"` go
+through OpenCV: most multispectral and float TIFFs raise an error pointing at
+`"native"`, but some multi-band TIFFs (for example 2-band integer rasters)
+silently come back with fewer bands.
+
+Notes on `"native"`:
+
+- It reads the stored pixel grid, so EXIF orientation is not applied (#76).
+- One dataset can mix band counts and dtypes, which default batch collation in
+  some frameworks cannot stack.
+- The mode is a MAITE view only: `write` and `convert` copy source files
+  unchanged, and reloading a dataset starts at `"rgb"`.
+- It returns pixel values only. Georeferencing, nodata values, and band
+  names are not read, and each image is decoded whole. TIFFs decoded with
+  `tifffile` are capped at 256 MiB decoded; other images at 200 million
+  pixels.
+- Multi-page TIFFs are read whole only when the page axis is labelled as
+  channels (`C`, as in OME-TIFF and ImageJ channel stacks). Other page stacks
+  (time steps, depth slices, separate images) raise an error.
+- TIFFs compressed with LZW, JPEG, or other codecs beyond `tifffile`'s
+  built-in ones need `pip install imagecodecs` when they decode with
+  `tifffile`.
 
 ## Writing & converting datasets (Python)
 

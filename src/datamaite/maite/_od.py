@@ -4,7 +4,9 @@ The OD analogue of :mod:`datamaite.maite._mot`: turns one
 :class:`~datamaite.records.ImageObjectDetectionSample` into the MAITE
 object-detection item ``(image, ObjectDetectionTarget, DatumMetadata)``.
 
-* image -- decoded ``(C, H, W)`` ``uint8`` array (MAITE input shape semantics).
+* image -- decoded ``(C, H, W)`` array (MAITE input shape semantics); ``C``
+  and the dtype follow the dataset's ``image_color_mode`` (3 and ``uint8`` by
+  default).
 * target -- boxes in ``(x0, y0, x1, y1)`` (MAITE OD convention), integer labels
   (the source ``category_id``, matching ``DatasetMetadata.index2label``), and
   scores (``1.0`` for ground-truth annotations, or the stored confidence).
@@ -94,9 +96,20 @@ def _detection_attributes(dets: Sequence[ObjectDetectionAnnotation]) -> dict[str
     return {key: [d.attributes.get(key) for d in dets] for key in keys}
 
 
-def od_input(sample: ImageObjectDetectionSample, *, storage_options: Mapping[str, Any] | None = None) -> np.ndarray:
-    """Decode one OD sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
-    return decode_image(sample, task_name="ObjectDetectionDataset", extra="od", storage_options=storage_options)
+def od_input(
+    sample: ImageObjectDetectionSample,
+    *,
+    storage_options: Mapping[str, Any] | None = None,
+    color_mode: str = "rgb",
+) -> np.ndarray:
+    """Decode one OD sample to its MAITE input array (``(C, H, W)``; see ``decode_image``)."""
+    return decode_image(
+        sample,
+        task_name="ObjectDetectionDataset",
+        extra="od",
+        storage_options=storage_options,
+        color_mode=color_mode,
+    )
 
 
 def od_target(sample: ImageObjectDetectionSample) -> ObjectDetectionTarget:
@@ -110,6 +123,7 @@ def od_metadata(
     *,
     dimensions: tuple[int, int] | None = None,
     storage_options: Mapping[str, Any] | None = None,
+    color_mode: str = "rgb",
 ) -> OdDatumMetadata:
     """Build one OD sample's MAITE datum metadata.
 
@@ -139,13 +153,13 @@ def od_metadata(
     height, width = sample.height, sample.width
     if height is None or width is None:
         if image is None and dimensions is None:
-            image = od_input(sample, storage_options=storage_options)
+            image = od_input(sample, storage_options=storage_options, color_mode=color_mode)
         probed_width, probed_height = dimensions or (None, None)
         height = sample.height if sample.height is not None else probed_height
         width = sample.width if sample.width is not None else probed_width
         if height is None or width is None:
             if image is None:  # defensive fallback for custom callers
-                image = od_input(sample, storage_options=storage_options)
+                image = od_input(sample, storage_options=storage_options, color_mode=color_mode)
             height = sample.height if sample.height is not None else int(image.shape[1])
             width = sample.width if sample.width is not None else int(image.shape[2])
     meta["height"] = height
@@ -156,8 +170,11 @@ def od_metadata(
 
 
 def build_od_item(
-    sample: ImageObjectDetectionSample, *, storage_options: Mapping[str, Any] | None = None
+    sample: ImageObjectDetectionSample,
+    *,
+    storage_options: Mapping[str, Any] | None = None,
+    color_mode: str = "rgb",
 ) -> tuple[np.ndarray, ObjectDetectionTarget, OdDatumMetadata]:
     """Build one MAITE OD item ``(image, target, datum_metadata)`` for ``sample``."""
-    image = od_input(sample, storage_options=storage_options)
-    return image, od_target(sample), od_metadata(sample, image, storage_options=storage_options)
+    image = od_input(sample, storage_options=storage_options, color_mode=color_mode)
+    return image, od_target(sample), od_metadata(sample, image, storage_options=storage_options, color_mode=color_mode)

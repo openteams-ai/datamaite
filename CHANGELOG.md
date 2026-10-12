@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MAITE IC/OD image color mode (#84): `with_image_options(color_mode=...)` on
+  `ImageClassificationDataset` and `ObjectDetectionDataset` selects `"rgb"`
+  (default, unchanged `(3, H, W)` `uint8`), `"gray"` (`(1, H, W)` `uint8`), or
+  `"native"` (every stored band in its stored dtype, RGB(A) order). The
+  setting is the public `image_color_mode` field and applies to encoded images
+  and SafeTensors tensors.
+  - In `"native"`, TIFFs that OpenCV would reject or silently alter decode
+    with `tifffile`: multispectral and SAR rasters with any band count,
+    multi-band float, band-separate storage, RGBA, and 1-bit, `uint32`,
+    64-bit, and `float16` samples. Other images stay limited to OpenCV's 1, 3,
+    or 4 channels.
+  - Multi-page TIFFs are read whole when the page axis is labelled as channels
+    (OME-TIFF, ImageJ); other page stacks raise an error.
+  - TIFFs decoded with `tifffile` are capped at 256 MiB decoded, and those
+    compressed with LZW or JPEG need `pip install imagecodecs`.
+  - `"native"` reads the stored pixel grid, so unlike `"rgb"` and `"gray"` it
+    does not apply EXIF orientation (#76).
+
+### Changed
+
+- The `od`, `ic`, and `all` extras now install `tifffile` (#84), a pure-Python
+  package that depends only on `numpy`.
+
 ## [0.6.0] - 2026-10-07
 
 ### Added

@@ -79,15 +79,17 @@ def ic_input(
     sample: ImageClassificationSample,
     *,
     storage_options: Mapping[str, Any] | None = None,
-    base_cache: dict[str, np.ndarray] | None = None,
+    base_cache: dict[tuple[str, str], np.ndarray] | None = None,
+    color_mode: str = "rgb",
 ) -> np.ndarray:
-    """Decode one IC sample to its MAITE input array (``(C, H, W)`` ``uint8``)."""
+    """Decode one IC sample to its MAITE input array (``(C, H, W)``; see ``decode_image``)."""
     return decode_image(
         sample,
         task_name="ImageClassificationDataset",
         extra="ic",
         storage_options=storage_options,
         base_cache=base_cache,
+        color_mode=color_mode,
     )
 
 
@@ -108,7 +110,8 @@ def ic_metadata(
     *,
     dimensions: tuple[int, int] | None = None,
     storage_options: Mapping[str, Any] | None = None,
-    base_cache: dict[str, np.ndarray] | None = None,
+    base_cache: dict[tuple[str, str], np.ndarray] | None = None,
+    color_mode: str = "rgb",
 ) -> IcDatumMetadata:
     """Build one IC sample's MAITE datum metadata (``id``/``split``/``height``/``width``).
 
@@ -120,14 +123,14 @@ def ic_metadata(
     has_region = getattr(sample, "region", None) is not None
     if has_region or sample.height is None or sample.width is None:
         if image is None and (has_region or dimensions is None):
-            image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
+            image = ic_input(sample, storage_options=storage_options, base_cache=base_cache, color_mode=color_mode)
         if has_region:
             # A region crop is clamped to image bounds at decode time, so its true
             # size is known only from the decoded array -- the stored dims are the
             # nominal (possibly over-edge) box size and would disagree for
             # edge-straddling crops.
             if image is None:  # defensive fallback for custom callers
-                image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
+                image = ic_input(sample, storage_options=storage_options, base_cache=base_cache, color_mode=color_mode)
             height, width = int(image.shape[1]), int(image.shape[2])
         else:
             probed_width, probed_height = dimensions or (None, None)
@@ -135,7 +138,9 @@ def ic_metadata(
             width = sample.width if sample.width is not None else probed_width
             if height is None or width is None:
                 if image is None:  # defensive fallback for custom callers
-                    image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
+                    image = ic_input(
+                        sample, storage_options=storage_options, base_cache=base_cache, color_mode=color_mode
+                    )
                 height = sample.height if sample.height is not None else int(image.shape[1])
                 width = sample.width if sample.width is not None else int(image.shape[2])
     else:
@@ -151,12 +156,13 @@ def build_ic_item(
     taxonomy: Taxonomy | None,
     *,
     storage_options: Mapping[str, Any] | None = None,
-    base_cache: dict[str, np.ndarray] | None = None,
+    base_cache: dict[tuple[str, str], np.ndarray] | None = None,
+    color_mode: str = "rgb",
 ) -> tuple[np.ndarray, np.ndarray, IcDatumMetadata]:
     """Build one MAITE IC item ``(image, target, datum_metadata)`` for ``sample``."""
-    image = ic_input(sample, storage_options=storage_options, base_cache=base_cache)
+    image = ic_input(sample, storage_options=storage_options, base_cache=base_cache, color_mode=color_mode)
     return (
         image,
         ic_target(sample, taxonomy),
-        ic_metadata(sample, image, storage_options=storage_options, base_cache=base_cache),
+        ic_metadata(sample, image, storage_options=storage_options, base_cache=base_cache, color_mode=color_mode),
     )

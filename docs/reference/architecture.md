@@ -1042,6 +1042,16 @@ protocol modules exist). OD/IC inputs are single images → they need an **image
 decoder** (PIL/opencv), distinct from MOT's PyAV video decoder. VC is explicitly
 not exposed as MAITE until a real protocol exists.
 
+The OD/IC image view's channel layout is a per-dataset option,
+`with_image_options(color_mode=...)`, in the same style as `with_mot_options`:
+`"rgb"` (default, `(3, H, W)` `uint8`), `"gray"` (`(1, H, W)`), or `"native"`
+(stored bands and dtype). It is stored on the dataset as `image_color_mode`
+and only changes what `ds[i]` / `get_input` decode, so source records,
+`write`, and `convert` are unaffected. Decoding lives in `maite/_image.py`:
+OpenCV handles encoded images, and in `"native"` mode `tifffile` handles the
+TIFFs OpenCV cannot read as stored (multispectral, SAR, and unusual sample
+types). SafeTensors tensors decode with numpy alone.
+
 Each datamaite dataset class is a native dataset of a **different MAITE protocol
 object** — they are *not* interchangeable, which is why MOT's `BoxTrackDataset`
 cannot serve OD:

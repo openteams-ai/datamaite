@@ -44,8 +44,8 @@ need with `--extra <name>` (repeat the flag to combine):
 | _(none)_ | `pydantic`, `numpy` | load registered datasets into the in-memory model, build MAITE target arrays, run HMIE structure/annotation validation |
 | `all` | union of task extras | all supported media/pixel decode paths |
 | `fmv` | core + OpenCV + PyAV | FMV/video integrity checks, flat MP4 probing, video-backed MOT MAITE decode, video-backed MOT writer frame extraction |
-| `od` | core + OpenCV | still-image object-detection pixel decode |
-| `ic` | core + OpenCV | still-image image-classification pixel decode |
+| `od` | core + OpenCV + `tifffile` | still-image object-detection pixel decode; `tifffile` reads multispectral/SAR TIFFs in `color_mode="native"` |
+| `ic` | core + OpenCV + `tifffile` | still-image image-classification pixel decode; `tifffile` reads multispectral/SAR TIFFs in `color_mode="native"` |
 | `maite` | core + MAITE + PyAV | optional MAITE package plus MOT-video runtime for interoperability/conformance checks |
 | `notebook` | `ipykernel` | Jupyter kernel for running the tutorial notebooks |
 | `docs` | Sphinx, MyST-NB, … | building this documentation |

@@ -502,8 +502,19 @@ def _positive_dimensions(dimensions: tuple[int, int] | None) -> tuple[int, int] 
     return dimensions
 
 
-def decode_image_bytes(payload: bytes, *, color: bool = False) -> np.ndarray | None:
-    """Decode bounded encoded bytes after rejecting oversized declared pixels."""
+def _imread_flags(cv2: Any, *, color: bool, gray: bool) -> int:
+    """OpenCV read flags: ``gray`` wins over ``color``; neither is ``IMREAD_UNCHANGED``."""
+    if gray:
+        return cv2.IMREAD_GRAYSCALE
+    return cv2.IMREAD_COLOR if color else cv2.IMREAD_UNCHANGED
+
+
+def decode_image_bytes(payload: bytes, *, color: bool = False, gray: bool = False) -> np.ndarray | None:
+    """Decode bounded encoded bytes after rejecting oversized declared pixels.
+
+    ``gray`` decodes one luma channel, ``color`` forces 3-channel BGR, and
+    neither keeps the stored layout (channel count and bit depth).
+    """
     import cv2  # type: ignore[import-untyped]
 
     dimensions = _encoded_image_dimensions(payload)
@@ -515,7 +526,7 @@ def decode_image_bytes(payload: bytes, *, color: bool = False) -> np.ndarray | N
     if dimensions is not None and dimensions[0] * dimensions[1] > MAX_DECODED_IMAGE_PIXELS:
         return None
     encoded = np.frombuffer(payload, dtype=np.uint8)
-    flags = cv2.IMREAD_COLOR if color else cv2.IMREAD_UNCHANGED
+    flags = _imread_flags(cv2, color=color, gray=gray)
     try:
         decoded = cv2.imdecode(encoded, flags) if encoded.size else None
     except cv2.error:
@@ -530,12 +541,16 @@ def decode_image_path(
     storage_options: Mapping[str, Any] | None = None,
     *,
     color: bool = False,
+    gray: bool = False,
 ) -> np.ndarray | None:
-    """Decode an image as OpenCV BGR, retaining the native local fast path."""
+    """Decode an image as OpenCV BGR, retaining the native local fast path.
+
+    ``color`` and ``gray`` select the layout as in :func:`decode_image_bytes`.
+    """
     import cv2  # type: ignore[import-untyped]
 
     resolved = to_dataset_path(path, storage_options)
-    flags = cv2.IMREAD_COLOR if color else cv2.IMREAD_UNCHANGED
+    flags = _imread_flags(cv2, color=color, gray=gray)
     if not is_remote_path(resolved):
         return cv2.imread(local_open_target(resolved), flags)
     try:
@@ -546,7 +561,7 @@ def decode_image_path(
             payload = stream.read(_MAX_REMOTE_ENCODED_IMAGE_BYTES + 1)
         if len(payload) > _MAX_REMOTE_ENCODED_IMAGE_BYTES:
             return None
-        return decode_image_bytes(payload, color=color)
+        return decode_image_bytes(payload, color=color, gray=gray)
     except (OSError, cv2.error):
         return None
 

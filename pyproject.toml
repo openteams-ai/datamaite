@@ -68,12 +68,15 @@ fmv = [
 ]
 od = [
     "opencv-python-headless>=4.8",
+    "tifffile>=2023.7.10",  # native-mode TIFF decode: >4 bands, float (#84)
 ]
 ic = [
     "opencv-python-headless>=4.8",
+    "tifffile>=2023.7.10",  # native-mode TIFF decode: >4 bands, float (#84)
 ]
 all = [
     "opencv-python-headless>=4.8",
+    "tifffile>=2023.7.10",  # native-mode TIFF decode: >4 bands, float (#84)
     "av>=11; python_version < '3.14'",
     "av>=15.1; python_version >= '3.14'",
 ]

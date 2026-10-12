@@ -39,16 +39,22 @@ class ImageClassificationDataset(MaiteDatasetMetadataField):
     dataset_metadata: DatasetMetadata = field(default_factory=DatasetMetadata)
     dataset_id: str = "datamaite"
     task: Task = Task.IC
+    # MAITE image channel layout: "rgb" (default, (3, H, W)), "gray" ((1, H, W)),
+    # or "native" (every stored band and its dtype, RGB(A) order). Set it with
+    # ``with_image_options``; see datamaite.maite._image.COLOR_MODES (#84).
+    image_color_mode: str = "rgb"
     # Runtime-only credentials/backend configuration used to reopen string
     # ``path_or_uri`` values lazily. InitVar keeps secrets out of dataclass
     # fields, so repr/equality/asdict remain source-record based.
     _storage_options: InitVar[Mapping[str, Any] | None] = field(default=None, kw_only=True)
     _runtime_storage_options: ClassVar[Mapping[str, Any]]
-    _base_image_cache: ClassVar[dict[str, Any]]
+    _base_image_cache: ClassVar[dict[tuple[str, str], Any]]
 
     def __post_init__(self, _storage_options: Mapping[str, Any] | None) -> None:
         if not isinstance(self.samples, tuple):
             object.__setattr__(self, "samples", tuple(self.samples))
+        if self.image_color_mode not in ("rgb", "gray", "native"):
+            raise ValueError(f"image_color_mode must be 'rgb', 'gray', or 'native', got {self.image_color_mode!r}")
         object.__setattr__(self, "_runtime_storage_options", dict(_storage_options or {}))
         object.__setattr__(self, "_base_image_cache", {})
 
@@ -82,6 +88,7 @@ class ImageClassificationDataset(MaiteDatasetMetadataField):
             self.dataset_metadata.taxonomy,
             storage_options=self._runtime_storage_options,
             base_cache=self._base_image_cache,
+            color_mode=self.image_color_mode,
         )
 
     def get_input(self, index: int, /) -> np.ndarray:
@@ -92,6 +99,7 @@ class ImageClassificationDataset(MaiteDatasetMetadataField):
             self.samples[index],
             storage_options=self._runtime_storage_options,
             base_cache=self._base_image_cache,
+            color_mode=self.image_color_mode,
         )
 
     def get_target(self, index: int, /) -> np.ndarray:
@@ -122,6 +130,31 @@ class ImageClassificationDataset(MaiteDatasetMetadataField):
             dimensions=dimensions,
             storage_options=self._runtime_storage_options,
             base_cache=self._base_image_cache,
+            color_mode=self.image_color_mode,
+        )
+
+    def with_image_options(self, *, color_mode: str | None = None) -> ImageClassificationDataset:
+        """Return a copy of this dataset with IC image-view options applied.
+
+        Configures how the MAITE surface decodes images; the source records are
+        unchanged. Omitted (``None``) options keep their current value.
+
+        Parameters
+        ----------
+        color_mode
+            ``"rgb"`` (default) yields ``(3, H, W)`` RGB, replicating grayscale
+            and dropping alpha. ``"gray"`` yields one luma channel,
+            ``(1, H, W)``. ``"native"`` keeps every stored band in RGB(A) order
+            and the stored dtype (``uint16`` and float are not rescaled);
+            multispectral and SAR TIFFs keep any band count. It reads the stored
+            pixel grid, so EXIF orientation is not applied.
+        """
+        from datamaite.maite._image import validate_color_mode
+
+        return replace(
+            self,
+            image_color_mode=validate_color_mode(color_mode) if color_mode is not None else self.image_color_mode,
+            _storage_options=self._runtime_storage_options,
         )
 
     def with_storage_options(self, storage_options: Mapping[str, Any] | None) -> ImageClassificationDataset:

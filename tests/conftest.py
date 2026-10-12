@@ -85,6 +85,33 @@ def memory_root():
     _wipe()
 
 
+@pytest.fixture(scope="session")
+def synthetic_rasters(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """13-band uint16 and 2-band float32 GeoTIFF-layout rasters, like the files attached to #84.
+
+    Band-last, uncompressed, 256 x 256: the Sentinel-2/-1 patch layout that
+    OpenCV cannot read. The pixel values are random; tests compare decodes
+    against ``tifffile.imread`` of the same file.
+    """
+    tifffile = pytest.importorskip("tifffile")
+    import numpy as np
+
+    out = tmp_path_factory.mktemp("rasters")
+    rng = np.random.default_rng(84)
+    for name, pixels in {
+        "synthetic_s2_13band_uint16.tif": rng.integers(1, 20000, (256, 256, 13), dtype=np.uint16),
+        "synthetic_s1_2band_float32.tif": rng.normal(-15.0, 5.0, (256, 256, 2)).astype(np.float32),
+    }.items():
+        tifffile.imwrite(
+            out / name,
+            pixels,
+            photometric="minisblack",
+            planarconfig="contig",
+            extratags=[(33550, "d", 3, (10.0, 10.0, 0.0), True)],  # GeoTIFF ModelPixelScale: 10 m pixels
+        )
+    return out
+
+
 # TR-4-H-3/H-4: every test is `required` unless explicitly marked `optional`.
 @pytest.hookimpl(tryfirst=True)  # run before -m deselection
 def pytest_collection_modifyitems(items):

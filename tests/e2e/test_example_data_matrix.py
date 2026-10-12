@@ -306,3 +306,112 @@ def test_vc_roundtrip_preserves_counts_labels_splits(datasets_root: Path, tmp_pa
     assert _vc_associations(reloaded) == _vc_associations(source), (
         f"{fmt}: per-sample (video, label, split) associations changed"
     )
+
+
+# --- MAITE image color mode on real example data (#84) -----------------------
+#
+# The hermetic suite (tests/test_image_color_mode_e2e.py) proves the mode on
+# synthetic PNGs; this proves it on the real example-data images (camera
+# JPEGs, real COCO/YOLO/VisDrone layouts). For every OD/IC dataset and mode,
+# every sample goes through MAITE's own predict(), and each image is checked
+# against the file decoded directly with OpenCV.
+
+COLOR_MODES = ("rgb", "gray", "native")
+_OD_COLOR_INPUTS = {**OD_ROUNDTRIP, **OD_LOAD_ONLY}
+_IC_COLOR_INPUTS = {**IC_ROUNDTRIP, **IC_LOAD_ONLY}
+
+
+def _file_view(path: str, mode: str, region: BBox | None):  # type: ignore[no-untyped-def]
+    """Expected ``(C, H, W)`` image for ``path`` in ``mode``, decoded with OpenCV directly."""
+    import cv2  # type: ignore[import-untyped]
+    import numpy as np
+
+    if mode == "rgb":
+        hwc = cv2.imread(path, cv2.IMREAD_COLOR)[:, :, ::-1]
+    elif mode == "gray":
+        hwc = cv2.imread(path, cv2.IMREAD_GRAYSCALE)[:, :, None]
+    else:
+        raw = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        hwc = raw[:, :, None] if raw.ndim == 2 else raw
+        if hwc.shape[2] == 3:
+            hwc = hwc[:, :, ::-1]
+        elif hwc.shape[2] == 4:
+            hwc = hwc[:, :, [2, 1, 0, 3]]
+    if region is not None:
+        left, top, width, height = region
+        hwc = hwc[max(0, round(top)) : round(top + height), max(0, round(left)) : round(left + width)]
+    return np.transpose(hwc, (2, 0, 1))
+
+
+def _predicted_inputs(dataset, make_target):  # type: ignore[no-untyped-def]
+    """Every input image exactly as MAITE's ``predict`` hands it to a model."""
+    import numpy as np
+    from maite.tasks import predict
+
+    seen: list[np.ndarray] = []
+
+    class RecordingModel:
+        metadata = {"id": "recording-model"}  # noqa: RUF012 - MAITE model metadata
+
+        def __call__(self, batch):  # type: ignore[no-untyped-def]
+            seen.extend(np.asarray(x) for x in batch)
+            return [make_target() for _ in batch]
+
+    predict(model=RecordingModel(), dataset=dataset, batch_size=4)
+    return seen
+
+
+def _assert_color_mode_view(dataset, mode: str, make_target, target_key) -> None:  # type: ignore[no-untyped-def]
+    """Shape, pixels, targets, and metadata of ``dataset`` in ``mode`` vs the default view."""
+    import numpy as np
+
+    view = dataset.with_image_options(color_mode=mode)
+    inputs = _predicted_inputs(view, make_target)
+    assert len(inputs) == len(dataset)
+    for index, (sample, image) in enumerate(zip(view.samples, inputs, strict=True)):
+        region = getattr(sample, "region", None)
+        expected = _file_view(str(sample.path_or_uri), mode, region)
+        assert image.dtype == np.uint8
+        assert image.shape == expected.shape, f"{sample.image_id}: {image.shape} != {expected.shape}"
+        np.testing.assert_array_equal(image, expected, err_msg=str(sample.image_id))
+
+        _, target, meta = view[index]
+        ref_image, ref_target, ref_meta = dataset[index]
+        assert target_key(target) == target_key(ref_target), f"{sample.image_id}: target changed with mode"
+        assert meta == ref_meta, f"{sample.image_id}: datum metadata changed with mode"
+        assert (meta["height"], meta["width"]) == image.shape[1:] == ref_image.shape[1:], (
+            f"{sample.image_id}: metadata H/W disagree with the decoded image"
+        )
+
+
+@pytest.mark.parametrize("mode", COLOR_MODES)
+@pytest.mark.parametrize("fmt", list(_OD_COLOR_INPUTS), ids=list(_OD_COLOR_INPUTS))
+def test_od_color_mode_on_real_images(datasets_root: Path, fmt: str, mode: str) -> None:
+    """OD: every real image reaches MAITE in ``mode`` with unchanged targets and metadata (#84)."""
+    pytest.importorskip("maite")
+    from datamaite.maite._common import EMPTY_BOXES, EMPTY_LABELS, EMPTY_SCORES
+    from datamaite.maite._od import ObjectDetectionTarget
+
+    rel, dataset_format, exp_images, _ = _OD_COLOR_INPUTS[fmt]
+    dataset = load_od(datasets_root / rel, dataset_format=dataset_format)
+    assert dataset.sample_count == exp_images
+    _assert_color_mode_view(
+        dataset,
+        mode,
+        lambda: ObjectDetectionTarget(EMPTY_BOXES, EMPTY_LABELS, EMPTY_SCORES),
+        lambda t: (t.boxes.tolist(), t.labels.tolist(), t.scores.tolist()),
+    )
+
+
+@pytest.mark.parametrize("mode", COLOR_MODES)
+@pytest.mark.parametrize("fmt", list(_IC_COLOR_INPUTS), ids=list(_IC_COLOR_INPUTS))
+def test_ic_color_mode_on_real_images(datasets_root: Path, fmt: str, mode: str) -> None:
+    """IC (incl. VisDrone object crops): every real image reaches MAITE in ``mode`` (#84)."""
+    pytest.importorskip("maite")
+    import numpy as np
+
+    rel, dataset_format, exp_samples = _IC_COLOR_INPUTS[fmt]
+    dataset = load_ic(datasets_root / rel, dataset_format=dataset_format)
+    assert dataset.sample_count == exp_samples
+    num_classes = len(dataset.index2label())
+    _assert_color_mode_view(dataset, mode, lambda: np.zeros(num_classes, dtype=np.float32), lambda t: t.tolist())

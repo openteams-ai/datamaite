@@ -8,9 +8,9 @@ tensors that plausibly encode one still image and normalises them to RGB
   the flat-images *loader* can validate the *container* (official offset cover,
   not per-tensor salvage) and read image dimensions without transferring any
   tensor bytes;
-* :func:`load_image_rgb_hwc` materialises one tensor with ``numpy`` (a core
-  dependency) at MAITE decode time, range-reading exactly that tensor's byte
-  span. No OpenCV: a tensor needs no image codec.
+* :func:`load_image_rgb_hwc` / :func:`load_image_hwc` materialise one tensor
+  with ``numpy`` (a core dependency) at MAITE decode time, range-reading
+  exactly that tensor's byte span. No OpenCV: a tensor needs no image codec.
 
 Every read goes through :mod:`datamaite._io`, so a local directory, an
 ``s3://`` prefix and a ``memory://`` root behave identically and a remote file
@@ -375,11 +375,31 @@ def _entries_for_decode(path: str | Path, storage_options: Mapping[str, Any] | N
 def load_image_rgb_hwc(path: str | Path, name: str, storage_options: Mapping[str, Any] | None = None) -> np.ndarray:
     """Load tensor ``name`` from ``path`` as an ``(H, W, 3)`` ``uint8`` RGB array.
 
+    Grayscale is replicated to three channels and alpha is dropped; see
+    :func:`load_image_hwc` for the stored channel count.
+    """
+    return load_image_hwc(path, name, storage_options)
+
+
+def load_image_hwc(
+    path: str | Path,
+    name: str,
+    storage_options: Mapping[str, Any] | None = None,
+    *,
+    native_channels: bool = False,
+) -> np.ndarray:
+    """Load tensor ``name`` from ``path`` as an ``(H, W, C)`` ``uint8`` array.
+
+    By default ``C`` is 3 (RGB: grayscale replicated, alpha dropped) and the
+    array is ``uint8``. ``native_channels=True`` keeps the stored tensor
+    instead: its channel count (``(H, W)`` becomes ``(H, W, 1)``, RGBA keeps
+    alpha) and its dtype (``uint16``/``float32``/... are not rescaled).
+
     Decode reuses a fingerprint-keyed header cache (path identity, size, and
     ``st_mtime_ns`` / ETag from one stat) so an N-tensor file does not re-parse
     N times. A rewrite that changes the fingerprint misses the cache and fails
-    loudly instead of reading stale offsets. Source-span and ``H * W * 3``
-    caps apply locally and remotely, before the tensor read. Raises
+    loudly instead of reading stale offsets. Source-span and ``H * W * C``
+    output caps apply locally and remotely, before the tensor read. Raises
     ``ValueError`` for a missing/non-image tensor and propagates
     ``ValueError``/``OSError`` from header parsing.
     """
@@ -394,7 +414,11 @@ def load_image_rgb_hwc(path: str | Path, name: str, storage_options: Mapping[str
     start, end = entry.data_offsets
     span = end - start
     height, width, kind = layout
-    output_bytes = height * width * 3
+    channels, itemsize = 3, 1
+    if native_channels:
+        channels = 1 if kind == "hw" else entry.shape[0 if kind == "chw" else 2]
+        itemsize = np.dtype(dtype).itemsize
+    output_bytes = height * width * channels * itemsize
     if span > MAX_ENCODED_IMAGE_BYTES or output_bytes > MAX_ENCODED_IMAGE_BYTES:
         raise ValueError(
             f"safetensors tensor {name!r} in {path} spans {span} bytes "
@@ -404,9 +428,20 @@ def load_image_rgb_hwc(path: str | Path, name: str, storage_options: Mapping[str
     if len(buffer) < span:
         raise ValueError(f"safetensors tensor {name!r} in {path} is truncated")
     array = np.frombuffer(buffer, dtype=np.dtype(dtype)).reshape(entry.shape)
+    if native_channels:
+        return np.ascontiguousarray(_as_hwc(array, kind))
+    hwc = _to_uint8(_as_hwc(array, kind))
+    if hwc.shape[2] == 1:
+        hwc = np.repeat(hwc, 3, axis=2)
+    elif hwc.shape[2] == 4:
+        hwc = hwc[:, :, :3]
+    return np.ascontiguousarray(hwc)
 
+
+def _as_hwc(array: np.ndarray, kind: str) -> np.ndarray:
+    """View ``array`` in the ``kind`` layout (``hw``/``chw``/``hwc``) as ``(H, W, C)``."""
     # Annotated as the plain ndarray type: pyright otherwise over-narrows the
-    # shape tuple from reshape() and rejects the shape[2] checks below.
+    # shape tuple from reshape() and rejects the callers' shape[2] checks.
     hwc: np.ndarray
     if kind == "hw":
         hwc = array[:, :, None]
@@ -414,12 +449,7 @@ def load_image_rgb_hwc(path: str | Path, name: str, storage_options: Mapping[str
         hwc = np.transpose(array, (1, 2, 0))
     else:
         hwc = array
-    hwc = _to_uint8(hwc)
-    if hwc.shape[2] == 1:
-        hwc = np.repeat(hwc, 3, axis=2)
-    elif hwc.shape[2] == 4:
-        hwc = hwc[:, :, :3]
-    return np.ascontiguousarray(hwc)
+    return hwc
 
 
 def _to_uint8(array: np.ndarray) -> np.ndarray:

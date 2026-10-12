@@ -52,6 +52,10 @@ class ObjectDetectionDataset(MaiteDatasetMetadataField):
     # VideoClassificationDataset (Task.VC); task-aware writer/convert dispatch
     # keys on it.
     task: Task = Task.OD
+    # MAITE image channel layout: "rgb" (default, (3, H, W)), "gray" ((1, H, W)),
+    # or "native" (every stored band and its dtype, RGB(A) order). Set it with
+    # ``with_image_options``; see datamaite.maite._image.COLOR_MODES (#84).
+    image_color_mode: str = "rgb"
     # Runtime-only configuration for reopening remote media while public
     # records remain strings. InitVar prevents credentials from appearing in
     # repr/equality/asdict and the explicit pickle state excludes them too.
@@ -61,6 +65,8 @@ class ObjectDetectionDataset(MaiteDatasetMetadataField):
     def __post_init__(self, _storage_options: Mapping[str, Any] | None) -> None:
         if not isinstance(self.samples, tuple):
             object.__setattr__(self, "samples", tuple(self.samples))
+        if self.image_color_mode not in ("rgb", "gray", "native"):
+            raise ValueError(f"image_color_mode must be 'rgb', 'gray', or 'native', got {self.image_color_mode!r}")
         object.__setattr__(self, "_runtime_storage_options", dict(_storage_options or {}))
 
     def __getstate__(self) -> dict[str, Any]:
@@ -87,13 +93,15 @@ class ObjectDetectionDataset(MaiteDatasetMetadataField):
                 "Indexing a datamaite OD dataset as a MAITE dataset requires the optional "
                 "image stack. Install it with: pip install datamaite[od]"
             ) from exc
-        return build_od_item(sample, storage_options=self._runtime_storage_options)
+        return build_od_item(sample, storage_options=self._runtime_storage_options, color_mode=self.image_color_mode)
 
     def get_input(self, index: int, /) -> np.ndarray:
         """MAITE ``FieldwiseDataset.get_input``: a freshly decoded image for ``index``."""
         from datamaite.maite._od import od_input
 
-        return od_input(self.samples[index], storage_options=self._runtime_storage_options)
+        return od_input(
+            self.samples[index], storage_options=self._runtime_storage_options, color_mode=self.image_color_mode
+        )
 
     def get_target(self, index: int, /) -> ObjectDetectionTarget:
         """MAITE ``FieldwiseDataset.get_target``: the OD target for ``index`` (no image decode)."""
@@ -121,6 +129,31 @@ class ObjectDetectionDataset(MaiteDatasetMetadataField):
             image,
             dimensions=dimensions,
             storage_options=self._runtime_storage_options,
+            color_mode=self.image_color_mode,
+        )
+
+    def with_image_options(self, *, color_mode: str | None = None) -> ObjectDetectionDataset:
+        """Return a copy of this dataset with OD image-view options applied.
+
+        Configures how the MAITE surface decodes images; the source records are
+        unchanged. Omitted (``None``) options keep their current value.
+
+        Parameters
+        ----------
+        color_mode
+            ``"rgb"`` (default) yields ``(3, H, W)`` RGB, replicating grayscale
+            and dropping alpha. ``"gray"`` yields one luma channel,
+            ``(1, H, W)``. ``"native"`` keeps every stored band in RGB(A) order
+            and the stored dtype (``uint16`` and float are not rescaled);
+            multispectral and SAR TIFFs keep any band count. It reads the stored
+            pixel grid, so EXIF orientation is not applied.
+        """
+        from datamaite.maite._image import validate_color_mode
+
+        return replace(
+            self,
+            image_color_mode=validate_color_mode(color_mode) if color_mode is not None else self.image_color_mode,
+            _storage_options=self._runtime_storage_options,
         )
 
     def with_storage_options(self, storage_options: Mapping[str, Any] | None) -> ObjectDetectionDataset:
