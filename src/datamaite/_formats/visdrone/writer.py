@@ -24,11 +24,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 from datamaite._formats._coerce import coerce_finite_float, coerce_int
-from datamaite._formats._fixed_taxonomy import ClassIdResolver, validate_class_map
+from datamaite._formats._fixed_taxonomy import ClassIdResolver, reject_unmatched_class_names, validate_class_map
+from datamaite._formats.visdrone.loader import _VISDRONE_CLASS_NAMES
 from datamaite._io import copy_resource, iter_video_frames, same_resource, source_path, write_cv_image
 from datamaite._types import DatasetFormat
 from datamaite._upath import to_dataset_path
-from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence
+from datamaite.model import BoxAnnotation, BoxTrackDataset, VideoSequence, VisionDataset
 from datamaite.writers import Writer, WriterCapabilities, register_writer
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,12 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
             _validate_image_extension(options["image_extension"])
         validate_class_map(options.get("class_map"), minimum=0, format_label="VisDrone")
 
+    def validate_dataset(self, dataset: VisionDataset, **options: Any) -> None:
+        """Also refuse category names VisDrone has no class for, unless ``class_map`` maps them."""
+        super().validate_dataset(dataset, **options)
+        if isinstance(dataset, BoxTrackDataset):
+            _reject_unmatched_names(dataset, options.get("class_map"))
+
     def write(
         self,
         dataset: BoxTrackDataset,
@@ -133,10 +140,13 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
             overrides both the ``visdrone_category_id`` attribute and the
             generic ``category_id`` fallback; boxes whose category is not in
             the map are dropped and reported in one aggregated warning.
-            Without it, boxes lacking ``visdrone_category_id`` fall back to
-            the generic ``category_id`` with one aggregated warning per
-            write. Applies to both ``gt`` and ``det`` sources since both
-            carry the category column.
+            Without it, a ``category_name`` matching a VisDrone class (case-
+            and separator-insensitive) gives the class; a name VisDrone has no
+            class for raises ``ValueError`` before anything is written; and
+            unnamed boxes lacking ``visdrone_category_id`` fall back to the
+            generic ``category_id`` with one aggregated warning per write.
+            Applies to both ``gt`` and ``det`` sources since both carry the
+            category column.
 
         Notes
         -----
@@ -155,7 +165,9 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
             class_map=validate_class_map(class_map, minimum=0, format_label="VisDrone"),
             logger=logger,
             minimum=0,
+            class_names=_VISDRONE_CLASS_NAMES,
         )
+        _reject_unmatched_names(dataset, class_map)
         dest = to_dataset_path(dest, _options.get("storage_options"))
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -201,6 +213,16 @@ class VisDroneVideoWriter(Writer[BoxTrackDataset]):
             # still surface rather than being silently lost.
             resolver.emit_warnings()
         return written
+
+
+def _reject_unmatched_names(dataset: BoxTrackDataset, class_map: object) -> None:
+    reject_unmatched_class_names(
+        ((box.category_name, box.attributes) for seq in dataset.sequences for box in seq.boxes),
+        attribute="visdrone_category_id",
+        class_map=class_map,
+        class_names=_VISDRONE_CLASS_NAMES,
+        format_label="VisDrone",
+    )
 
 
 def _append_written(written: list[Path], seen: set[Path], path: Path) -> None:

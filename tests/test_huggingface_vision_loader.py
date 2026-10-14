@@ -283,11 +283,66 @@ class TestHuggingFaceVisionObjectDetection:
         detection = ds.samples[0].detections[0]
         assert detection.bbox == (5.0, 6.0, 7.0, 8.0)
         assert detection.category_name == "person"
-        assert detection.category_id is None
+        # A name category gets an integer id, so MAITE targets/COCO/VisDrone see a class.
+        assert detection.category_id == 0
         taxonomy = ds.dataset_metadata.taxonomy
         assert taxonomy is not None
-        assert [(e.source_id, e.name) for e in taxonomy.entries] == [("person", "person")]
+        assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "person")]
         assert (ds.samples[0].width, ds.samples[0].height) == (100, 200)
+
+    def test_name_categories_get_integer_ids_and_maite_labels(self, tmp_path: Path) -> None:
+        # datamaite's own Hugging Face writer emits category names. Left without
+        # an integer id, every MAITE target label was -1 and COCO/VisDrone
+        # outputs dropped the boxes.
+        _touch_image(tmp_path / "a.jpg")
+        _touch_image(tmp_path / "b.jpg")
+        _write_jsonl(
+            tmp_path / "metadata.jsonl",
+            [
+                {
+                    "file_name": "a.jpg",
+                    "objects": {"bbox": [[0, 0, 2, 2], [1, 1, 2, 2]], "categories": ["Pedestrian", "Car"]},
+                },
+                {"file_name": "b.jpg", "objects": {"bbox": [[0, 0, 3, 3]], "categories": ["car"]}},
+            ],
+        )
+
+        ds = load_od(tmp_path, dataset_format="huggingface_vision")
+
+        # Dense ids ordered case-insensitively, like the IC loader (a plain sort
+        # would put "Pedestrian" before "car").
+        assert ds.index2label() == {0: "Car", 1: "car", 2: "Pedestrian"}
+        assert [d.category_id for d in ds.samples[0].detections] == [2, 0]
+        assert ds.get_target(0).labels.tolist() == [2, 0]
+        assert ds.get_target(1).labels.tolist() == [1]
+
+    def test_name_categories_get_ids_after_existing_integer_ids(self, tmp_path: Path) -> None:
+        # Rows mixing integer and name categories: a name must not reuse an
+        # integer id that already labels a different class.
+        _touch_image(tmp_path / "a.jpg")
+        _write_jsonl(
+            tmp_path / "metadata.jsonl",
+            [{"file_name": "a.jpg", "objects": {"bbox": [[0, 0, 2, 2], [1, 1, 2, 2]], "categories": [0, "car"]}}],
+        )
+
+        ds = load_od(tmp_path, dataset_format="huggingface_vision")
+
+        assert [d.category_id for d in ds.samples[0].detections] == [0, 1]
+
+    def test_name_categories_in_the_classlabel_table_take_its_index(self) -> None:
+        # Called directly: recovering a ClassLabel table needs a parquet file
+        # (pyarrow), which the core install lacks.
+        from datamaite._formats.huggingface_vision.loader import _assign_string_category_ids
+        from datamaite.records import ImageObjectDetectionSample, ObjectDetectionAnnotation
+
+        sample = ImageObjectDetectionSample(
+            image_id="a",
+            detections=(ObjectDetectionAnnotation(bbox=(0.0, 0.0, 2.0, 2.0), category_name="car"),),
+        )
+
+        (resolved,) = _assign_string_category_ids([sample], category_names=("person", "car"))
+
+        assert [(d.category_id, d.source_category_id) for d in resolved.detections] == [(1, 1)]
 
     def test_malformed_objects_are_skipped_per_detection(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
         _touch_image(tmp_path / "img.jpg")

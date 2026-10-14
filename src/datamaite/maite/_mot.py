@@ -17,9 +17,10 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast, overload
+from typing import Any, Literal, cast, overload
 
 import numpy as np
+from typing_extensions import TypedDict
 
 from datamaite._io import decode_image_path
 from datamaite._upath import is_remote_path, to_dataset_path
@@ -58,7 +59,7 @@ class MotDatumMetadata(TypedDict):
 
 
 @dataclass(frozen=True)
-class FrameTarget:
+class _FrameTarget:
     """One frame's detections; satisfies ``SingleFrameObjectTrackingTarget``."""
 
     boxes: np.ndarray
@@ -69,7 +70,7 @@ class FrameTarget:
 
 # Shared target for unlabeled frames: zero detections, no per-frame allocation.
 # Reused across every empty frame (common under empty_frame_policy="all").
-_EMPTY_FRAME_TARGET = FrameTarget(
+_EMPTY_FRAME_TARGET = _FrameTarget(
     boxes=EMPTY_BOXES,
     labels=EMPTY_LABELS,
     scores=EMPTY_SCORES,
@@ -77,10 +78,10 @@ _EMPTY_FRAME_TARGET = FrameTarget(
 )
 
 
-def _frame_target(boxes: list[BoxAnnotation]) -> FrameTarget:
+def _frame_target(boxes: list[BoxAnnotation]) -> _FrameTarget:
     if not boxes:
         return _EMPTY_FRAME_TARGET
-    return FrameTarget(
+    return _FrameTarget(
         boxes=boxes_array(boxes),
         labels=labels_array(boxes),
         scores=scores_array(boxes),
@@ -88,7 +89,7 @@ def _frame_target(boxes: list[BoxAnnotation]) -> FrameTarget:
     )
 
 
-class _FrameTracks(Sequence[FrameTarget]):
+class _FrameTracks(Sequence[_FrameTarget]):
     """Lazy ``Sequence[SingleFrameObjectTrackingTarget]`` over a video's frames.
 
     Builds a frame target on access rather than materializing one per frame up
@@ -106,12 +107,12 @@ class _FrameTracks(Sequence[FrameTarget]):
         return len(self._frame_order)
 
     @overload
-    def __getitem__(self, index: int) -> FrameTarget: ...
+    def __getitem__(self, index: int) -> _FrameTarget: ...
 
     @overload
     def __getitem__(self, index: slice) -> _FrameTracks: ...
 
-    def __getitem__(self, index: int | slice) -> FrameTarget | _FrameTracks:
+    def __getitem__(self, index: int | slice) -> _FrameTarget | _FrameTracks:
         if isinstance(index, slice):
             # Stay lazy: a slice is a view over the sliced frame order.
             return _FrameTracks(self._frame_order[index], self._by_frame)
@@ -119,10 +120,10 @@ class _FrameTracks(Sequence[FrameTarget]):
 
 
 @dataclass(frozen=True)
-class MotTarget:
+class _MotTarget:
     """Tracks over a video's frames; satisfies ``MultiobjectTrackingTarget``."""
 
-    frame_tracks: Sequence[FrameTarget]
+    frame_tracks: Sequence[_FrameTarget]
 
 
 def _frame_plan(
@@ -204,7 +205,7 @@ class _ImageSequenceStream:
 
 def build_mot_item(
     dataset: BoxTrackDataset, seq: VideoSequence
-) -> tuple[Iterable[DecodedFrame], MotTarget, MotDatumMetadata]:
+) -> tuple[Iterable[DecodedFrame], _MotTarget, MotDatumMetadata]:
     """Build one MAITE MOT item ``(VideoStream, MotTarget, DatumMetadata)`` for ``seq``.
 
     ``seq`` is one video-bearing sequence, selected by the caller
@@ -214,7 +215,7 @@ def build_mot_item(
     """
     by_frame = seq.boxes_by_frame()
     frame_order, source_indices = _frame_plan(seq, by_frame, dataset.empty_frame_policy)
-    target = MotTarget(frame_tracks=_FrameTracks(frame_order, by_frame))
+    target = _MotTarget(frame_tracks=_FrameTracks(frame_order, by_frame))
 
     if seq.video_path is not None:
         decoder = dataset._decoder or default_decoder(dataset._runtime_storage_options)

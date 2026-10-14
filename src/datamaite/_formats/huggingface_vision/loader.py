@@ -48,7 +48,7 @@ import json
 import logging
 import math
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -259,6 +259,7 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
                     metadata=_sample_metadata(row),
                 )
             )
+        samples = _assign_string_category_ids(samples, category_names=category_names)
         taxonomy = _od_taxonomy(samples, class_names=category_names)
         if not samples:
             logger.warning("No loadable Hugging Face vision OD images found in %s", root)
@@ -667,6 +668,47 @@ def _classlabel_name(index: int, names: tuple[str, ...] | None) -> str | None:
     if names is not None and 0 <= index < len(names):
         return names[index]
     return None
+
+
+def _assign_string_category_ids(
+    samples: list[ImageObjectDetectionSample], *, category_names: tuple[str, ...] | None
+) -> list[ImageObjectDetectionSample]:
+    """Give string ``objects.categories`` (class names) integer category ids.
+
+    Hugging Face OD metadata may carry categories as names -- datamaite's own
+    writer emits names -- and a detection without an integer ``category_id``
+    has no MAITE label (targets become ``-1``) and no COCO/VisDrone class. A
+    name in the recovered ``ClassLabel`` table takes its index; other names get
+    dense ids ordered case-insensitively (mirroring the IC loader), numbered
+    after every integer id already present so none collide.
+    """
+    names = {
+        detection.category_name
+        for sample in samples
+        for detection in sample.detections
+        if detection.category_id is None and detection.category_name is not None
+    }
+    if not names:
+        return samples
+    lookup: dict[str, int] = {name: index for index, name in enumerate(category_names or ())}
+    used = set(lookup.values()) | {
+        detection.category_id
+        for sample in samples
+        for detection in sample.detections
+        if isinstance(detection.category_id, int) and not isinstance(detection.category_id, bool)
+    }
+    next_id = max(used, default=-1) + 1
+    for name in sorted(names - lookup.keys(), key=lambda value: (value.casefold(), value)):
+        lookup[name] = next_id
+        next_id += 1
+
+    def resolved(detection: ObjectDetectionAnnotation) -> ObjectDetectionAnnotation:
+        if detection.category_id is not None or detection.category_name not in lookup:
+            return detection
+        category_id = lookup[detection.category_name]
+        return replace(detection, category_id=category_id, source_category_id=category_id)
+
+    return [replace(sample, detections=tuple(resolved(d) for d in sample.detections)) for sample in samples]
 
 
 def _od_taxonomy(

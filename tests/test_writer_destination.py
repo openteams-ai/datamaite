@@ -20,7 +20,8 @@ from datamaite.image_classification import ImageClassificationDataset
 from datamaite.loaders import load, load_mot
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
-from datamaite.writers import WriterKey, available_writer_keys
+from datamaite.records import ImageObjectDetectionSample, ObjectDetectionAnnotation
+from datamaite.writers import WriterKey, available_writer_keys, get_writer
 
 from .test_coco_writer import _coco_root
 from .test_coco_writer import _fingerprint as _od_fingerprint
@@ -265,6 +266,61 @@ class TestOptionValidationBeforeReplaceAllWriters:
             "write(), add a validate_options override plus a row in _OPTION_VALIDATION_CASES; otherwise "
             "add its key to _NO_OPTION_VALIDATION_KEYS."
         )
+
+
+_EMPTY_BY_TASK = {Task.MOT: _EMPTY, Task.OD: _EMPTY_OD, Task.IC: _EMPTY_IC, Task.VC: _EMPTY_VC}
+
+
+class TestIncludeImagesFalse:
+    """Writers discard unknown options, so a writer that always copies its media must refuse
+    ``include_images=False`` rather than copy everything the caller asked it not to.
+    """
+
+    @pytest.mark.parametrize("key", sorted(available_writer_keys(), key=str), ids=str)
+    def test_rejected_unless_the_writer_supports_it(self, key: WriterKey, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "precious.txt").write_text("keep me", encoding="utf-8")
+        dataset = _EMPTY_BY_TASK[key.task]
+        options = {"output_format": key.format, "output_variant": key.variant, "mode": "replace"}
+        if key.format in {DatasetFormat.COCO, DatasetFormat.YOLO} and key.task is Task.OD:
+            write(dataset, out, include_images=False, **options)
+        else:
+            with pytest.raises(ValueError, match="no include_images option"):
+                write(dataset, out, include_images=False, **options)
+            assert (out / "precious.txt").read_text(encoding="utf-8") == "keep me"
+
+    def test_include_images_true_is_accepted_everywhere(self, tmp_path: Path) -> None:
+        write(_EMPTY_OD, tmp_path / "out", output_format="visdrone", include_images=True)
+
+    @pytest.mark.parametrize("key", sorted(available_writer_keys(), key=str), ids=str)
+    @pytest.mark.parametrize("value", [None, 0, "false"])
+    def test_non_boolean_rejected_by_every_writer(self, key: WriterKey, value: object, tmp_path: Path) -> None:
+        # Truthiness-testing writers (COCO, YOLO OD) would read None as "don't
+        # copy" while every other writer copies; no writer may guess.
+        options = {"output_format": key.format, "output_variant": key.variant}
+        with pytest.raises(TypeError, match="include_images must be True or False"):
+            write(_EMPTY_BY_TASK[key.task], tmp_path / "out", include_images=value, **options)
+        assert not (tmp_path / "out").exists()
+
+    @pytest.mark.parametrize("output_format", [DatasetFormat.COCO, DatasetFormat.YOLO])
+    def test_direct_writer_call_rejects_none(self, output_format: DatasetFormat, tmp_path: Path) -> None:
+        dataset = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id=1,
+                    file_name="a.jpg",
+                    width=10,
+                    height=10,
+                    image_bytes=b"pixels",
+                    detections=(ObjectDetectionAnnotation(bbox=(1.0, 1.0, 2.0, 2.0), category_id=0),),
+                ),
+            ),
+        )
+        writer = get_writer(output_format, task=Task.OD)
+        with pytest.raises(TypeError, match="include_images must be True or False"):
+            writer.write(dataset, tmp_path / "out", include_images=None)
+        assert not (tmp_path / "out").exists()
 
 
 class TestReplaceMode:

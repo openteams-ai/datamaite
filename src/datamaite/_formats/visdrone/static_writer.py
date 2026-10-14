@@ -49,13 +49,14 @@ from pathlib import Path, PurePath
 from typing import Any, ClassVar
 
 from datamaite._formats._coerce import coerce_finite_float, coerce_int
-from datamaite._formats._fixed_taxonomy import ClassIdResolver, validate_class_map
+from datamaite._formats._fixed_taxonomy import ClassIdResolver, reject_unmatched_class_names, validate_class_map
 from datamaite._formats.visdrone.static_loader import IMAGE_EXTENSIONS, VISDRONE_STATIC_CLASSES
-from datamaite._io import copy_resource, same_resource, source_path
+from datamaite._io import copy_resource, same_resource, sample_image_dimensions, source_path
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import to_dataset_path
 from datamaite.geometry import BBox, has_positive_area
 from datamaite.image_classification import ImageClassificationDataset
+from datamaite.model import VisionDataset
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import (
     ClassificationLabel,
@@ -126,6 +127,12 @@ class VisDroneObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             _normalize_split(options["split"], field="split")
         validate_class_map(options.get("class_map"), minimum=0, format_label="VisDrone")
 
+    def validate_dataset(self, dataset: VisionDataset, **options: Any) -> None:
+        """Also refuse category names VisDrone has no class for, unless ``class_map`` maps them."""
+        super().validate_dataset(dataset, **options)
+        if isinstance(dataset, ObjectDetectionDataset):
+            _reject_unmatched_od_names(dataset, options.get("class_map"))
+
     def write(
         self,
         dataset: ObjectDetectionDataset,
@@ -152,7 +159,9 @@ class VisDroneObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             first) or ``category_id`` ints; values must be ``>= 0``. When
             provided it overrides both the ``visdrone_category_id`` attribute
             and the generic ``category_id`` fallback; unmapped boxes are
-            dropped and reported in one aggregated warning.
+            dropped and reported in one aggregated warning. Without it, a
+            ``category_name`` VisDrone has no class for raises ``ValueError``
+            before anything is written.
 
         Notes
         -----
@@ -167,6 +176,7 @@ class VisDroneObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         """
         fallback_split = _normalize_split(split, field="split")
         resolver = _resolver(class_map)
+        _reject_unmatched_od_names(dataset, class_map)
         dest_path = to_dataset_path(dest, _.get("storage_options"))
         dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -222,6 +232,12 @@ class VisDroneImageClassificationWriter(Writer[ImageClassificationDataset]):
             _normalize_split(options["split"], field="split")
         validate_class_map(options.get("class_map"), minimum=0, format_label="VisDrone")
 
+    def validate_dataset(self, dataset: VisionDataset, **options: Any) -> None:
+        """Also refuse category names VisDrone has no class for, unless ``class_map`` maps them."""
+        super().validate_dataset(dataset, **options)
+        if isinstance(dataset, ImageClassificationDataset):
+            _reject_unmatched_ic_names(dataset, options.get("class_map"))
+
     def write(
         self,
         dataset: ImageClassificationDataset,
@@ -246,6 +262,7 @@ class VisDroneImageClassificationWriter(Writer[ImageClassificationDataset]):
         """
         fallback_split = _normalize_split(split, field="split")
         resolver = _resolver(class_map)
+        _reject_unmatched_ic_names(dataset, class_map)
         dest_path = to_dataset_path(dest, _.get("storage_options"))
         dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -302,6 +319,27 @@ class VisDroneImageClassificationWriter(Writer[ImageClassificationDataset]):
 # ---------------------------------------------------------------------------
 
 
+def _reject_unmatched_od_names(dataset: ObjectDetectionDataset, class_map: object) -> None:
+    reject_unmatched_class_names(
+        ((d.category_name, d.attributes) for sample in dataset.samples for d in sample.detections),
+        attribute="visdrone_category_id",
+        class_map=class_map,
+        class_names=dict(enumerate(VISDRONE_STATIC_CLASSES)),
+        format_label="VisDrone",
+    )
+
+
+def _reject_unmatched_ic_names(dataset: ImageClassificationDataset, class_map: object) -> None:
+    # Only the first label is written (see _single_label).
+    reject_unmatched_class_names(
+        ((s.labels[0].category_name, s.labels[0].attributes) for s in dataset.samples if s.labels),
+        attribute="visdrone_category_id",
+        class_map=class_map,
+        class_names=dict(enumerate(VISDRONE_STATIC_CLASSES)),
+        format_label="VisDrone",
+    )
+
+
 def _resolver(class_map: Mapping[str | int, int] | None) -> ClassIdResolver:
     return ClassIdResolver(
         format_label="VisDrone",
@@ -309,6 +347,7 @@ def _resolver(class_map: Mapping[str | int, int] | None) -> ClassIdResolver:
         class_map=validate_class_map(class_map, minimum=0, format_label="VisDrone"),
         logger=logger,
         minimum=0,
+        class_names=dict(enumerate(VISDRONE_STATIC_CLASSES)),
     )
 
 
@@ -449,9 +488,13 @@ def _row(bbox: BBox, *, class_id: int, attributes: Mapping[str, Any]) -> list[fl
 def _ic_bbox(sample: ImageClassificationSample) -> BBox | None:
     if sample.region is not None:
         return sample.region
-    if sample.width is not None and sample.height is not None and sample.width > 0 and sample.height > 0:
-        return (0.0, 0.0, float(sample.width), float(sample.height))
-    return None
+    # Whole-image sample: the crop is the full image. Formats such as YOLO and
+    # Hugging Face classification do not store dimensions, so fall back to the
+    # image header.
+    dimensions = sample_image_dimensions(sample)
+    if dimensions is None:
+        return None
+    return (0.0, 0.0, float(dimensions[0]), float(dimensions[1]))
 
 
 def _single_label(sample: ImageClassificationSample) -> ClassificationLabel | None:

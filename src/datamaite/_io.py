@@ -496,6 +496,37 @@ def probe_image_dimensions(
     return _positive_dimensions(_encoded_image_dimensions(payload))
 
 
+def sample_image_dimensions(sample: Any) -> tuple[int, int] | None:
+    """Return an image record's ``(width, height)``: stored values, else probed from its image header.
+
+    Several formats (VisDrone, YOLO, Hugging Face classification) do not store
+    image dimensions, so records loaded from them carry ``None``. Writers whose
+    output needs dimensions (normalized YOLO boxes, VisDrone whole-image crops,
+    COCO ``images[]``) call this rather than dropping the sample. The header is
+    read through the active writer session's source storage options; ``None``
+    when the source is missing or not a probeable encoded image.
+    """
+    width, height = getattr(sample, "width", None), getattr(sample, "height", None)
+    if (
+        isinstance(width, int)
+        and isinstance(height, int)
+        and not isinstance(width, bool)
+        and not isinstance(height, bool)
+        and width > 0
+        and height > 0
+    ):
+        return width, height
+    source = getattr(sample, "image_bytes", None)
+    if source is None:
+        source = getattr(sample, "path_or_uri", None)
+    if source is None:
+        return None
+    try:
+        return probe_image_dimensions(source, _SOURCE_STORAGE_OPTIONS.get() or {})
+    except (OSError, ValueError):
+        return None
+
+
 def _positive_dimensions(dimensions: tuple[int, int] | None) -> tuple[int, int] | None:
     if dimensions is None or dimensions[0] <= 0 or dimensions[1] <= 0:
         return None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,22 @@ from datamaite.records import (
 from datamaite.writers import available_output_formats, get_writer
 
 _JPEG = b"\xff\xd8\xff\xe0 fake jpeg payload"
+
+
+def _png(width: int, height: int) -> bytes:
+    """A real (header-probeable) PNG, unlike the opaque ``_JPEG`` payload."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + (b"\x00\x00\x00" * width) for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
 
 _LOGGER = "datamaite._formats.visdrone.static_writer"
 
@@ -169,7 +187,9 @@ class TestVisDroneObjectDetectionWriter:
         source = tmp_path / "img.jpg"
         source.write_bytes(_JPEG)
         detections = tuple(
-            ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=4, category_name="car") for _ in range(5)
+            # Unnamed boxes fall back to category_id.
+            ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=4)
+            for _ in range(5)
         )
         dataset = ObjectDetectionDataset(
             samples=(
@@ -204,6 +224,84 @@ class TestVisDroneObjectDetectionWriter:
         rows = (tmp_path / "dest" / "VisDrone2019-DET-train" / "annotations" / "img.txt").read_text(encoding="utf-8")
         assert rows == ""
         assert "outside the VisDrone" in caplog.text
+
+    def test_category_names_matching_visdrone_classes_win_over_foreign_ids(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        # YOLO numbers classes 0..n-1 (pedestrian=0, car=1). Reinterpreting those
+        # ids against the VisDrone table turned cars into pedestrians (1) and
+        # dropped pedestrians (0 = ignored regions); the names identify them.
+        source = tmp_path / "img.jpg"
+        source.write_bytes(_JPEG)
+        dataset = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id="img",
+                    path_or_uri=str(source),
+                    file_name="img.jpg",
+                    detections=(
+                        ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=0, category_name="pedestrian"),
+                        ObjectDetectionAnnotation(bbox=(5.0, 6.0, 7.0, 8.0), category_id=1, category_name="Car"),
+                        ObjectDetectionAnnotation(
+                            bbox=(9.0, 9.0, 2.0, 2.0), category_id=2, category_name="Awning_Tricycle"
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            get_writer("visdrone", task=Task.OD).write(dataset, tmp_path / "dest")
+
+        rows = (tmp_path / "dest" / "VisDrone2019-DET-train" / "annotations" / "img.txt").read_text(encoding="utf-8")
+        assert [row.split(",")[5] for row in rows.splitlines()] == ["1", "4", "8"]
+        assert "fell back to" not in caplog.text
+
+    def test_category_names_missing_from_visdrone_classes_raise_before_writing(self, tmp_path: Path) -> None:
+        # "motorcycle" (4) is not a VisDrone class; falling back to its id would
+        # write it as VisDrone 4, the same id the matched "car" (3) gets, and
+        # dropping it would lose it silently.
+        dataset = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id="img",
+                    image_bytes=_JPEG,
+                    file_name="img.jpg",
+                    detections=(
+                        ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=3, category_name="car"),
+                        ObjectDetectionAnnotation(bbox=(5.0, 6.0, 7.0, 8.0), category_id=4, category_name="motorcycle"),
+                    ),
+                ),
+            )
+        )
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        (dest / "keep.txt").write_text("existing", encoding="utf-8")
+
+        with pytest.raises(ValueError, match=r"no class for category name\(s\) motorcycle=1; pass class_map="):
+            write(dataset, dest, output_format="visdrone", mode="replace")
+        assert [p.name for p in dest.iterdir()] == ["keep.txt"]  # refused before the replace clear
+        with pytest.raises(ValueError, match="motorcycle"):
+            get_writer("visdrone", task=Task.OD).write(dataset, tmp_path / "direct")
+        assert not (tmp_path / "direct").exists()
+
+        write(dataset, tmp_path / "mapped", output_format="visdrone", class_map={"car": 4, "motorcycle": 10})
+        rows = (tmp_path / "mapped" / "VisDrone2019-DET-train" / "annotations" / "img.txt").read_text(encoding="utf-8")
+        assert [row.split(",")[5] for row in rows.splitlines()] == ["4", "10"]
+
+    def test_ic_category_name_missing_from_visdrone_classes_raises(self, tmp_path: Path) -> None:
+        dataset = ImageClassificationDataset(
+            samples=(
+                ImageClassificationSample(
+                    image_id="crop",
+                    image_bytes=_JPEG,
+                    file_name="img.jpg",
+                    region=(1.0, 2.0, 3.0, 4.0),
+                    labels=(ClassificationLabel(category_id=4, category_name="motorcycle"),),
+                ),
+            )
+        )
+        with pytest.raises(ValueError, match="motorcycle=1"):
+            write(dataset, tmp_path / "dest", output_format="visdrone")
+        assert not (tmp_path / "dest").exists()
 
     def test_skips_missing_source_and_writes_bytes(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
         dataset = ObjectDetectionDataset(
@@ -297,9 +395,7 @@ class TestVisDroneObjectDetectionWriter:
                     image_id="img",
                     image_bytes=_JPEG,
                     file_name="img.jpg",
-                    detections=(
-                        ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=0, category_name="person"),
-                    ),
+                    detections=(ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=0),),
                 ),
             )
         )
@@ -394,7 +490,27 @@ class TestVisDroneImageClassificationWriter:
         rows = (dest / "VisDrone2019-DET-train" / "annotations" / "whole.txt").read_text(encoding="utf-8")
         assert rows == "0,0,64,48,1,4,0,0\n"
 
-    def test_regionless_sample_without_dims_is_skipped(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+    def test_regionless_sample_without_dims_reads_them_from_the_image(self, tmp_path: Path) -> None:
+        # YOLO / Hugging Face classification store no dimensions; the whole-image
+        # crop comes from the image header instead of the sample being dropped.
+        dataset = ImageClassificationDataset(
+            samples=(
+                ImageClassificationSample(
+                    image_id="whole",
+                    image_bytes=_png(64, 48),
+                    file_name="whole.png",
+                    labels=(ClassificationLabel(category_id=4, source_category_id=4, category_name="car"),),
+                ),
+            )
+        )
+        dest = tmp_path / "dest"
+
+        get_writer("visdrone", task=Task.IC).write(dataset, dest)
+
+        rows = (dest / "VisDrone2019-DET-train" / "annotations" / "whole.txt").read_text(encoding="utf-8")
+        assert rows == "0,0,64,48,1,4,0,0\n"
+
+    def test_regionless_sample_with_undeterminable_dims_is_skipped(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
         dataset = ImageClassificationDataset(
             samples=(
                 ImageClassificationSample(
@@ -487,7 +603,7 @@ class TestVisDroneImageClassificationWriter:
                     image_bytes=_JPEG,
                     file_name="img.jpg",
                     region=(1.0, 2.0, 3.0, 4.0),
-                    labels=(ClassificationLabel(category_id=0, category_name="person"),),
+                    labels=(ClassificationLabel(category_id=0),),
                 ),
             )
         )

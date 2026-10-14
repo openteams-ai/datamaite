@@ -212,18 +212,204 @@ class TestCocoWriterDrops:
         assert [a["category_id"] for a in document["annotations"]] == [2]
         assert "require an integer category_id" in caplog.text
 
-    def test_non_integer_image_id_dropped(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_non_integer_image_id_gets_unused_integer(self, tmp_path: Path) -> None:
+        # YOLO/Hugging Face/VisDrone/flat-image records use string ids; dropping
+        # them emptied every conversion into COCO. They get a fresh integer that
+        # avoids the integer ids already present: taking 1 here would make the
+        # later sample with id 1 a "duplicate" and drop it.
         ds = ObjectDetectionDataset(
             samples=(
-                ImageObjectDetectionSample(image_id="img-one", file_name="a.jpg"),
-                ImageObjectDetectionSample(image_id=2, file_name="b.jpg"),
+                ImageObjectDetectionSample(
+                    image_id="img-one",
+                    file_name="a.jpg",
+                    detections=(ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1),),
+                ),
+                ImageObjectDetectionSample(image_id=1, file_name="b.jpg"),
+            ),
+        )
+        write(ds, tmp_path, output_format="coco", include_images=False)
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [(img["id"], img["file_name"]) for img in document["images"]] == [(2, "a.jpg"), (1, "b.jpg")]
+        assert [ann["image_id"] for ann in document["annotations"]] == [2]
+
+    def test_duplicate_string_image_id_keeps_the_first(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # Fresh integer ids must not hide a repeated source id as two images.
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(image_id="img", file_name="a.jpg"),
+                ImageObjectDetectionSample(image_id="img", file_name="b.jpg"),
+            ),
+        )
+        with caplog.at_level(logging.WARNING, logger="datamaite"):
+            write(ds, tmp_path, output_format="coco", include_images=False)
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["a.jpg"]
+        assert "Skipping duplicate image id img" in caplog.text
+
+    def test_colliding_file_names_get_distinct_files(self, tmp_path: Path) -> None:
+        # COCO keeps images in one flat directory. Same-named images from
+        # different splits (YOLO images/train/img.jpg, images/val/img.jpg) used
+        # to share one file, so one split's boxes pointed at the other's pixels.
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(image_id=1, file_name="img.jpg", split="train", image_bytes=b"train-pixels"),
+                ImageObjectDetectionSample(image_id=2, file_name="img.jpg", split="val", image_bytes=b"val-pixels"),
+            ),
+        )
+        write(ds, tmp_path, output_format="coco")
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["img.jpg", "img_2.jpg"]
+        assert (tmp_path / "img.jpg").read_bytes() == b"train-pixels"
+        assert (tmp_path / "img_2.jpg").read_bytes() == b"val-pixels"
+
+    def test_file_names_differing_only_in_case_get_distinct_files(self, tmp_path: Path) -> None:
+        # On case-insensitive filesystems (macOS, Windows) IMG.jpg and img.jpg
+        # are one file, so the second image would overwrite the first.
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(image_id=1, file_name="IMG.jpg", split="train", image_bytes=b"train-pixels"),
+                ImageObjectDetectionSample(image_id=2, file_name="img.jpg", split="val", image_bytes=b"val-pixels"),
+            ),
+        )
+        write(ds, tmp_path, output_format="coco")
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["IMG.jpg", "img_2.jpg"]
+        assert (tmp_path / "IMG.jpg").read_bytes() == b"train-pixels"
+        assert (tmp_path / "img_2.jpg").read_bytes() == b"val-pixels"
+
+    def test_without_images_file_names_are_relative_to_the_sources_common_directory(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Bare names from images/train/ and images/val/ could not all be found
+        # under one images_dir; paths relative to images/ can.
+        images = tmp_path / "src" / "images"
+        for split in ("train", "val"):
+            (images / split).mkdir(parents=True)
+            (images / split / "img.jpg").write_bytes(b"pixels")
+        ds = ObjectDetectionDataset(
+            samples=tuple(
+                ImageObjectDetectionSample(image_id=i, file_name="img.jpg", path_or_uri=str(images / split / "img.jpg"))
+                for i, split in enumerate(["train", "val"], start=1)
+            ),
+        )
+        out = tmp_path / "out"
+        with caplog.at_level(logging.INFO, logger=_WRITER_LOGGER):
+            write(ds, out, output_format="coco", include_images=False)
+        document = json.loads((out / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["train/img.jpg", "val/img.jpg"]
+        assert f"relative to {images.as_posix()}" in caplog.text
+        reloaded = load_od(out, dataset_format="coco", images_dir=str(images))
+        assert [Path(s.path_or_uri or "").is_file() for s in reloaded.samples] == [True, True]
+
+    def test_without_images_sources_with_no_shared_directory_keep_bare_file_names(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A local path and an s3:// URI share no parent: the relative names would
+        # be absolute or contain ":", which used to skip both samples and boxes.
+        detection = ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1, category_name="car")
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id=1,
+                    file_name="x.jpg",
+                    path_or_uri="/data/a/x.jpg",
+                    width=8,
+                    height=8,
+                    detections=(detection,),
+                ),
+                ImageObjectDetectionSample(
+                    image_id=2,
+                    file_name="y.jpg",
+                    path_or_uri="s3://b/y.jpg",
+                    width=8,
+                    height=8,
+                    detections=(detection,),
+                ),
+                ImageObjectDetectionSample(
+                    image_id=3, file_name="z.jpg", image_bytes=b"pixels", width=8, height=8, detections=(detection,)
+                ),
             ),
         )
         with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
             write(ds, tmp_path, output_format="coco", include_images=False)
         document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
-        assert [img["id"] for img in document["images"]] == [2]
-        assert "image ids are integers" in caplog.text
+        assert [img["file_name"] for img in document["images"]] == ["x.jpg", "y.jpg", "z.jpg"]
+        assert len(document["annotations"]) == 3
+        assert "unsafe file_name" not in caplog.text
+        assert caplog.text.count("keep a bare COCO file_name") == 1
+        assert "3 image(s)" in caplog.text
+
+    def test_without_images_bytes_only_sample_among_relative_names_is_warned(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        images = tmp_path / "src" / "images"
+        for split in ("train", "val"):
+            (images / split).mkdir(parents=True)
+            (images / split / "img.jpg").write_bytes(b"pixels")
+        ds = ObjectDetectionDataset(
+            samples=(
+                *(
+                    ImageObjectDetectionSample(
+                        image_id=i, file_name="img.jpg", path_or_uri=str(images / split / "img.jpg")
+                    )
+                    for i, split in enumerate(["train", "val"], start=1)
+                ),
+                ImageObjectDetectionSample(image_id=3, file_name="bytes.jpg", image_bytes=b"pixels"),
+            ),
+        )
+        with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="coco", include_images=False)
+        document = json.loads((tmp_path / "out" / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["train/img.jpg", "val/img.jpg", "bytes.jpg"]
+        assert f"1 image(s) keep a bare COCO file_name because no safe path relative to {images.as_posix()}" in (
+            caplog.text
+        )
+
+    def test_without_images_one_source_directory_keeps_bare_file_names(self, tmp_path: Path) -> None:
+        images = tmp_path / "src"
+        images.mkdir()
+        ds = ObjectDetectionDataset(
+            samples=tuple(
+                ImageObjectDetectionSample(image_id=i, file_name=name, path_or_uri=str(images / name))
+                for i, name in enumerate(["a.jpg", "b.jpg"], start=1)
+            ),
+        )
+        write(ds, tmp_path / "out", output_format="coco", include_images=False)
+        document = json.loads((tmp_path / "out" / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["a.jpg", "b.jpg"]
+
+    def test_colliding_file_names_are_kept_and_warned_without_images(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Without copies, a renamed img_2.jpg would point at no file at all.
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(image_id=1, file_name="img.jpg", split="train"),
+                ImageObjectDetectionSample(image_id=2, file_name="img.jpg", split="val"),
+                ImageObjectDetectionSample(image_id=3, file_name="IMG.jpg", split="val"),
+            ),
+        )
+        with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
+            write(ds, tmp_path, output_format="coco", include_images=False)
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["img.jpg", "img.jpg", "IMG.jpg"]
+        # Case-only differences are distinct files on the user's own filesystem.
+        assert "1 file_name(s) are shared by several images (e.g. 'img.jpg')" in caplog.text
+
+    def test_missing_dimensions_are_read_from_the_image(self, tmp_path: Path) -> None:
+        # COCO images[] entries need width/height; VisDrone sources store none.
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            + (64).to_bytes(4, "big")
+            + (48).to_bytes(4, "big")
+            + b"\x08\x02\x00\x00\x00"
+        )
+        ds = ObjectDetectionDataset(
+            samples=(ImageObjectDetectionSample(image_id=1, file_name="a.png", image_bytes=png),)
+        )
+        write(ds, tmp_path, output_format="coco")
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert (document["images"][0]["width"], document["images"][0]["height"]) == (64, 48)
 
     def test_duplicate_annotation_ids_reallocated(self, tmp_path: Path) -> None:
         detections = (

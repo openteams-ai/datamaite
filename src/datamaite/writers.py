@@ -12,6 +12,7 @@ rather than fabricating data.
 from __future__ import annotations
 
 import contextlib
+import inspect
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -79,14 +80,15 @@ class Writer(ABC, Generic[_DatasetT]):
         """
         return
 
-    def validate_dataset(self, dataset: VisionDataset) -> None:
+    def validate_dataset(self, dataset: VisionDataset, **options: Any) -> None:  # noqa: ARG002 - options is part of the hook contract; the base check ignores it
         """Reject datasets this writer cannot serialise without silent corruption.
 
         Concrete on the base class (not an overridable no-op): SafeTensors-backed
         samples share a container ``path_or_uri``, so copy-by-file writers would
-        duplicate the whole file. ``write()`` / ``convert()`` call this before
-        the destination is touched. Direct ``Writer.write()`` bypasses it unless
-        the caller invokes this method first.
+        duplicate the whole file. Writers that override it to add checks against
+        their ``options`` must call ``super().validate_dataset``. ``write()`` /
+        ``convert()`` call this before the destination is touched. Direct
+        ``Writer.write()`` bypasses it unless the caller invokes this method first.
         """
         samples = getattr(dataset, "samples", None)
         if samples is None:
@@ -431,8 +433,9 @@ def write(
     may leave stale files behind that a reload of the destination would pick
     up. Calling a ``Writer`` instance's ``.write()`` directly bypasses this
     policy and :meth:`Writer.validate_dataset` (SafeTensors rejection) unless
-    the caller invokes ``writer.validate_dataset(dataset)`` first. Writer-option
-    validation (e.g. an invalid ``class_map`` or ``split``) runs before the
+    the caller invokes ``writer.validate_dataset(dataset, **options)`` first.
+    Writer-option and dataset validation (e.g. an invalid ``class_map`` or
+    ``split``, or VisDrone class names with no ``class_map``) runs before the
     destination is touched, so an invalid option raises without a
     ``mode="replace"`` clear having already deleted ``dest``.
 
@@ -467,8 +470,9 @@ def write(
     # mode="replace" clear must never happen ahead of an option error (#55
     # Fix A1). Direct Writer.write() calls still re-validate inline (cheap),
     # which also covers callers who bypass this module-level write().
+    _reject_unsupported_include_images(writer, options)
     writer.validate_options(**options)
-    writer.validate_dataset(dataset)
+    writer.validate_dataset(dataset, **options)
     resolved_dest = to_dataset_path(dest, storage_options)
     if resolved_mode == "replace":
         _reject_source_under_destination(dataset, resolved_dest)
@@ -489,6 +493,25 @@ def write(
             _prepare_destination(resolved_dest, resolved_mode)
             files = writer.write(dataset, resolved_dest, **writer_options)
     return files if verbose else None
+
+
+def _reject_unsupported_include_images(writer: Writer[Any], options: dict[str, Any]) -> None:
+    """Raise for a non-boolean ``include_images``, or ``False`` on a writer without that option.
+
+    Writers accept and discard unknown keyword options, so a writer that always
+    copies its media would otherwise copy everything the caller asked it not to.
+    """
+    if "include_images" not in options:
+        return
+    _validate_include_images(options["include_images"])
+    if not options["include_images"] and "include_images" not in inspect.signature(writer.write).parameters:
+        raise ValueError(f"the {writer.format.value!r} writer has no include_images option: it always writes its media")
+
+
+def _validate_include_images(value: object) -> None:
+    """Require a real bool: ``None`` or ``0`` would silently mean "don't copy" to writers that test truthiness."""
+    if not isinstance(value, bool):
+        raise TypeError(f"include_images must be True or False, got {value!r}")
 
 
 def _write_remote_error(

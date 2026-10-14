@@ -450,6 +450,11 @@ ic_with_ignored = load_ic(
 )
 ```
 
+The root may be one split root or a parent of several — for example the
+`VisDrone2019-DET-train/` and `VisDrone2019-DET-val/` directories that
+`write(..., output_format="visdrone")` creates — in which case every split is
+loaded and each sample keeps its `split`.
+
 VisDrone ships no standard image-classification format; datamaite derives IC
 samples from the DET annotations as object crops. **Limitation:** writing a
 VisDrone-derived IC dataset through an image-copying IC writer would emit full

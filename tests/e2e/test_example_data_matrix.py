@@ -134,6 +134,18 @@ def _matrix_report() -> Iterator[None]:
     print(line)
 
 
+def _class_map_options(dataset: BoxTrackDataset, out_fmt: str) -> dict[str, dict[str | int, int]]:
+    """An explicit ``class_map`` for VisDrone, which refuses names outside its class table.
+
+    This matrix compares counts and geometry, not class semantics, so any
+    distinct VisDrone ids will do.
+    """
+    if out_fmt != "visdrone_video":
+        return {}
+    names = sorted({box.category_name for seq in dataset.sequences for box in seq.boxes if box.category_name})
+    return {"class_map": {name: class_id for class_id, name in enumerate(names, start=1)}}
+
+
 @pytest.mark.parametrize("fmt", list(MOT_INPUTS), ids=list(MOT_INPUTS))
 def test_input_loads_with_expected_counts(datasets_root: Path, fmt: str) -> None:
     """Each input format loads from the dataset data with its pinned counts."""
@@ -150,10 +162,17 @@ def test_conversion_preserves_counts_and_geometry(
 ) -> None:
     """input -> convert -> reload preserves counts AND bounding-box geometry."""
     rel, dataset_format, exp_seqs, exp_boxes = MOT_INPUTS[in_fmt]
-    source_geometry = _bbox_multiset(load_mot(datasets_root / rel, dataset_format=dataset_format))
+    source = load_mot(datasets_root / rel, dataset_format=dataset_format)
+    source_geometry = _bbox_multiset(source)
 
     dest = tmp_path / f"{in_fmt}__to__{out_fmt}"
-    convert(datasets_root / rel, dest, input_format=dataset_format, output_format=out_fmt)
+    convert(
+        datasets_root / rel,
+        dest,
+        input_format=dataset_format,
+        output_format=out_fmt,
+        **_class_map_options(source, out_fmt),
+    )
     reloaded = load_mot(dest, dataset_format=out_fmt)
 
     geometry_ok = _bbox_multiset(reloaded) == source_geometry

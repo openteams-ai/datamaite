@@ -132,7 +132,7 @@ class TestModel:
         from dataclasses import FrozenInstanceError
 
         with pytest.raises(FrozenInstanceError):
-            _ds().metadata = {"id": "x"}  # type: ignore[misc]
+            _ds().metadata = {"id": "x"}
 
     def test_index2label_empty_without_taxonomy(self) -> None:
         ds = ObjectDetectionDataset(samples=(ImageObjectDetectionSample(image_id=0),))

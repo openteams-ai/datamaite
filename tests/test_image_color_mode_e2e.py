@@ -85,7 +85,7 @@ def _coco_root(root: Path) -> Path:
         images.append({"id": index, "file_name": f"images/{stem}.png", "width": width, "height": height})
         annotations.append({"id": 100 + index, "image_id": index, "category_id": _CATEGORY[stem], "bbox": _BOXES[stem]})
     payload = {
-        "categories": [{"id": 1, "name": "car"}, {"id": 2, "name": "person"}],
+        "categories": [{"id": 1, "name": "car"}, {"id": 2, "name": "pedestrian"}],
         "images": images,
         "annotations": annotations,
     }
@@ -104,7 +104,7 @@ def roots(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
         write(source, base / fmt, output_format=fmt)
     yolo_ic = base / "yolo_ic"
     for stem, pixels in _SOURCES.items():
-        class_dir = yolo_ic / "train" / ("car" if _CATEGORY[stem] == 1 else "person")
+        class_dir = yolo_ic / "train" / ("car" if _CATEGORY[stem] == 1 else "pedestrian")
         class_dir.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(class_dir / f"{stem}.png"), pixels)
     return {
@@ -390,10 +390,13 @@ def test_multispectral_crops_through_visdrone_ic(raster_root: Path, tmp_path: Pa
     """VisDrone IC object crops of the rasters keep every band, clamped at the edge."""
     import tifffile
 
-    write(load_od(raster_root, dataset_format="coco"), tmp_path / "vd", output_format="visdrone")
+    write(
+        load_od(raster_root, dataset_format="coco"), tmp_path / "vd", output_format="visdrone", class_map={"field": 11}
+    )
     ds = load_ic(tmp_path / "vd" / "VisDrone2019-DET-train", dataset_format="visdrone").with_image_options(
         color_mode="native"
     )
+    assert ds.samples
     num_classes = len(ds.index2label())
     inputs = _predict_inputs(ds, lambda: np.zeros(num_classes, dtype=np.float32))
     for sample, image in zip(ds.samples, inputs, strict=True):

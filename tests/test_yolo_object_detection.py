@@ -617,14 +617,39 @@ class TestYoloObjectDetectionWriter:
         )
         assert "Dropped score" in caplog.text
 
-    def test_missing_dimensions_emit_empty_label_file_with_warning(
+    @pytest.mark.parametrize("stored", [None, 0], ids=["missing", "zero"])
+    def test_missing_dimensions_are_read_from_the_image(self, tmp_path: Path, stored: int | None) -> None:
+        # VisDrone (and other formats) store no image dimensions, and a stored 0
+        # is no better; normalized YOLO boxes need them, so they come from the
+        # image header.
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id="x",
+                    image_bytes=_png_bytes(),
+                    file_name="x.png",
+                    width=stored,
+                    height=stored,
+                    detections=(ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=0),),
+                ),
+            ),
+            dataset_metadata=DatasetMetadata(
+                taxonomy=Taxonomy(entries=(CategoryEntry(source_id=0, name="thing"),), id_density="dense")
+            ),
+        )
+
+        write(ds, tmp_path, output_format="yolo")
+
+        assert (tmp_path / "labels" / "train" / "x.txt").read_text(encoding="utf-8").startswith("0 ")
+
+    def test_undeterminable_dimensions_emit_empty_label_file_with_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         ds = ObjectDetectionDataset(
             samples=(
                 ImageObjectDetectionSample(
                     image_id="x",
-                    image_bytes=_png_bytes(),
+                    image_bytes=b"not an encoded image",
                     file_name="x.png",
                     detections=(ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=0),),
                 ),

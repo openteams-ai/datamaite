@@ -31,6 +31,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `od`, `ic`, and `all` extras now install `tifffile` (#84), a pure-Python
   package that depends only on `numpy`.
+- The VisDrone still-image loaders accept a parent of one or more
+  `VisDrone2019-DET-<split>/` roots, as the VisDrone writers emit, so loading
+  a write destination returns its data instead of an empty dataset. Each
+  sample keeps its split; image ids gain the split-root name only when a
+  stem repeats across splits.
+- The MOT item target classes in `datamaite.maite._mot` are now private
+  (`_MotTarget`, `_FrameTarget`); annotate against MAITE's
+  `MultiobjectTrackingTarget` instead (#124). The MAITE protocol type checks
+  run with pyright in CI; mypy is not checked.
+
+### Fixed
+
+- Still-image conversions no longer silently drop or corrupt data. Each of
+  these returned normally from `convert()`, with at most a logged warning:
+  - Converting YOLO, Hugging Face, VisDrone or flat-image datasets to COCO
+    wrote an empty `instances.json`. The COCO writer now gives non-integer
+    image ids (relative paths, stems) fresh integer ids instead of skipping
+    the sample, and fills missing `images[].width`/`height` from the image
+    header. Same-named images from different splits (e.g. YOLO
+    `images/train/a.jpg` and `images/val/a.jpg`) get distinct file names
+    (`a.jpg`, `a_2.jpg`) instead of overwriting each other in COCO's flat
+    image directory. Names that differ only in case count as the same, since
+    macOS and Windows filesystems ignore case. With `include_images=False`
+    nothing is copied, so names are kept as they are and a warning reports
+    any that are shared.
+  - VisDrone -> YOLO dropped every label, and YOLO / Hugging Face
+    classification -> VisDrone wrote nothing, because those sources store no
+    image dimensions. Writers that need dimensions now read them from the
+    image header.
+  - YOLO -> VisDrone relabelled cars as pedestrians and dropped pedestrians:
+    the VisDrone writers reinterpreted source class ids against the VisDrone
+    class table. A category name matching a VisDrone class (case- and
+    separator-insensitive) now takes precedence over the numeric-id fallback.
+    Without a `class_map`, a category name that is not a VisDrone class now
+    raises `ValueError` before anything is written, naming the unmatched
+    classes; pass `class_map=` to map them. Writing it under its numeric id
+    could merge it with a matched class. Unnamed categories still fall back
+    to their numeric id.
+  - Hugging Face OD datasets whose `objects.categories` are names (the form
+    datamaite's own writer emits) loaded with no integer class ids, so every
+    MAITE target label was `-1`. Names now get integer ids: the `ClassLabel`
+    index when a name table is present, otherwise dense ids ordered
+    case-insensitively.
+
+  A new OD/IC conversion matrix (`tests/test_image_conversion_matrix.py`)
+  converts every input/output pair and checks images, class names and boxes.
+- `write()` and `convert()` raise `ValueError` for `include_images=False` when
+  the output writer has no such option (every writer except COCO and YOLO
+  object detection). Those writers used to ignore it and copy the media anyway.
+  A non-boolean `include_images` (e.g. `None`) raises `TypeError` for every
+  writer, since COCO and YOLO read it as `False` and the others ignored it.
+- COCO with `include_images=False`: when the source images are in more than
+  one directory (e.g. YOLO `images/train/` and `images/val/`), each
+  `file_name` is now its path relative to the directories' common parent
+  (`train/a.jpg`), and that parent is logged, so loading with
+  `images_dir=<parent>` finds every image. Bare names could not all be found
+  under one `images_dir`. Sources in a single directory keep bare names, as
+  do samples with no safe relative path (sources with no shared parent, or
+  image bytes only), with one warning.
 
 ## [0.6.0] - 2026-10-07
 

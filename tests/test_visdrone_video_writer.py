@@ -320,13 +320,45 @@ def _annotation_categories(out: Path) -> list[str]:
 
 class TestVisDroneFixedTaxonomy:
     def test_generic_fallback_warns_once_aggregated(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        ds = _one_frame_dataset(tmp_path, [_classed_box(track_id=1), _classed_box(track_id=2)])
+        # Unnamed boxes fall back to category_id.
+        ds = _one_frame_dataset(
+            tmp_path,
+            [_classed_box(track_id=1, category_name=None), _classed_box(track_id=2, category_name=None)],
+        )
         with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
             write(ds, tmp_path / "out", output_format="visdrone_video")
         fallback = [r for r in caplog.records if "class_map" in r.getMessage()]
         assert len(fallback) == 1
         assert "2 annotation(s)" in fallback[0].getMessage()
         assert _annotation_categories(tmp_path / "out") == ["4", "4"]
+
+    def test_category_name_matching_a_visdrone_class_wins_over_foreign_id(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A source id of 1 for "car" (e.g. YOLO numbering) must become VisDrone
+        # car (4), not VisDrone class 1 (pedestrian); no fallback warning.
+        ds = _one_frame_dataset(tmp_path, [_classed_box(category_id=1, category_name="Car")])
+        with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
+            write(ds, tmp_path / "out", output_format="visdrone_video")
+        assert not [r for r in caplog.records if "class_map" in r.getMessage()]
+        assert _annotation_categories(tmp_path / "out") == ["4"]
+
+    def test_category_name_missing_from_visdrone_classes_raises_before_writing(self, tmp_path: Path) -> None:
+        # "motorcycle" (4) is not a VisDrone class; falling back to its id would
+        # write it as VisDrone 4, the same id the matched "car" (3) gets.
+        ds = _one_frame_dataset(
+            tmp_path,
+            [
+                _classed_box(track_id=1, category_id=3, category_name="car"),
+                _classed_box(track_id=2, category_id=4, category_name="motorcycle"),
+            ],
+        )
+        with pytest.raises(ValueError, match=r"no class for category name\(s\) motorcycle=1; pass class_map="):
+            write(ds, tmp_path / "out", output_format="visdrone_video")
+        assert not (tmp_path / "out").exists()
+
+        write(ds, tmp_path / "mapped", output_format="visdrone_video", class_map={"car": 4, "motorcycle": 10})
+        assert _annotation_categories(tmp_path / "mapped") == ["4", "10"]
 
     def test_visdrone_category_id_attribute_stays_quiet(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         ds = _one_frame_dataset(tmp_path, [_classed_box(attributes={"visdrone_category_id": 5})])
@@ -401,7 +433,10 @@ class TestVisDroneFixedTaxonomyDetSource:
         assert "tricycle" in dropped[0].getMessage()
 
     def test_generic_fallback_warns_under_det(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        ds = _one_frame_dataset(tmp_path, [_classed_box(track_id=1), _classed_box(track_id=2)])
+        ds = _one_frame_dataset(
+            tmp_path,
+            [_classed_box(track_id=1, category_name=None), _classed_box(track_id=2, category_name=None)],
+        )
         with caplog.at_level(logging.WARNING, logger=_VISDRONE_WRITER_LOGGER):
             write(ds, tmp_path / "out", output_format="visdrone_video", annotation_source="det")
         fallback = [r for r in caplog.records if "class_map" in r.getMessage()]
@@ -477,7 +512,7 @@ class TestVisDroneWriterEmitsWarningsDespiteMidWriteFailure:
                 annotation_path="unused",
                 frame_files=(str(first_frame),),
                 video_meta={"sequence_name": "clip-a"},
-                boxes=[_classed_box(track_id=1)],  # no visdrone_category_id -> generic fallback
+                boxes=[_classed_box(track_id=1, category_name=None)],  # unnamed -> generic fallback
                 num_frames_exact=True,
             ),
             VideoSequence(

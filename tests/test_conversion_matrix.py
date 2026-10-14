@@ -55,6 +55,18 @@ def _box_count(ds: BoxTrackDataset) -> int:
     return sum(len(seq.boxes) for seq in ds.sequences)
 
 
+def _class_map_options(ds: BoxTrackDataset, output_format: DatasetFormat) -> dict[str, dict[str | int, int]]:
+    """An explicit ``class_map`` for VisDrone, which refuses names outside its class table.
+
+    These tests compare geometry, not class semantics, so any distinct
+    VisDrone ids will do.
+    """
+    if output_format is not DatasetFormat.VISDRONE_VIDEO:
+        return {}
+    names = sorted({box.category_name for seq in ds.sequences for box in seq.boxes if box.category_name})
+    return {"class_map": {name: class_id for class_id, name in enumerate(names, start=1)}}
+
+
 def _reload_root(dest: Path, output_format: DatasetFormat) -> Path:
     """Path to reload after writing ``output_format`` under ``dest``.
 
@@ -209,7 +221,14 @@ class TestConversionMatrix:
         assert any(seq.boxes for seq in baseline.sequences)
 
         dest = tmp_path / "out"
-        files = convert(src, dest, input_format=input_format, output_format=output_format, verbose=True)
+        files = convert(
+            src,
+            dest,
+            input_format=input_format,
+            output_format=output_format,
+            verbose=True,
+            **_class_map_options(baseline, output_format),
+        )
         assert files, f"{input_format.value} -> {output_format.value} wrote nothing"
 
         reloaded = load(dest, dataset_format=output_format)
@@ -237,7 +256,13 @@ class TestVideoBackedConversionIsLossless:
         assert _box_count(baseline) > 0
 
         dest = tmp_path / "out"
-        convert(src, dest, input_format=DatasetFormat.HMIE, output_format=output_format)
+        convert(
+            src,
+            dest,
+            input_format=DatasetFormat.HMIE,
+            output_format=output_format,
+            **_class_map_options(baseline, output_format),
+        )
         reloaded = load(_reload_root(dest, output_format), dataset_format=output_format)
 
         assert _box_count(reloaded) == _box_count(baseline), (
@@ -292,7 +317,13 @@ class TestFpsMismatchDropsOutOfRangeBoxesWithWarning:
 
         dest = tmp_path / "out"
         with caplog.at_level("WARNING"):
-            convert(src, dest, input_format=DatasetFormat.HMIE, output_format=DatasetFormat.VISDRONE_VIDEO)
+            convert(
+                src,
+                dest,
+                input_format=DatasetFormat.HMIE,
+                output_format=DatasetFormat.VISDRONE_VIDEO,
+                **_class_map_options(baseline, DatasetFormat.VISDRONE_VIDEO),
+            )
         reloaded = load(_reload_root(dest, DatasetFormat.VISDRONE_VIDEO), dataset_format=DatasetFormat.VISDRONE_VIDEO)
 
         # Loss is exactly the out-of-range boxes -- nothing more, nothing less.

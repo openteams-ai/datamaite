@@ -5,7 +5,8 @@ Both target formats interpret their class column against a fixed class table
 ``category_id`` is not in that vocabulary, so silently falling back to it can
 produce semantically misleading outputs (#55). This module centralises the
 precedence (explicit ``class_map`` > target-specific source attribute >
-generic ``category_id``) and aggregates the per-write warnings so a large
+``category_name`` matching the target class table, when the writer supplies
+one > generic ``category_id``) and aggregates the per-write warnings so a large
 dataset emits one loud message instead of thousands.
 """
 
@@ -13,8 +14,9 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from datamaite._formats._coerce import coerce_int
 from datamaite.model import BoxAnnotation
@@ -81,8 +83,13 @@ class ClassIdResolver:
         class_map: dict[str | int, int] | None,
         logger: logging.Logger,
         minimum: int,
+        class_names: Mapping[int, str] | None = None,
     ) -> None:
         self._format_label = format_label
+        # Target class table by normalized name. A source whose category names
+        # match the target's (e.g. YOLO "car" -> VisDrone "car") must not be
+        # reinterpreted by its own, unrelated numeric ids.
+        self._ids_by_name = {_normalize_name(name): class_id for class_id, name in (class_names or {}).items()}
         self._attribute = attribute
         self._class_map = class_map
         self._logger = logger
@@ -111,6 +118,10 @@ class ClassIdResolver:
         from_attribute = coerce_int(box.attributes.get(self._attribute))
         if from_attribute is not None:
             return ResolvedClass(from_attribute)
+        if box.category_name is not None:
+            by_name = self._ids_by_name.get(_normalize_name(box.category_name))
+            if by_name is not None:
+                return ResolvedClass(by_name)
         if box.category_id >= self._minimum:
             self._fallback[_category_label(box)] += 1
         return ResolvedClass(box.category_id, from_generic_fallback=True)
@@ -149,6 +160,49 @@ class ClassIdResolver:
                 self._format_label,
                 details,
             )
+
+
+def reject_unmatched_class_names(
+    records: Iterable[tuple[str | None, Mapping[str, Any]]],
+    *,
+    attribute: str,
+    class_map: object,
+    class_names: Mapping[int, str],
+    format_label: str,
+) -> None:
+    """Raise when a named source category has no target class and nothing maps it.
+
+    ``records`` are ``(category_name, attributes)`` pairs. Without a
+    ``class_map``, a name outside ``class_names`` (e.g. "motorcycle" for
+    VisDrone, whose class is "motor") would fall back to its own numeric id,
+    which can equal a matched class's id and merge two classes into one.
+    Dropping those boxes would lose them silently, so the write is refused
+    before anything is written. Records with an explicit ``attribute`` class
+    id, and unnamed records, are unaffected.
+    """
+    if class_map is not None:
+        return
+    known = {_normalize_name(name) for name in class_names.values()}
+    unmatched: Counter[str] = Counter()
+    for name, attributes in records:
+        if not name or coerce_int(attributes.get(attribute)) is not None:
+            continue
+        if _normalize_name(name) not in known:
+            unmatched[name] += 1
+    if unmatched:
+        raise ValueError(
+            f"{format_label} has no class for category name(s) {_format_counts(unmatched)}; pass class_map= to map "
+            f"them to {format_label} class ids ({_format_class_names(class_names)})"
+        )
+
+
+def _format_class_names(class_names: Mapping[int, str]) -> str:
+    return ", ".join(f"{class_id}={name}" for class_id, name in sorted(class_names.items()))
+
+
+def _normalize_name(name: str) -> str:
+    """Case- and separator-insensitive class name key ("Awning-Tricycle" == "awning_tricycle")."""
+    return "".join(ch for ch in name.casefold() if ch.isalnum())
 
 
 def _category_label(box: BoxAnnotation) -> str:

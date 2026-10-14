@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from datamaite.maite._decode import DecodedFrame
-    from datamaite.maite._mot import MotDatumMetadata, MotTarget
+    from datamaite.maite._mot import MotDatumMetadata, _MotTarget
 
 
 def category_name_from_uri(category_uri: str) -> str:
@@ -401,7 +401,7 @@ class BoxTrackDataset(MaiteDatasetMetadataField):
         # MAITE item count == number of video-bearing sequences (O(1), cached).
         return len(self._mot_sequences)
 
-    def __getitem__(self, index: int) -> tuple[Iterable[DecodedFrame], MotTarget, MotDatumMetadata]:
+    def __getitem__(self, index: int) -> tuple[Iterable[DecodedFrame], _MotTarget, MotDatumMetadata]:
         seq = self._mot_sequences[index]  # IndexError past the end -> stops iteration
         try:
             from datamaite.maite._mot import build_mot_item

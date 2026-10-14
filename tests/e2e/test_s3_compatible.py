@@ -43,7 +43,7 @@ from tests._hmie_factory import (
     make_hmie_dataset,
     single_video_dataset,
 )
-from tests.test_object_storage_matrix import WRITER_KEYS, _content_count, _dataset_for, _reload_root
+from tests.test_object_storage_matrix import WRITER_KEYS, _class_map, _content_count, _dataset_for, _reload_root
 
 try:
     import s3fs
@@ -116,6 +116,7 @@ def test_registry_read_write_roundtrip(
         output_variant=key.variant,
         storage_options=storage_options,
         verbose=True,
+        **_class_map(key),
     )
 
     assert files

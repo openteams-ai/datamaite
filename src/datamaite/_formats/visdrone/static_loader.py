@@ -58,6 +58,8 @@ IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"})
 #: Official split names, most specific first: ``test-dev``/``test-challenge``
 #: must match before plain ``test`` so those roots keep their identity.
 _SPLIT_TOKENS = ("test-challenge", "test-dev", "train", "val", "test")
+# Load order for a parent of several split roots (the usual train/val/test order).
+_SPLIT_TOKENS_ORDER = ("train", "val", "test-dev", "test-challenge", "test")
 
 
 @dataclass(frozen=True)
@@ -219,24 +221,69 @@ def _row_to_detection(row: _VisDroneRow) -> ObjectDetectionAnnotation:
     )
 
 
-def _dirs(root: str | Path) -> tuple[Path, Path, Path] | None:
-    """Return ``(root, images_dir, annotations_dir)`` when both subdirs exist."""
-    root_path = to_dataset_path(root)
-    images_dir = root_path / "images"
-    annotations_dir = root_path / "annotations"
-    if not images_dir.is_dir() or not annotations_dir.is_dir():
-        logger.warning("VisDrone static root missing images/ or annotations/: %s", root_path)
-        return None
-    return root_path, images_dir, annotations_dir
+def _splits_of(split_roots: list[Path]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(split for root in split_roots if (split := infer_split(root.name)) is not None))
+
+
+def _is_split_root(path: Path) -> bool:
+    return (path / "images").is_dir() and (path / "annotations").is_dir()
+
+
+def _split_roots(root: Path) -> list[Path]:
+    """Split roots to read: ``root`` itself, or its child split roots.
+
+    Mirrors the VisDrone video loader: ``root`` may be one official split root
+    (``images/`` + ``annotations/``) or a parent of several, such as the
+    ``VisDrone2019-DET-train/`` and ``VisDrone2019-DET-val/`` directories the
+    VisDrone writers emit, so loading a write destination returns its data.
+    """
+    if _is_split_root(root):
+        return [root]
+    try:
+        children = sorted(path for path in root.iterdir() if path.is_dir())
+    except OSError:
+        children = []
+    split_roots = [path for path in children if _is_split_root(path)]
+    if not split_roots:
+        logger.warning(
+            "VisDrone static root must contain images/ and annotations/, or child split roots that do: %s", root
+        )
+    return sorted(split_roots, key=_split_sort_key)
+
+
+def _split_sort_key(path: Path) -> tuple[int, str]:
+    split = infer_split(path.name)
+    return (_SPLIT_TOKENS_ORDER.index(split) if split in _SPLIT_TOKENS_ORDER else len(_SPLIT_TOKENS_ORDER), path.name)
+
+
+def _id_prefixes(split_roots: list[Path], extensions: frozenset[str]) -> dict[Path, str]:
+    """Per-split-root image-id prefix: empty unless an image stem repeats across split roots.
+
+    Single-root loads keep bare stems (the long-standing ids); a stem present in
+    two split roots gets ``<split-root-name>/`` so datum ids stay unique.
+    """
+    if len(split_roots) < 2:
+        return dict.fromkeys(split_roots, "")
+    stems = [{path.stem for path in iter_images(root / "images", extensions)} for root in split_roots]
+    repeated = set().union(*(a & b for i, a in enumerate(stems) for b in stems[i + 1 :]))
+    return {root: (f"{root.name}/" if stems[i] & repeated else "") for i, root in enumerate(split_roots)}
 
 
 def _looks_like_visdrone_static(root: str | Path) -> bool:
-    """True when ``root`` has ``images/``+``annotations/`` and a VisDrone-shaped annotation line."""
+    """True when ``root`` (or a child split root) has a VisDrone-shaped annotation line."""
     path = to_dataset_path(root)
-    images_dir = path / "images"
-    annotations_dir = path / "annotations"
-    if not images_dir.is_dir() or not annotations_dir.is_dir():
-        return False
+    candidates = [path] if _is_split_root(path) else _child_split_roots_quiet(path)
+    return any(_has_visdrone_annotation_line(candidate / "annotations") for candidate in candidates)
+
+
+def _child_split_roots_quiet(path: Path) -> list[Path]:
+    try:
+        return sorted(child for child in path.iterdir() if child.is_dir() and _is_split_root(child))
+    except OSError:
+        return []
+
+
+def _has_visdrone_annotation_line(annotations_dir: Path) -> bool:
     for ann in sorted(annotations_dir.glob("*.txt")):
         try:
             lines = ann.read_text(encoding="utf-8").splitlines()
@@ -273,46 +320,47 @@ class VisDroneObjectDetectionLoader(Loader):
         **_: Any,
     ) -> ObjectDetectionDataset:
         root = to_dataset_path(root, storage_options)
-        dirs = _dirs(root)
-        if dirs is None:
-            return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="visdrone"))
-        root_path, images_dir, annotations_dir = dirs
+        split_roots = _split_roots(root)
         extensions = _normalize_extensions(image_extensions)
-        split = infer_split(root_path.name)
         taxonomy = build_taxonomy(include_ignored_regions=True)
+        prefixes = _id_prefixes(split_roots, extensions)
 
         samples: list[ImageObjectDetectionSample] = []
-        for image_path in iter_images(images_dir, extensions):
-            stem = image_path.stem
-            ann_path = annotations_dir / f"{stem}.txt"
-            rows = parse_annotation_file(ann_path) if ann_path.is_file() else []
-            samples.append(
-                ImageObjectDetectionSample(
-                    image_id=stem,
-                    path_or_uri=str(image_path),
-                    file_name=image_path.name,
-                    split=split,
-                    detections=tuple(_row_to_detection(r) for r in rows),
-                    metadata={
-                        "source_format": "visdrone",
-                        "variant": self.variant,
-                        "source_file_name": f"images/{image_path.name}",
-                        "annotation_file": f"annotations/{stem}.txt" if ann_path.is_file() else None,
-                    },
+        for split_root in split_roots:
+            images_dir, annotations_dir = split_root / "images", split_root / "annotations"
+            split = infer_split(split_root.name)
+            for image_path in iter_images(images_dir, extensions):
+                stem = image_path.stem
+                ann_path = annotations_dir / f"{stem}.txt"
+                rows = parse_annotation_file(ann_path) if ann_path.is_file() else []
+                samples.append(
+                    ImageObjectDetectionSample(
+                        image_id=f"{prefixes[split_root]}{stem}",
+                        path_or_uri=str(image_path),
+                        file_name=image_path.name,
+                        split=split,
+                        detections=tuple(_row_to_detection(r) for r in rows),
+                        metadata={
+                            "source_format": "visdrone",
+                            "variant": self.variant,
+                            "source_file_name": f"images/{image_path.name}",
+                            "annotation_file": f"annotations/{stem}.txt" if ann_path.is_file() else None,
+                        },
+                    )
                 )
-            )
-        _warn_orphan_annotations(annotations_dir, images_dir, extensions)
+            _warn_orphan_annotations(annotations_dir, images_dir, extensions)
 
         if not samples:
-            logger.warning("No VisDrone images found under %s", images_dir)
+            if split_roots:
+                logger.warning("No VisDrone images found under %s", root)
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="visdrone"))
-        splits = (split,) if split is not None else ()
-        logger.info("Loaded %d VisDrone OD image(s) from %s", len(samples), root_path)
+        splits = _splits_of(split_roots)
+        logger.info("Loaded %d VisDrone OD image(s) from %s", len(samples), root)
         return ObjectDetectionDataset(
             samples=tuple(samples),
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="visdrone", splits=splits),
             dataset_id="visdrone",
-            _storage_options=storage_options_for(root_path),
+            _storage_options=storage_options_for(root),
         )
 
 
@@ -339,65 +387,66 @@ class VisDroneImageClassificationLoader(Loader):
         **_: Any,
     ) -> ImageClassificationDataset:
         root = to_dataset_path(root, storage_options)
-        dirs = _dirs(root)
-        if dirs is None:
-            return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="visdrone"))
-        root_path, images_dir, annotations_dir = dirs
+        split_roots = _split_roots(root)
         extensions = _normalize_extensions(image_extensions)
-        split = infer_split(root_path.name)
         excluded: set[int] = set() if include_ignored_regions else {0}
         taxonomy = build_taxonomy(include_ignored_regions=include_ignored_regions)
+        prefixes = _id_prefixes(split_roots, extensions)
 
         samples: list[ImageClassificationSample] = []
-        for image_path in iter_images(images_dir, extensions):
-            stem = image_path.stem
-            ann_path = annotations_dir / f"{stem}.txt"
-            if not ann_path.is_file():
-                continue
-            for row in parse_annotation_file(ann_path):
-                if row.category in excluded:
+        for split_root in split_roots:
+            images_dir, annotations_dir = split_root / "images", split_root / "annotations"
+            split = infer_split(split_root.name)
+            for image_path in iter_images(images_dir, extensions):
+                stem = image_path.stem
+                ann_path = annotations_dir / f"{stem}.txt"
+                if not ann_path.is_file():
                     continue
-                name = VISDRONE_STATIC_CLASSES[row.category]
-                samples.append(
-                    ImageClassificationSample(
-                        image_id=f"{stem}#{row.line_number}",
-                        path_or_uri=str(image_path),
-                        file_name=image_path.name,
-                        width=round(row.width),
-                        height=round(row.height),
-                        split=split,
-                        region=(row.left, row.top, row.width, row.height),
-                        labels=(
-                            ClassificationLabel(
-                                category_id=row.category,
-                                source_category_id=row.category,
-                                category_name=name,
-                                attributes={
-                                    "visdrone_category_id": row.category,
-                                    "visdrone_score": row.score,
-                                    "truncation": row.truncation,
-                                    "occlusion": row.occlusion,
-                                },
+                for row in parse_annotation_file(ann_path):
+                    if row.category in excluded:
+                        continue
+                    name = VISDRONE_STATIC_CLASSES[row.category]
+                    samples.append(
+                        ImageClassificationSample(
+                            image_id=f"{prefixes[split_root]}{stem}#{row.line_number}",
+                            path_or_uri=str(image_path),
+                            file_name=image_path.name,
+                            width=round(row.width),
+                            height=round(row.height),
+                            split=split,
+                            region=(row.left, row.top, row.width, row.height),
+                            labels=(
+                                ClassificationLabel(
+                                    category_id=row.category,
+                                    source_category_id=row.category,
+                                    category_name=name,
+                                    attributes={
+                                        "visdrone_category_id": row.category,
+                                        "visdrone_score": row.score,
+                                        "truncation": row.truncation,
+                                        "occlusion": row.occlusion,
+                                    },
+                                ),
                             ),
-                        ),
-                        metadata={
-                            "source_format": "visdrone",
-                            "variant": self.variant,
-                            "source_image": f"images/{image_path.name}",
-                            "annotation_file": f"annotations/{stem}.txt",
-                            "source_line": row.line_number,
-                        },
+                            metadata={
+                                "source_format": "visdrone",
+                                "variant": self.variant,
+                                "source_image": f"images/{image_path.name}",
+                                "annotation_file": f"annotations/{stem}.txt",
+                                "source_line": row.line_number,
+                            },
+                        )
                     )
-                )
 
         if not samples:
-            logger.warning("No VisDrone classification crops found under %s", root_path)
+            if split_roots:
+                logger.warning("No VisDrone classification crops found under %s", root)
             return ImageClassificationDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="visdrone"))
-        splits = (split,) if split is not None else ()
-        logger.info("Loaded %d VisDrone IC crop(s) from %s", len(samples), root_path)
+        splits = _splits_of(split_roots)
+        logger.info("Loaded %d VisDrone IC crop(s) from %s", len(samples), root)
         return ImageClassificationDataset(
             samples=tuple(samples),
             dataset_metadata=DatasetMetadata(taxonomy=taxonomy, source_dataset="visdrone", splits=splits),
             dataset_id="visdrone",
-            _storage_options=storage_options_for(root_path),
+            _storage_options=storage_options_for(root),
         )

@@ -19,17 +19,19 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar
 
-from datamaite._io import copy_resource, same_resource, source_path
+from datamaite._io import copy_resource, same_resource, sample_image_dimensions, source_path
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import to_dataset_path
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import ImageObjectDetectionSample, ObjectDetectionAnnotation
 from datamaite.taxonomy import Taxonomy
-from datamaite.writers import Writer, WriterCapabilities, register_writer
+from datamaite.writers import Writer, WriterCapabilities, _validate_include_images, register_writer
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +94,15 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
     def validate_options(self, **options: Any) -> None:
         """Validate options that can raise, before write()'s destination policy runs (#55 Fix A1).
 
-        Mirrors the inline ``annotation_file_name`` check in ``write()``, but
+        Mirrors the inline ``annotation_file_name`` and ``include_images`` checks in ``write()``, but
         only for options that are present, so a ``mode="replace"`` clear never
         happens ahead of an option error. ``write()`` re-validates inline,
         which also covers direct ``Writer.write()`` calls.
         """
         if "annotation_file_name" in options:
             _validate_annotation_file_name(options["annotation_file_name"])
+        if "include_images" in options:
+            _validate_include_images(options["include_images"])
 
     def write(
         self,
@@ -121,9 +125,17 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
             ``image_bytes`` or ``path_or_uri``) to ``dest/<file_name>``.
             Samples whose image source is missing keep their JSON entry --
             COCO JSON references files by name and stays loadable without
-            them -- with a warning per missing source.
+            them -- with a warning per missing source. When False, the images
+            stay where they are: if they are in more than one directory, each
+            ``file_name`` is its path relative to the directories' common
+            parent (logged; load with ``images_dir=`` set to it).
+
+        Samples without a stored width/height get them from their image
+        header, so even with ``include_images=False`` each such image is read
+        (a bounded prefix; one ranged read per remote image).
         """
         annotation_file_name = _validate_annotation_file_name(annotation_file_name)
+        _validate_include_images(include_images)
         dest = to_dataset_path(dest, _options.get("storage_options"))
         ann_dir = dest / "annotations"
         ann_dir.mkdir(parents=True, exist_ok=True)
@@ -133,11 +145,33 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
         images: list[dict[str, Any]] = []
         annotations: list[dict[str, Any]] = []
         annotation_ids = _IdAllocator()
-        seen_image_ids: set[int] = set()
+        # Source ids already emitted: integers as-is, strings before they get an integer.
+        seen_image_ids: set[int | str] = set()
+        # COCO image ids are integers, but YOLO/Hugging Face/VisDrone/flat-image
+        # records use string ids (relative paths or stems). Those get fresh
+        # integers that avoid every integer id already in the dataset.
+        assigned_image_ids = _IdAllocator(
+            used={image_id for sample in dataset.samples if (image_id := _int_id(sample.image_id)) is not None}
+        )
+        reassigned: list[int | str] = []
+        # COCO flattens images to one directory keyed by file_name; two source
+        # images with the same name (e.g. YOLO images/train/a.jpg and
+        # images/val/a.jpg) would otherwise share one file on disk. Only copied
+        # images are renamed apart: without copies, a new name would point at
+        # no file at all.
+        used_file_names: set[str] | None = set() if include_images else None
         dropped_scores = 0
 
-        for sample in dataset.samples:
-            image_obj = _image_object(sample, seen=seen_image_ids)
+        file_names = _file_names(dataset.samples, relative_to_sources=not include_images)
+        for sample, file_name in zip(dataset.samples, file_names, strict=True):
+            image_obj = _image_object(
+                sample,
+                file_name=file_name,
+                seen=seen_image_ids,
+                assigned=assigned_image_ids,
+                reassigned=reassigned,
+                used_file_names=used_file_names,
+            )
             if image_obj is None:
                 continue
             images.append(image_obj)
@@ -150,10 +184,18 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
                     dropped_scores += 1
                 annotations.append(row)
             if include_images:
-                copied = _copy_image(sample, dest=dest)
+                copied = _copy_image(sample, dest=dest, file_name=image_obj["file_name"])
                 if copied is not None:
                     written.append(copied)
 
+        # Only possible with include_images=False: copied images were renamed apart.
+        _warn_shared_file_names(images)
+        if reassigned:
+            logger.info(
+                "Assigned integer COCO image ids to %d sample(s) with non-integer ids (e.g. %r)",
+                len(reassigned),
+                reassigned[0],
+            )
         if dropped_scores:
             logger.warning(
                 "Dropped the score field from %d annotation(s): %s",
@@ -192,17 +234,19 @@ def _category_objects(taxonomy: Taxonomy | None) -> list[dict[str, Any]]:
     return objects
 
 
-def _image_object(sample: ImageObjectDetectionSample, *, seen: set[int]) -> dict[str, Any] | None:
-    if isinstance(sample.image_id, bool) or not isinstance(sample.image_id, int):
-        logger.warning(
-            "Skipping sample %r (and its detections): COCO image ids are integers",
-            sample.image_id,
-        )
-        return None
+def _image_object(
+    sample: ImageObjectDetectionSample,
+    *,
+    file_name: str | None,
+    seen: set[int | str],
+    assigned: _IdAllocator,
+    reassigned: list[int | str],
+    used_file_names: set[str] | None,
+) -> dict[str, Any] | None:
+    image_id = _int_id(sample.image_id)
     if sample.image_id in seen:
         logger.warning("Skipping duplicate image id %s (keeping the first)", sample.image_id)
         return None
-    file_name = sample.file_name or (PurePosixPath(sample.path_or_uri).name if sample.path_or_uri else None)
     if not file_name:
         logger.warning("Skipping sample %s (and its detections): COCO images require a file_name", sample.image_id)
         return None
@@ -212,11 +256,17 @@ def _image_object(sample: ImageObjectDetectionSample, *, seen: set[int]) -> dict
         logger.warning("Skipping sample %s (and its detections): unsafe file_name %r", sample.image_id, file_name)
         return None
     seen.add(sample.image_id)
-    obj: dict[str, Any] = {"id": sample.image_id, "file_name": file_name}
-    if sample.width is not None:
-        obj["width"] = sample.width
-    if sample.height is not None:
-        obj["height"] = sample.height
+    if image_id is None:
+        image_id = assigned.reserve()
+        reassigned.append(sample.image_id)
+    if used_file_names is not None:
+        file_name = _unique_file_name(file_name, used_file_names)
+    obj: dict[str, Any] = {"id": image_id, "file_name": file_name}
+    # COCO images[] entries require width/height; formats such as VisDrone do
+    # not store them, so fall back to the image header.
+    dimensions = sample_image_dimensions(sample)
+    if dimensions is not None:
+        obj["width"], obj["height"] = dimensions
     # Per-image passthrough (license, capture metadata, unparsed width/height
     # source values, ...) -- typed fields above win on collision.
     obj.update({k: v for k, v in sample.metadata.items() if k not in obj})
@@ -289,8 +339,104 @@ def _int_id(value: int | str | None) -> int | None:
     return value
 
 
-def _copy_image(sample: ImageObjectDetectionSample, *, dest: Path) -> Path | None:
-    file_name = sample.file_name or (PurePosixPath(sample.path_or_uri).name if sample.path_or_uri else "")
+def _file_names(samples: Sequence[ImageObjectDetectionSample], *, relative_to_sources: bool) -> list[str | None]:
+    """Each sample's ``images[].file_name``, before copied images are renamed apart.
+
+    Normally the sample's ``file_name`` (else its source's base name). With
+    ``relative_to_sources`` (images not copied) and sources in more than one
+    directory -- e.g. YOLO ``images/train/a.jpg`` and ``images/val/b.jpg`` --
+    bare names could not all be found under one ``images_dir``, so each becomes
+    its path relative to the directories' common parent (``train/a.jpg``). A
+    sample whose relative path would be unsafe (sources with no shared parent,
+    e.g. a local path and an ``s3://`` URI) or that has no source path keeps its
+    bare name, with one warning.
+    """
+    names = [
+        sample.file_name or (PurePosixPath(sample.path_or_uri).name if sample.path_or_uri else None)
+        for sample in samples
+    ]
+    if not relative_to_sources:
+        return names
+    bases = [_source_directory(sample.path_or_uri, name) for sample, name in zip(samples, names, strict=True)]
+    distinct = {base for base in bases if base is not None}
+    if len(distinct) < 2:
+        return names
+    common = _common_prefix(distinct)
+    images_dir = "/".join(common) or "/"
+    logger.info(
+        "Source images are in %d directories; COCO file_names are relative to %s "
+        "(pass it as images_dir when loading this COCO dataset)",
+        len(distinct),
+        images_dir,
+    )
+    file_names: list[str | None] = []
+    bare = 0
+    for base, name in zip(bases, names, strict=True):
+        relative = "/".join((*base[len(common) :], name)) if base is not None and name is not None else None
+        if relative is not None and _is_safe_file_name(relative):
+            file_names.append(relative)
+            continue
+        file_names.append(name)
+        bare += name is not None
+    if bare:
+        logger.warning(
+            "%d image(s) keep a bare COCO file_name because no safe path relative to %s exists for them; "
+            "they will not be found under that images_dir",
+            bare,
+            images_dir,
+        )
+    return file_names
+
+
+def _source_directory(path_or_uri: str | None, file_name: str | None) -> tuple[str, ...] | None:
+    """Directory that ``file_name`` is relative to in ``path_or_uri``, as path parts."""
+    if not path_or_uri or not file_name:
+        return None
+    path = path_or_uri.replace("\\", "/")
+    suffix = "/" + file_name
+    if not path.endswith(suffix):
+        return None
+    return tuple(path[: -len(suffix)].split("/"))
+
+
+def _common_prefix(paths: set[tuple[str, ...]]) -> tuple[str, ...]:
+    common: list[str] = []
+    for parts in zip(*paths, strict=False):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+    return tuple(common)
+
+
+def _warn_shared_file_names(images: list[dict[str, Any]]) -> None:
+    counts = Counter(image["file_name"] for image in images)
+    shared = sorted(name for name, count in counts.items() if count > 1)
+    if shared:
+        logger.warning(
+            "%d file_name(s) are shared by several images (e.g. %r); with include_images=False they are "
+            "not renamed apart, so those images' annotations all point at one file",
+            len(shared),
+            shared[0],
+        )
+
+
+def _unique_file_name(file_name: str, used: set[str]) -> str:
+    """``file_name``, or ``<stem>_<n><suffix>`` if an earlier image already took it.
+
+    ``used`` holds casefolded names: on case-insensitive filesystems (macOS and
+    Windows defaults) ``A.jpg`` and ``a.jpg`` are the same file.
+    """
+    candidate = file_name
+    path = PurePosixPath(file_name)
+    index = 2
+    while candidate.casefold() in used:
+        candidate = str(path.with_name(f"{path.stem}_{index}{path.suffix}"))
+        index += 1
+    used.add(candidate.casefold())
+    return candidate
+
+
+def _copy_image(sample: ImageObjectDetectionSample, *, dest: Path, file_name: str) -> Path | None:
     target = _safe_target(dest, file_name)
     if target is None:
         logger.warning("Not writing image for sample %s: unsafe file_name %r", sample.image_id, file_name)

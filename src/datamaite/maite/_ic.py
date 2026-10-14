@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypedDict
+from typing import Any
 
 import numpy as np
+from typing_extensions import TypedDict
 
 from datamaite.maite._image import decode_image
 from datamaite.records import ClassificationLabel, ImageClassificationSample

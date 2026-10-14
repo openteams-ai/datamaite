@@ -11,7 +11,7 @@ import json
 import logging
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -29,6 +29,7 @@ from datamaite._io import (
     ensure_directory,
     list_files,
     same_resource,
+    sample_image_dimensions,
     source_path,
 )
 from datamaite._types import DatasetFormat, Task
@@ -43,7 +44,7 @@ from datamaite.records import (
     ObjectDetectionAnnotation,
 )
 from datamaite.taxonomy import SourceId, Taxonomy
-from datamaite.writers import Writer, WriterCapabilities, register_writer
+from datamaite.writers import Writer, WriterCapabilities, _validate_include_images, register_writer
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
     def validate_options(self, **options: Any) -> None:
         """Validate options that can raise, before write()'s destination policy runs (#55 Fix A1).
 
-        Mirrors the inline ``precision`` check in ``write()``, but only for
+        Mirrors the inline ``precision`` and ``include_images`` checks in ``write()``, but only for
         options that are present, so a ``mode="replace"`` clear never happens
         ahead of an option error. ``write()`` re-validates inline, which also
         covers direct ``Writer.write()`` calls. (``default_split`` is validated
@@ -169,6 +170,8 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             precision = options["precision"]
             if isinstance(precision, bool) or not isinstance(precision, int) or precision < 1:
                 raise ValueError(f"precision must be a non-boolean integer >= 1, got {precision!r}")
+        if "include_images" in options:
+            _validate_include_images(options["include_images"])
 
     def write(
         self,
@@ -193,6 +196,7 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         """
         if isinstance(precision, bool) or not isinstance(precision, int) or precision < 1:
             raise ValueError(f"precision must be a non-boolean integer >= 1, got {precision!r}")
+        _validate_include_images(include_images)
         dest_path = to_dataset_path(dest, _.get("storage_options"))
         ensure_directory(dest_path)
         projection = _LabelProjection.from_dataset(dataset)
@@ -507,7 +511,9 @@ def _write_od_sample(
         require_image_free=include_images,
         check_storage=inventoried_dirs is None,
     )
-    label_lines = _od_label_lines(sample, projection=projection, precision=precision, include_scores=include_scores)
+    label_lines = _od_label_lines(
+        _with_image_dimensions(sample), projection=projection, precision=precision, include_scores=include_scores
+    )
 
     image_path: Path | None = None
     if include_images:
@@ -578,6 +584,20 @@ def _candidate_targets(target: Path) -> Iterable[Path]:
     suffix = target.suffix
     for index in range(2, 1_000_000):
         yield target.with_name(f"{stem}_{index}{suffix}")
+
+
+def _with_image_dimensions(sample: ImageObjectDetectionSample) -> ImageObjectDetectionSample:
+    """Fill missing or non-positive ``width``/``height`` from the image header.
+
+    Normalized YOLO boxes need image dimensions. Formats such as VisDrone do not
+    store them, so read them instead of dropping every label on the sample.
+    """
+    if not sample.detections:
+        return sample
+    dimensions = sample_image_dimensions(sample)
+    if dimensions is None or dimensions == (sample.width, sample.height):
+        return sample
+    return replace(sample, width=dimensions[0], height=dimensions[1])
 
 
 def _od_label_lines(  # noqa: C901 - per-detection validation is intentionally explicit

@@ -145,6 +145,45 @@ class TestObjectDetection:
         ds = load_od(tmp_path, dataset_format="visdrone")
         assert ds.sample_count == 0
 
+    def test_parent_of_one_split_root_loads_it(self, tmp_path: Path) -> None:
+        # The VisDrone writers emit <dest>/VisDrone2019-DET-<split>/; loading
+        # <dest> used to return an empty dataset.
+        _make_od_root(tmp_path)
+        ds = load_od(tmp_path, dataset_format="visdrone")
+        assert sorted(s.image_id for s in ds.samples) == ["0001", "0002"]  # bare stems, as for the split root
+        assert ds.dataset_metadata.splits == ("train",)
+
+    def test_parent_of_several_split_roots_loads_all_with_unique_ids(self, tmp_path: Path) -> None:
+        _make_od_root(tmp_path, name="VisDrone2019-DET-val")
+        _make_od_root(tmp_path, name="VisDrone2019-DET-train")
+        ds = load_od(tmp_path, dataset_format="visdrone")
+        # train before val; stems repeat across the two roots, so ids carry the root name.
+        assert [(s.split, s.image_id) for s in ds.samples] == [
+            ("train", "VisDrone2019-DET-train/0001"),
+            ("train", "VisDrone2019-DET-train/0002"),
+            ("val", "VisDrone2019-DET-val/0001"),
+            ("val", "VisDrone2019-DET-val/0002"),
+        ]
+        assert ds.dataset_metadata.splits == ("train", "val")
+        ic = load_ic(tmp_path, dataset_format="visdrone")
+        assert [s.image_id for s in ic.samples] == ["VisDrone2019-DET-train/0001#1", "VisDrone2019-DET-val/0001#1"]
+
+    def test_split_roots_load_in_split_order_not_name_order(self, tmp_path: Path) -> None:
+        # "VisDrone2019-DET-test-dev" sorts before "...-train" by name.
+        _make_od_root(tmp_path, name="VisDrone2019-DET-test-dev")
+        _make_od_root(tmp_path, name="VisDrone2019-DET-train")
+        ds = load_od(tmp_path, dataset_format="visdrone")
+        assert ds.dataset_metadata.splits == ("train", "test-dev")
+        assert [s.split for s in ds.samples] == ["train", "train", "test-dev", "test-dev"]
+
+    def test_several_split_roots_with_distinct_stems_keep_bare_ids(self, tmp_path: Path) -> None:
+        _make_od_root(tmp_path, name="VisDrone2019-DET-train")
+        val = _make_od_root(tmp_path, name="VisDrone2019-DET-val")
+        for path in (val / "images" / "0001.jpg", val / "images" / "0002.jpg", val / "annotations" / "0001.txt"):
+            path.rename(path.with_name(path.name.replace("000", "100")))
+        ds = load_od(tmp_path, dataset_format="visdrone")
+        assert [s.image_id for s in ds.samples] == ["0001", "0002", "1001", "1002"]
+
     def test_reads_tif_images_by_default(self, tmp_path: Path) -> None:
         # The static writer copies source images verbatim, so .tif sources
         # (e.g. arriving via flat_images) must reload rather than vanish.
@@ -324,6 +363,11 @@ class TestSniff:
         base = _make_od_root(tmp_path)
         assert VisDroneObjectDetectionLoader.sniff(base) is True
         assert VisDroneImageClassificationLoader.sniff(base) is True
+
+    def test_sniff_true_on_parent_of_split_roots(self, tmp_path: Path) -> None:
+        # So autodetection (input_format=None) also finds a VisDrone write destination.
+        _make_od_root(tmp_path)
+        assert VisDroneObjectDetectionLoader.sniff(tmp_path) is True
 
     def test_sniff_false_without_annotations_dir(self, tmp_path: Path) -> None:
         (tmp_path / "images").mkdir()

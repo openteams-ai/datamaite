@@ -125,6 +125,13 @@ def _mot_dataset(tmp_path: Path):  # type: ignore[no-untyped-def]
     return BoxTrackDataset(sequences=(seq,), categories=dict(CATEGORIES))
 
 
+def _class_map(key) -> dict[str, dict[str | int, int]]:  # type: ignore[no-untyped-def]
+    """VisDrone has no "widget" class, so writing the source fixture to it needs an explicit class_map."""
+    if key.format is DatasetFormat.VISDRONE_VIDEO:
+        return {"class_map": {"widget": 4}}
+    return {}
+
+
 def _dataset_for(task: Task, tmp_path: Path):  # type: ignore[no-untyped-def]
     if task is Task.IC:
         return _ic_dataset(tmp_path)
@@ -323,6 +330,7 @@ def test_writer_storage_directions_and_remote_reload(key, tmp_path: Path, memory
         output_format=key.format,
         output_variant=key.variant,
         verbose=True,
+        **_class_map(key),
     )
     loaded_local = load(
         _reload_root(local_reference, key),
@@ -338,6 +346,7 @@ def test_writer_storage_directions_and_remote_reload(key, tmp_path: Path, memory
         output_format=key.format,
         output_variant=key.variant,
         verbose=True,
+        **_class_map(key),
     )
     assert local_to_cloud
     loaded_remote = load(
@@ -505,7 +514,7 @@ def test_failed_remote_clear_restores_previous_destination(memory_root, monkeypa
 def test_remote_autodetection(key, tmp_path: Path, memory_root) -> None:  # type: ignore[no-untyped-def]
     dataset = _dataset_for(key.task, tmp_path / "autodetect-source")
     root = memory_root / "autodetect" / key.task.value / key.format.value
-    write(dataset, root, output_format=key.format, output_variant=key.variant)
+    write(dataset, root, output_format=key.format, output_variant=key.variant, **_class_map(key))
 
     detected = load(_reload_root(root, key), dataset_format=None, task=key.task)
 
@@ -521,14 +530,14 @@ def test_remote_destination_modes_for_every_writer(key, tmp_path: Path, memory_r
     dataset = _dataset_for(key.task, tmp_path / "mode-source")
     dest = memory_root / "destination-modes" / key.task.value / key.format.value
 
-    write(dataset, dest, output_format=key.format, output_variant=key.variant)
+    write(dataset, dest, output_format=key.format, output_variant=key.variant, **_class_map(key))
     with pytest.raises(FileExistsError):
-        write(dataset, dest, output_format=key.format, output_variant=key.variant, mode="error")
+        write(dataset, dest, output_format=key.format, output_variant=key.variant, mode="error", **_class_map(key))
 
     stale = dest / "stale.txt"
     stale.write_text("stale", encoding="utf-8")
-    write(dataset, dest, output_format=key.format, output_variant=key.variant, mode="append")
+    write(dataset, dest, output_format=key.format, output_variant=key.variant, mode="append", **_class_map(key))
     assert stale.exists()
 
-    write(dataset, dest, output_format=key.format, output_variant=key.variant, mode="replace")
+    write(dataset, dest, output_format=key.format, output_variant=key.variant, mode="replace", **_class_map(key))
     assert not stale.exists()
