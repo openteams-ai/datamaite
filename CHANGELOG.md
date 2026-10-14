@@ -165,6 +165,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- README brought in line with current behavior (#93): Flat MP4 writing is
+  available (video only, not "planned"); flat MP4 and flat still-image folders
+  are listed as output formats; the core install's dependencies include
+  `fsspec` and `universal-pathlib`; Hugging Face Vision is listed among the
+  round-trip writers; the VisDrone IC crop limitation now says the YOLO and
+  Hugging Face Vision IC writers skip crop samples (use the VisDrone writer to
+  keep crops); the CLI usage shows `-v`/`-q`/`--debug` as global flags and adds
+  `stats`, `--max-findings-per-check`, `--no-cache`, and `--clean`; and
+  non-HMIE validation is described accurately (the CLI rejects the format, and
+  Python `validate()` raises `NotImplementedError`).
 - `ObjectDetectionDataset`, `ImageClassificationDataset` and `BoxTrackDataset`
   now pass static type checking (pyright and mypy) as MAITE `Dataset` /
   `FieldwiseDataset` implementations (#124). Type checkers now see `metadata`

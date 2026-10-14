@@ -41,8 +41,9 @@ HMIE/Scale, flat MP4 video folders, flat still-image folders
 Video Classification, Hugging Face Vision (still-image IC + OD), MOTChallenge,
 TAO, VisDrone Video, VisDrone still images,
 COCO OD, YOLO image classification, and YOLO object detection are implemented
-input formats; HMIE/Scale, Hugging Face Video Classification, Hugging Face
-Vision (IC + OD), MOTChallenge,
+input formats; HMIE/Scale, flat MP4 video folders (video only), flat
+still-image folders (encoded images only), Hugging Face Video Classification,
+Hugging Face Vision (IC + OD), MOTChallenge,
 TAO, VisDrone Video, VisDrone still images (OD + IC), COCO OD, YOLO image
 classification, and YOLO object
 detection are implemented output formats. Validation is currently **HMIE/Scale only**;
@@ -52,7 +53,7 @@ yet.
 | Format | Load | Validate | Write |
 | --- | --- | --- | --- |
 | HMIE / Scale (FMV) | ✅ | ✅ | ✅ |
-| Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | planned |
+| Flat folder MP4 video (H.264 / MPEG-2) | ✅ | — | ✅ video only |
 | Flat folder still images (.jpg / .png / .tif / .safetensors) | ✅ | — | ✅ encoded only |
 | Hugging Face Video Classification | ✅ | — | ✅ |
 | Hugging Face Vision (image classification) | ✅ | — | ✅ |
@@ -78,12 +79,13 @@ pip install datamaite
 ```
 
 Core installs only direct runtime dependencies needed for annotation loading,
-validation, conversion dispatch, and MAITE target arrays: `pydantic` and
-`numpy`. Pixel/media decoding is selected by task extras:
+validation, conversion dispatch, and MAITE target arrays: `pydantic`, `numpy`,
+and the storage layer (`fsspec`, `universal-pathlib`). Pixel/media decoding is
+selected by task extras:
 
 | Install | Adds | Enables |
 | --- | --- | --- |
-| `datamaite` | `pydantic`, `numpy` | load/convert IRs, HMIE structure/annotation validation, MAITE target objects |
+| `datamaite` | `pydantic`, `numpy`, `fsspec`, `universal-pathlib` | load/convert IRs, HMIE structure/annotation validation, MAITE target objects |
 | `datamaite[fmv]` | OpenCV + PyAV | FMV integrity checks, flat MP4 probing, video-backed MOT decode/export |
 | `datamaite[od]` | OpenCV, `tifffile` | still-image OD pixel decode (`tifffile`: multispectral/SAR TIFFs) |
 | `datamaite[ic]` | OpenCV, `tifffile` | still-image IC pixel decode (`tifffile`: multispectral/SAR TIFFs) |
@@ -456,9 +458,11 @@ The root may be one split root or a parent of several — for example the
 loaded and each sample keeps its `split`.
 
 VisDrone ships no standard image-classification format; datamaite derives IC
-samples from the DET annotations as object crops. **Limitation:** writing a
-VisDrone-derived IC dataset through an image-copying IC writer would emit full
-images, not crops — see the follow-up issue before round-tripping IC crops.
+samples from the DET annotations as object crops. **Limitation:** the
+image-copying IC writers (YOLO, Hugging Face Vision) cannot crop, so they skip
+crop samples with a warning rather than emit mislabeled full images. Write
+VisDrone-derived IC datasets with `output_format="visdrone"` to keep the
+crops.
 
 Both IC and OD use still-image records with first-class `split` and shared image
 source fields (`path_or_uri`, `image_bytes`, `file_name`, `width`, `height`).
@@ -636,9 +640,9 @@ od = load_od("/path/to/yolo-det", dataset_format="yolo")
 write(od, "/path/to/yolo-det-out", output_format="yolo")
 ```
 
-HMIE, Hugging Face Video Classification, MOTChallenge, TAO, VisDrone Video,
-VisDrone still images (OD + IC), COCO OD, YOLO OD, and YOLO IC have
-round-trip writers. The MOT routes recover
+HMIE, Hugging Face Video Classification, Hugging Face Vision (IC + OD),
+MOTChallenge, TAO, VisDrone Video, VisDrone still images (OD + IC), COCO OD,
+YOLO OD, and YOLO IC have round-trip writers. The MOT routes recover
 the same box/category/frame content represented by `BoxTrackDataset`; VC/OD/IC
 routes preserve their task records within the constraints of each format (for
 example, YOLO OD stores normalized boxes and class indices, not COCO
@@ -648,19 +652,29 @@ subclass + `@register_writer` — see [docs/reference/architecture.md](docs/refe
 ## CLI Usage
 
 ```text
-datamaite validate <path> [options]
+datamaite [-v] [-q] [--debug] validate <path> [options]
+datamaite [-v] [-q] [--debug] stats <path> [--json]
 
-Options:
+Global flags (before the command):
   -v, --verbose          Show individual findings per file
   -q, --quiet            Suppress progress output (for scripts)
-  -o, --output FILE      Write full report to a file
+  --debug                Enable debug logging
+
+validate options:
+  -o, --output [FILE]    Write full report to a file (.txt, .json, or .html)
   --skip-video-check     Skip FMV integrity checks (faster, JSON-only)
   --workers N            Number of parallel workers (default: CPU count)
+  --max-findings-per-check N
+                         Cap individual findings kept per check (counts stay exact)
+  --no-cache             Neither read nor write the validation cache
+  --clean                Delete the validation cache before running
   --json                 Emit results as JSON
   --jsonl                Emit results as newline-separated JSONL
-  --format FORMAT        Dataset format (default: hmie)
-  --debug                Enable debug logging
+  --format hmie          Dataset format (only hmie is supported)
 ```
+
+`datamaite stats` summarizes a dataset's duration, frame, and box
+distributions. See [docs/reference/cli.md](docs/reference/cli.md) for details.
 
 > **Note:** `--skip-video-check` (and `check_video_integrity=False`) reports
 > FMV integrity as **SKIPPED**, not PASS — a skipped check is *not* a
@@ -672,8 +686,9 @@ Exit codes: `0` = pass, `1` = warnings only, `2` = errors present.
 
 ## Validation Checks
 
-Validation is currently implemented only for HMIE/Scale. For any non-HMIE
-`--format`, `datamaite validate` raises `NotImplementedError`; loaders/writers
+Validation is currently implemented only for HMIE/Scale. The CLI accepts only
+`--format hmie`, and the Python `validate()` raises `NotImplementedError` for any
+other `dataset_format`; loaders/writers
 for COCO, YOLO IC/OD, MOTChallenge, TAO, VisDrone (video and still images), and
 Hugging Face VC do not imply on-disk validation support yet.
 
