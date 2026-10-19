@@ -72,6 +72,10 @@ loader / writer design and how to add a new loader or writer.
 
 ## Installation extras
 
+DataMAITE runs on Python 3.10 to 3.14 and is verified on Linux x86_64. See
+[System requirements](docs/reference/system-requirements.md) for hardware,
+architectures, and internet access.
+
 Core install is deliberately lean:
 
 ```bash

@@ -6,6 +6,8 @@ command-line interface, and the annotation format schemas.
 - **[Architecture](architecture.md)** — a developer's map of the codebase: what
   datamaite does, the loaders, writers and conversions between formats, and the
   on-disk dataset layout.
+- **[System requirements](system-requirements.md)**: supported Python versions,
+  minimum hardware, architectures, and internet access.
 - **[CLI](cli.md)** — the `datamaite` command-line interface and its subcommands.
 - **[Dataset structures](dataset-structures.md)** — which on-disk structures load,
   which raise errors, and how arbitrary/unlabeled/archived inputs behave.
@@ -17,6 +19,7 @@ command-line interface, and the annotation format schemas.
 :hidden:
 
 architecture
+system-requirements
 cli
 dataset-structures
 schemas

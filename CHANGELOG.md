@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A System requirements reference page (#112, SR-5-H-1 / DR-2.6-H-7/H-8/H-9):
+  supported Python versions, minimum and recommended hardware, with memory
+  scaling with annotations rather than media, verified and supported
+  architectures, and when DataMAITE needs internet access. Linked from the
+  README and Installation.
 - MAITE IC/OD image color mode (#84): `with_image_options(color_mode=...)` on
   `ImageClassificationDataset` and `ObjectDetectionDataset` selects `"rgb"`
   (default, unchanged `(3, H, W)` `uint8`), `"gray"` (`(1, H, W)` `uint8`), or

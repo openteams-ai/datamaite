@@ -5,6 +5,9 @@ kept deliberately small so annotation loading, conversion dispatch, and HMIE
 structure/annotation validation do not pull in native media stacks. `datamaite`
 supports Python 3.10–3.14.
 
+Check the [system requirements](../reference/system-requirements.md) first:
+supported Python versions, hardware, architectures, and internet access.
+
 ## With pip
 
 Released versions install from PyPI with pip, which is the supported path for
