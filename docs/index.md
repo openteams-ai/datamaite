@@ -78,5 +78,7 @@ Learn more in the
 
 getting-started/index
 tutorials/index
+explanations/index
 reference/index
+glossary
 ```

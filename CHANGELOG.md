@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Explanations and a Glossary in the docs (#118, DR-2.5-H-1/H-2/H-3): five
+  concept-first pages (dataset protocols, full-motion video and snippets, box
+  tracks, empty frames, category taxonomies and ID density) and a glossary
+  of the product vocabulary, cross-linked to them.
 - A System requirements reference page (#112, SR-5-H-1 / DR-2.6-H-7/H-8/H-9):
   supported Python versions, minimum and recommended hardware, with memory
   scaling with annotations rather than media, verified and supported

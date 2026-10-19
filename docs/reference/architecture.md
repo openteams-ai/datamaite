@@ -801,19 +801,22 @@ Mechanics that keep this honest:
   lossy) for the "evaluate a still-image detector on video frames" workflow —
   designed below, not yet implemented.
 - **Two length / iteration views.** `len(ds)` / `ds[i]` / `for x in ds` are
-  the MAITE **item** view — one item per *video-bearing* sequence. The
-  **record** view is `ds.sequence_count` / `ds.iter_sequences()` /
-  `ds.sequences` — every loaded sequence, including video-less ones (which
-  the validator and converters walk). They differ when a sequence has
-  annotations but no video. `sequences` is stored as a tuple, so the cached
-  video-bearing item list (`_mot_sequences`) is O(1) and never stale.
+  the MAITE **item** view — one item per *pixel-bearing* sequence (video
+  file, frame table, or frame dir + pattern). The **record** view is
+  `ds.sequence_count` / `ds.iter_sequences()` / `ds.sequences` — every loaded
+  sequence, including pixel-less ones (which the validator and converters
+  walk). They differ only when a sequence has annotations but no pixels.
+  `sequences` is stored as a tuple, so the cached pixel-bearing item list
+  (`_mot_sequences`) is O(1) and never stale.
 - **`ds.with_mot_options(...)` configures the MOT view** (`empty_frame_policy`,
   `decoder`, `dataset_id`) by returning a copy — it is *not* an
   adapter/conversion call (the model is already MAITE).
 - **`empty_frame_policy="all"` needs an exact frame count.** It only streams
-  every frame when `VideoSequence.num_frames_exact` is set (the loader sets
-  it under `require_video=True`); otherwise the count is an estimate and the
-  view falls back to annotated frames with a warning.
+  every frame when `VideoSequence.num_frames_exact` is set. Loaders set it
+  from an authoritative count: a video probe (flat MP4 always, HMIE under
+  `require_video=True`), a MOTChallenge `seqinfo.ini` length, or counted frame
+  files (MOTChallenge, TAO, VisDrone Video). Otherwise the count is an
+  estimate and the view falls back to annotated frames with a warning.
 
 Verification: beyond `isinstance`, the suite drives the dataset through
 MAITE's own `maite.tasks.predict` with a stub model — proving the object is
