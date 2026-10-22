@@ -471,10 +471,13 @@ def _category_value(detection: ObjectDetectionAnnotation, taxonomy: Taxonomy | N
         return None
     if taxonomy is not None and source_id is not None:
         entry = taxonomy.by_source_id(source_id)
-        if entry is not None:
+        if entry is None and taxonomy.id_density == "dense" and isinstance(source_id, int):
+            entry = taxonomy.entries[source_id] if 0 <= source_id < len(taxonomy.entries) else None
+        # A name that is just the id as text (the loader's placeholder for an
+        # integer-only source) is written as the id: written as a string, a
+        # reload reads it as a name and renumbers it.
+        if entry is not None and not (isinstance(source_id, int) and entry.name == str(source_id)):
             return entry.name
-        if taxonomy.id_density == "dense" and isinstance(source_id, int) and 0 <= source_id < len(taxonomy.entries):
-            return taxonomy.entries[source_id].name
     if isinstance(source_id, (int, str)):
         return source_id
     return None

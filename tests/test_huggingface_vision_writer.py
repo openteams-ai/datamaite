@@ -555,3 +555,22 @@ class TestHuggingFaceVisionODWriterTaxonomyNames:
 
         rows = [json.loads(line) for line in (dest / "train" / "metadata.jsonl").read_text().splitlines()]
         assert rows[0]["objects"]["categories"] == [3]
+
+    def test_placeholder_names_for_integer_ids_round_trip_as_ids(self, tmp_path: Path) -> None:
+        """Integer-only categories are loaded with names "2", "10"...; writing those names
+        as strings made the reload renumber every box (#129)."""
+        src = tmp_path / "src"
+        (src / "train").mkdir(parents=True)
+        (src / "train" / "a.jpg").write_bytes(_JPEG)
+        (src / "train" / "metadata.jsonl").write_text(
+            json.dumps({"file_name": "a.jpg", "objects": {"bbox": [[1, 1, 5, 5]] * 3, "categories": [2, 10, 5]}}),
+            encoding="utf-8",
+        )
+        dest = tmp_path / "dest"
+
+        write(load_od(src, dataset_format="huggingface_vision"), dest, output_format="huggingface_vision")
+
+        rows = [json.loads(line) for line in (dest / "train" / "metadata.jsonl").read_text().splitlines()]
+        assert rows[0]["objects"]["categories"] == [2, 10, 5]
+        reloaded = load_od(dest, dataset_format="huggingface_vision")
+        assert [d.category_id for d in reloaded.samples[0].detections] == [2, 10, 5]

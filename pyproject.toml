@@ -52,6 +52,9 @@ dependencies = [
     # Already installed via pydantic, whose own floor (4.6.1 for pydantic 2.0)
     # is too low to guarantee it.
     "typing_extensions>=4.13",
+    # YOLO data.yaml parsing. No dependencies of its own; a hand-rolled
+    # fallback parser silently misread class names (#129).
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

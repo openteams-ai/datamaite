@@ -349,6 +349,21 @@ class TestReplaceMode:
             write(_EMPTY, fake_home, output_format="motchallenge", mode="replace")
         assert (fake_home / "sentinel.txt").exists()
 
+    def test_replace_refuses_file_uri_upath_containing_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file:// UPath dest gets the same cwd/home guard as a plain path (#129)."""
+        from upath import UPath
+
+        (tmp_path / "sentinel.txt").write_text("keep me", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        with pytest.raises(ValueError, match=r"[Rr]efus"):
+            write(_EMPTY, UPath(tmp_path.as_uri()), output_format="motchallenge", mode="replace")
+        assert (tmp_path / "sentinel.txt").exists()
+        assert sub.exists()
+
     def test_replace_refuses_ancestor_of_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A dest that CONTAINS cwd (but isn't cwd itself) must also be refused (#55 Fix A2)."""
         (tmp_path / "sentinel.txt").write_text("keep me", encoding="utf-8")
@@ -705,6 +720,17 @@ class TestWriteReplaceSourceUnderDestination:
         # source frames + annotations survive untouched
         assert (src / "train" / "MOT17-02" / "gt" / "gt.txt").exists()
         assert list((src / "train" / "MOT17-02" / "img1").glob("*.jpg"))
+
+    def test_write_replace_refuses_source_dir_as_file_uri_upath(self, tmp_path: Path) -> None:
+        """The source-under-destination guard also holds for a file:// UPath dest (#129)."""
+        from upath import UPath
+
+        src = tmp_path / "ds"
+        write_mot_sequence(src, gt_rows=["1,1,10,20,30,40,1,1,1"])
+        dataset = load_mot(src, dataset_format="motchallenge")
+        with pytest.raises(ValueError, match=r"[Rr]efus"):
+            write(dataset, UPath(src.as_uri()), output_format="motchallenge", mode="replace")
+        assert (src / "train" / "MOT17-02" / "gt" / "gt.txt").exists()
 
     def test_write_replace_allows_unrelated_dest(self, tmp_path: Path) -> None:
         src = tmp_path / "ds"

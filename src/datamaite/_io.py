@@ -102,10 +102,11 @@ def resource_key(path: str | Path, storage_options: Mapping[str, Any] | None = N
             f"{getattr(resolved, 'protocol', '')}://{getattr(resolved, 'path', str(resolved))}"
             f"@fs:{id(getattr(resolved, 'fs', None))}"
         )
+    local = Path(local_open_target(resolved))  # file:// UPaths and plain paths share one key
     try:
-        return str(resolved.resolve(strict=False))
+        return str(local.resolve(strict=False))
     except OSError:
-        return str(resolved)
+        return str(local)
 
 
 def is_within(path: str | Path, root: str | Path) -> bool:
@@ -122,7 +123,10 @@ def is_within(path: str | Path, root: str | Path) -> bool:
                 return False
             child.relative_to(base)
             return True
-        return child.resolve(strict=False).is_relative_to(base.resolve(strict=False))
+        # Compare as plain Paths: a file:// UPath is never relative to a
+        # pathlib.Path (or vice versa), which would hide real containment.
+        local_child = Path(local_open_target(child)).resolve(strict=False)
+        return local_child.is_relative_to(Path(local_open_target(base)).resolve(strict=False))
     except (OSError, RuntimeError, ValueError):
         return False
 

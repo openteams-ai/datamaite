@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -256,7 +257,15 @@ class TestMalformed:
 
     @pytest.mark.parametrize(
         "file_name",
-        ["/abs/escape.jpg", "http://host/escape.jpg", "a\\b.jpg", "C:evil.jpg", "sub/../../escape.jpg"],
+        [
+            "/abs/escape.jpg",
+            "http://host/escape.jpg",
+            "C:evil.jpg",
+            "sub/../../escape.jpg",
+            "..\\escape.jpg",
+            "C:\\escape.jpg",
+            "\\\\server\\share\\escape.jpg",
+        ],
     )
     def test_unsafe_file_name_variants_drop_path(self, tmp_path: Path, file_name: str) -> None:
         payload = _coco()
@@ -265,6 +274,33 @@ class TestMalformed:
         _write(tmp_path, payload)
         ds = load_od(tmp_path, dataset_format="coco")
         assert ds.samples[0].path_or_uri is None
+
+    @pytest.mark.parametrize(
+        ("file_name", "on_disk"),
+        [
+            ("12:00:00.jpg", ("12:00:00.jpg",)),
+            ("cam1\\a.jpg", ("cam1", "a.jpg")),  # Windows export: a subdirectory
+        ],
+    )
+    def test_file_name_inside_the_root_resolves(self, tmp_path: Path, file_name: str, on_disk: tuple[str, ...]) -> None:
+        """Timestamped and Windows-exported names were given no image path (#129)."""
+        payload = _coco()
+        payload["images"] = [{"id": 1, "file_name": file_name, "width": 10, "height": 10}]
+        payload["annotations"] = []
+        _write(tmp_path, payload)
+        ds = load_od(tmp_path, dataset_format="coco")
+        assert ds.samples[0].file_name == file_name
+        assert ds.samples[0].path_or_uri == str(tmp_path.joinpath(*on_disk))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot contain a backslash")
+    def test_backslash_file_name_on_disk_is_read_as_written(self, tmp_path: Path) -> None:
+        (tmp_path / "cam1\\a.jpg").write_bytes(b"x")
+        payload = _coco()
+        payload["images"] = [{"id": 1, "file_name": "cam1\\a.jpg", "width": 10, "height": 10}]
+        payload["annotations"] = []
+        _write(tmp_path, payload)
+        ds = load_od(tmp_path, dataset_format="coco")
+        assert ds.samples[0].path_or_uri == str(tmp_path / "cam1\\a.jpg")
 
 
 class TestRegistryDispatch:

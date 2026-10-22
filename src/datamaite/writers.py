@@ -31,7 +31,7 @@ from datamaite._io import (
     write_mode_context,
 )
 from datamaite._types import DatasetFormat, Task, WriteMode
-from datamaite._upath import is_remote_path, to_dataset_path
+from datamaite._upath import is_remote_path, local_open_target, to_dataset_path
 from datamaite.model import BoxTrackDataset, VisionDataset
 
 _DatasetT = TypeVar("_DatasetT", bound=VisionDataset)
@@ -191,7 +191,10 @@ def _check_destination(dest: Path, mode: str) -> list[Path]:  # noqa: C901 - loc
             if len(remote_parts) <= 1:
                 raise ValueError(f"Refusing to replace an object-store root: {dest}")
         else:
-            resolved = dest.resolve()
+            # Compare as a plain Path: a file:// UPath never equals or contains a
+            # pathlib.Path, so the checks below would silently pass.
+            local_dest = Path(local_open_target(dest))
+            resolved = local_dest.resolve()
             cwd = Path.cwd().resolve()
             home = Path.home().resolve()
             # Refuse the filesystem root, and any directory that CONTAINS the cwd or home.
@@ -200,7 +203,7 @@ def _check_destination(dest: Path, mode: str) -> list[Path]:  # noqa: C901 - loc
                     f"Refusing to replace the contents of {dest} (resolves to {resolved}); it is the "
                     "filesystem root or contains the current working directory or home directory"
                 )
-            if dest.is_symlink():
+            if local_dest.is_symlink():
                 raise ValueError(f"Refusing to replace through a symlinked destination: {dest}")
     entries = list(dest.iterdir())
     if not entries:

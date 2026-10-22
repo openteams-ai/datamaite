@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `od`, `ic`, and `all` extras now install `tifffile` (#84), a pure-Python
   package that depends only on `numpy`.
+- PyYAML is now a core dependency (#129). It has no dependencies of its own
+  and replaces a built-in fallback parser for YOLO `data.yaml`.
 - The VisDrone still-image loaders accept a parent of one or more
   `VisDrone2019-DET-<split>/` roots, as the VisDrone writers emit, so loading
   a write destination returns its data instead of an empty dataset. Each
@@ -52,6 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Safety fixes (#129):
+  - `write(..., mode="replace")` now refuses a `file://` `UPath` destination
+    that contains the working or home directory, or the dataset's own source
+    files, as it already did for plain paths. Before, it deleted them.
+  - YOLO `data.yaml` is always read with PyYAML. Without it installed,
+    `names: [person, car]` was read as one class named `"[person, car]"`.
+  - Hugging Face detection datasets with integer `categories` and no class
+    names keep their ids through a write and reload instead of being renumbered.
+  - The HTML validation report escapes `<`, `>` and `&` in its embedded data,
+    so a label or file name such as `<!--<script>` can no longer blank it.
+  - COCO images whose `file_name` contains `\` or `:`, such as `cam1\a.png`
+    or `12:00:00.png`, are now found by the loader and kept (with their boxes)
+    by the writer. When the writer copies such an image, it writes it as
+    `cam1_a.png` or `12_00_00.png`, and the JSON uses that name; when there
+    is no image to copy, the original name is kept. Names that point outside
+    the dataset are still dropped.
 - Still-image conversions no longer silently drop or corrupt data. Each of
   these returned normally from `convert()`, with at most a logged warning:
   - Converting YOLO, Hugging Face, VisDrone or flat-image datasets to COCO

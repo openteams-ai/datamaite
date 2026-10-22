@@ -153,6 +153,24 @@ class TestRenderHtmlReport:
         html_str = render_html_report(result)
         assert "</script><script>" not in html_str
 
+    def test_comment_and_script_open_in_label_cannot_disable_report_script(self, tmp_path: Path) -> None:
+        """``<!--<script>`` inside the embedded data kept the report's script from running (#129)."""
+        import json
+        import re
+
+        result = ValidationResult(
+            dataset_path=tmp_path,
+            dataset_format=DatasetFormat.HMIE,
+            label_histogram=Counter({"<!--<script>": 1, "a & b > c": 1}),
+        )
+        html_str = render_html_report(result)
+        data = re.search(r"var REPORT_DATA = (.*?);\n", html_str)
+        assert data is not None
+        assert not re.search(r"[<>&]", data.group(1))
+        decoded = json.dumps(json.loads(data.group(1)), ensure_ascii=False)
+        assert "<!--<script>" in decoded
+        assert "a & b > c" in decoded
+
     def test_double_quote_in_label_name(self, tmp_path: Path) -> None:
         result = ValidationResult(
             dataset_path=tmp_path,

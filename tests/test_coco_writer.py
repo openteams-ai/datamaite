@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -435,6 +436,97 @@ class TestCocoWriterDrops:
         assert files == [out / "annotations" / "instances.json"]
         assert not (tmp_path / "deep" / "escape.jpg").exists()
         assert "unsafe file_name" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("file_name", "copied_name"), [("cam1\\a.png", "cam1_a.png"), ("12:00:00.png", "12_00_00.png")]
+    )
+    def test_portable_but_uncopyable_file_name_keeps_its_entry_and_detections(
+        self, tmp_path: Path, file_name: str, copied_name: str
+    ) -> None:
+        """Names the loader keeps (Windows exports, timestamps) were dropped with all their boxes (#129)."""
+        detection = ObjectDetectionAnnotation(bbox=(1.0, 1.0, 4.0, 4.0), category_id=1, category_name="car")
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(
+                    image_id=1, file_name=file_name, image_bytes=b"x", width=8, height=8, detections=(detection,)
+                ),
+            ),
+        )
+        for include_images, expected_name in ((False, file_name), (True, copied_name)):
+            out = tmp_path / f"out-{include_images}"
+            write(ds, out, output_format="coco", include_images=include_images)
+            document = json.loads((out / "annotations" / "instances.json").read_text(encoding="utf-8"))
+            assert [img["file_name"] for img in document["images"]] == [expected_name]
+            assert len(document["annotations"]) == 1
+        # The copied image is on disk under the name the JSON gives it.
+        assert (tmp_path / "out-True" / copied_name).read_bytes() == b"x"
+
+    def test_writable_name_is_renamed_apart_from_an_existing_one(self, tmp_path: Path) -> None:
+        ds = ObjectDetectionDataset(
+            samples=(
+                ImageObjectDetectionSample(image_id=1, file_name="cam1\\a.png", image_bytes=b"1", width=8, height=8),
+                ImageObjectDetectionSample(image_id=2, file_name="cam1_a.png", image_bytes=b"2", width=8, height=8),
+            ),
+        )
+        write(ds, tmp_path, output_format="coco")
+        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["cam1_a.png", "cam1_a_2.png"]
+        assert (tmp_path / "cam1_a.png").read_bytes() == b"1"
+        assert (tmp_path / "cam1_a_2.png").read_bytes() == b"2"
+
+    @staticmethod
+    def _colon_root(root: Path, *, with_image: bool) -> Path:
+        src = _coco_root(
+            root,
+            {
+                "images": [{"id": 1, "file_name": "12:00:00.jpg", "width": 8, "height": 8}],
+                "annotations": [{"id": 1, "image_id": 1, "bbox": [1, 1, 4, 4], "category_id": 1}],
+                "categories": [{"id": 1, "name": "car"}],
+            },
+            with_images=False,
+        )
+        if with_image:
+            (src / "12:00:00.jpg").write_bytes(b"frame")
+        return src
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot contain a colon")
+    def test_coco_round_trip_copies_colon_file_name(self, tmp_path: Path) -> None:
+        """The default convert renamed the entry but copied nothing, losing the image (#129)."""
+        src = self._colon_root(tmp_path / "src", with_image=True)
+        convert(src, tmp_path / "out", input_format="coco", output_format="coco")
+        assert (tmp_path / "out" / "12_00_00.jpg").read_bytes() == b"frame"
+        reloaded = load_od(tmp_path / "out", dataset_format="coco")
+        assert [(s.file_name, len(s.detections)) for s in reloaded.samples] == [("12_00_00.jpg", 1)]
+
+    def test_coco_round_trip_keeps_colon_file_name_without_copies(self, tmp_path: Path) -> None:
+        src = self._colon_root(tmp_path / "src", with_image=False)
+        convert(src, tmp_path / "out", input_format="coco", output_format="coco", include_images=False)
+        reloaded = load_od(tmp_path / "out", dataset_format="coco")
+        assert [(s.file_name, len(s.detections)) for s in reloaded.samples] == [("12:00:00.jpg", 1)]
+
+    def test_colon_file_name_without_an_image_keeps_its_name(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Nothing is copied, so a new name would point at no file and lose the original.
+        src = self._colon_root(tmp_path / "src", with_image=False)
+        with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
+            convert(src, tmp_path / "out", input_format="coco", output_format="coco")
+        document = json.loads((tmp_path / "out" / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert [img["file_name"] for img in document["images"]] == ["12:00:00.jpg"]
+        assert "does not exist" in caplog.text
+        assert "Renamed" not in caplog.text
+
+    @pytest.mark.parametrize(
+        "file_name",
+        ["../escape.jpg", "..\\escape.jpg", "/abs/escape.jpg", "C:\\escape.jpg", "c:/escape.jpg", "a:escape.jpg"],
+    )
+    def test_file_name_escaping_the_root_is_still_dropped(self, tmp_path: Path, file_name: str) -> None:
+        ds = ObjectDetectionDataset(
+            samples=(ImageObjectDetectionSample(image_id=1, file_name=file_name, image_bytes=b"x"),),
+        )
+        write(ds, tmp_path / "out", output_format="coco", include_images=False)
+        document = json.loads((tmp_path / "out" / "annotations" / "instances.json").read_text(encoding="utf-8"))
+        assert document["images"] == []
 
     @pytest.mark.parametrize(
         "bad_name",

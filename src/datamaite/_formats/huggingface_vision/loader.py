@@ -730,6 +730,13 @@ def _od_taxonomy(
             )
             if source_id is None or source_id in discovered:
                 continue
+            # A detection with only an integer id (no class name) gets the id
+            # as text as its placeholder name, e.g. class 0 is named "0". The
+            # writer depends on this exact form: writer._category_value writes
+            # a name equal to str(source_id) back as the integer, so a reload
+            # keeps the original ids. If it wrote "0" as text, the reload would
+            # treat it as a class name and renumber the classes. If you change
+            # how the placeholder is built here, update _category_value too.
             discovered[source_id] = detection.category_name or str(source_id)
     if not discovered:
         return None

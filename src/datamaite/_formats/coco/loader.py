@@ -337,15 +337,39 @@ def _build_samples(
 
 
 def _resolve_image_path(base_dir: Path, file_name: str) -> Path | None:
-    """Resolve a COCO ``file_name`` safely under ``base_dir`` (reject path escapes)."""
-    if "\\" in file_name:
+    """Resolve a COCO ``file_name`` under ``base_dir``, rejecting names that escape it.
+
+    ``:`` and ``\\`` alone do not escape: timestamped frames use ``12:00:00.png``
+    and Windows exports use ``cam1\\a.png``. A ``\\`` name is read as written when
+    that file exists (POSIX names may contain ``\\``), else as a Windows path.
+    """
+    if "://" in file_name or _escapes_root(file_name):
         logger.warning("Skipping COCO image with unsafe file_name %r", file_name)
         return None
-    posix = PurePosixPath(file_name.strip())
-    if not posix.parts or posix.is_absolute() or any(part in {"..", ""} or ":" in part for part in posix.parts):
-        logger.warning("Skipping COCO image with unsafe file_name %r", file_name)
-        return None
-    return base_dir.joinpath(*posix.parts)
+    name = file_name.strip()
+    path = base_dir.joinpath(*PurePosixPath(name).parts)
+    if "\\" in name and not path.exists():
+        return base_dir.joinpath(*PurePosixPath(name.replace("\\", "/")).parts)
+    return path
+
+
+def _escapes_root(file_name: str) -> bool:
+    """Whether ``file_name`` points outside the dataset: absolute, a drive, or ``..``.
+
+    Backslashes count as separators here, so ``..\\x.jpg`` and ``C:\\x.jpg`` are
+    caught; a ``\\`` or ``:`` alone does not make a name escape. Any one-letter
+    ``<letter>:`` prefix is a drive, even without a separator after it:
+    Windows reads ``a:b.png`` as relative to drive ``a:``, not to the images
+    directory, so joining it onto that directory would discard the directory.
+    """
+    normalized = file_name.strip().replace("\\", "/")
+    posix = PurePosixPath(normalized)
+    return (
+        not posix.parts
+        or posix.is_absolute()
+        or ".." in posix.parts
+        or (len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha())
+    )
 
 
 def _parse_bbox(value: object) -> tuple[float, float, float, float] | None:

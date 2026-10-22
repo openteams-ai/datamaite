@@ -328,20 +328,40 @@ class TestYoloObjectDetectionLoader:
         assert yolo_loader._read_image_size(gif) == (32, 16)
         assert yolo_loader._read_image_size(bmp) == (24, 12)
 
-    def test_fallback_simple_yaml_parser(self) -> None:
-        parsed = yolo_loader._parse_simple_yaml(
+    def test_data_yaml_comments_and_block_collections(self, tmp_path: Path) -> None:
+        path = tmp_path / "data.yaml"
+        path.write_text(
             "# comment\n"
             "path: '.'\n"
             "train:\n"
             "  - images/train\n"
             "names:\n"
             "  0: cat # inline comment\n"
-            "  1: 'dog # not comment'\n"
+            "  1: 'dog # not comment'\n",
+            encoding="utf-8",
         )
+        parsed = yolo_loader._read_data_yaml(path)
 
         assert parsed["path"] == "."
         assert parsed["train"] == ["images/train"]
         assert yolo_loader._names_from_yaml(parsed["names"]) == ((0, "cat"), (1, "dog # not comment"))
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("names: [person, car]", ((0, "person"), (1, "car"))),
+            ("names: [person,\n  car]", ((0, "person"), (1, "car"))),
+            ("names: {0: person, 2: car}", ((0, "person"), (2, "car"))),
+            ("names: ['person', \"traffic, light\"]", ((0, "person"), (1, "traffic, light"))),
+            ('names: "[person, car]"', ((0, "person"), (1, "car"))),
+            ("names: person", ((0, "person"),)),
+        ],
+    )
+    def test_data_yaml_names_forms(self, tmp_path: Path, text: str, expected: tuple[tuple[int, str], ...]) -> None:
+        """Flow lists, including ones split over lines, give one class per item (#129)."""
+        path = tmp_path / "data.yaml"
+        path.write_text(text + "\n", encoding="utf-8")
+        assert yolo_loader._names_from_yaml(yolo_loader._read_data_yaml(path)["names"]) == expected
 
     def test_unreadable_image_dimensions_keep_sample_but_drop_labels(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

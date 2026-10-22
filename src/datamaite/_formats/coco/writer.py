@@ -23,8 +23,9 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
+from datamaite._formats.coco.loader import _escapes_root
 from datamaite._io import copy_resource, same_resource, sample_image_dimensions, source_path
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import to_dataset_path
@@ -123,6 +124,9 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
         include_images
             When True (default), copy each sample's image (from
             ``image_bytes`` or ``path_or_uri``) to ``dest/<file_name>``.
+            A ``file_name`` with ``\\`` or ``:`` cannot be written there, so
+            the copy and its JSON entry use ``_`` instead (``cam1\\a.png`` ->
+            ``cam1_a.png``, ``12:00:00.png`` -> ``12_00_00.png``).
             Samples whose image source is missing keep their JSON entry --
             COCO JSON references files by name and stays loadable without
             them -- with a warning per missing source. When False, the images
@@ -154,6 +158,7 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
             used={image_id for sample in dataset.samples if (image_id := _int_id(sample.image_id)) is not None}
         )
         reassigned: list[int | str] = []
+        renamed: list[tuple[str, str]] = []
         # COCO flattens images to one directory keyed by file_name; two source
         # images with the same name (e.g. YOLO images/train/a.jpg and
         # images/val/a.jpg) would otherwise share one file on disk. Only copied
@@ -171,6 +176,7 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
                 assigned=assigned_image_ids,
                 reassigned=reassigned,
                 used_file_names=used_file_names,
+                renamed=renamed,
             )
             if image_obj is None:
                 continue
@@ -196,6 +202,7 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
                 len(reassigned),
                 reassigned[0],
             )
+        _warn_renamed(renamed)
         if dropped_scores:
             logger.warning(
                 "Dropped the score field from %d annotation(s): %s",
@@ -242,6 +249,7 @@ def _image_object(
     assigned: _IdAllocator,
     reassigned: list[int | str],
     used_file_names: set[str] | None,
+    renamed: list[tuple[str, str]],
 ) -> dict[str, Any] | None:
     image_id = _int_id(sample.image_id)
     if sample.image_id in seen:
@@ -250,17 +258,24 @@ def _image_object(
     if not file_name:
         logger.warning("Skipping sample %s (and its detections): COCO images require a file_name", sample.image_id)
         return None
-    if not _is_safe_file_name(file_name):
-        # Don't emit an images[].file_name we would refuse to copy: keep the JSON
-        # and the on-disk images consistent.
+    if _escapes_root(file_name):
         logger.warning("Skipping sample %s (and its detections): unsafe file_name %r", sample.image_id, file_name)
         return None
+    # Other names the copy refuses (``\\`` or ``:``, e.g. ``cam1\\a.png`` or
+    # ``12:00:00.png``) are kept in the JSON, as the loader keeps them. When the
+    # image is copied, the copy and the JSON both use a writable name instead;
+    # with no source to copy, the original name still points at the real file.
     seen.add(sample.image_id)
     if image_id is None:
         image_id = assigned.reserve()
         reassigned.append(sample.image_id)
     if used_file_names is not None:
-        file_name = _unique_file_name(file_name, used_file_names)
+        if not _is_safe_file_name(file_name) and _has_image_source(sample):
+            writable = _unique_file_name(_writable_file_name(file_name), used_file_names)
+            renamed.append((file_name, writable))
+            file_name = writable
+        else:
+            file_name = _unique_file_name(file_name, used_file_names)
     obj: dict[str, Any] = {"id": image_id, "file_name": file_name}
     # COCO images[] entries require width/height; formats such as VisDrone do
     # not store them, so fall back to the image header.
@@ -420,6 +435,20 @@ def _warn_shared_file_names(images: list[dict[str, Any]]) -> None:
         )
 
 
+def _warn_renamed(renamed: list[tuple[str, str]]) -> None:
+    if renamed:
+        logger.warning(
+            "Renamed %d copied image(s) whose file_name cannot be written as-is (e.g. %r -> %r)",
+            len(renamed),
+            *renamed[0],
+        )
+
+
+def _writable_file_name(file_name: str) -> str:
+    """``file_name`` with ``\\`` and ``:`` replaced by ``_``, for a name that does not escape the root."""
+    return file_name.replace("\\", "_").replace(":", "_")
+
+
 def _unique_file_name(file_name: str, used: set[str]) -> str:
     """``file_name``, or ``<stem>_<n><suffix>`` if an earlier image already took it.
 
@@ -436,43 +465,52 @@ def _unique_file_name(file_name: str, used: set[str]) -> str:
     return candidate
 
 
+def _has_image_source(sample: ImageObjectDetectionSample) -> bool:
+    if sample.image_bytes is not None:
+        return True
+    return sample.path_or_uri is not None and source_path(sample.path_or_uri).is_file()
+
+
 def _copy_image(sample: ImageObjectDetectionSample, *, dest: Path, file_name: str) -> Path | None:
+    # Check the source first: a name kept because there is nothing to copy is
+    # not writable either, and "unsafe file_name" would hide the real cause.
+    source = None
+    if sample.image_bytes is None:
+        if sample.path_or_uri is None:
+            logger.warning(
+                "No image source for sample %s (%r); its JSON entry is kept but no file was written",
+                sample.image_id,
+                file_name,
+            )
+            return None
+        source = source_path(sample.path_or_uri)
+        if not source.is_file():
+            # The sample names a source; it just isn't on disk -- say so, rather
+            # than the misleading "no image source" above.
+            logger.warning(
+                "Image source for sample %s does not exist: %r; its JSON entry is kept but no file was written",
+                sample.image_id,
+                sample.path_or_uri,
+            )
+            return None
     target = _safe_target(dest, file_name)
     if target is None:
         logger.warning("Not writing image for sample %s: unsafe file_name %r", sample.image_id, file_name)
         return None
-    if sample.image_bytes is not None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(sample.image_bytes)
-        return target
-    if sample.path_or_uri is not None:
-        source = source_path(sample.path_or_uri)
-        if source.is_file():
-            if same_resource(source, target):
-                return None  # writing a dataset over itself; the image is already in place
-            return copy_resource(source, target)
-        # The sample names a source; it just isn't on disk -- say so, rather than
-        # the misleading "no image source" below.
-        logger.warning(
-            "Image source for sample %s does not exist: %r; its JSON entry is kept but no file was written",
-            sample.image_id,
-            sample.path_or_uri,
-        )
-        return None
-    logger.warning(
-        "No image source for sample %s (%r); its JSON entry is kept but no file was written",
-        sample.image_id,
-        file_name,
-    )
-    return None
+    if source is not None:
+        if same_resource(source, target):
+            return None  # writing a dataset over itself; the image is already in place
+        return copy_resource(source, target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(cast(bytes, sample.image_bytes))
+    return target
 
 
 def _is_safe_file_name(file_name: str) -> bool:
     """Whether ``file_name`` is a safe relative path (no escapes); dest-independent.
 
-    Shared by ``_image_object`` (so the emitted ``images[].file_name`` is one we
-    would actually copy) and ``_safe_target`` (the copy destination), so the JSON
-    and the on-disk images can never disagree.
+    A name that fails this but does not escape the root (see ``_escapes_root``)
+    is kept in the JSON, and a copy of its image is written under a writable name.
     """
     if "\\" in file_name:
         return False

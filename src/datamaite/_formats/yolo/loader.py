@@ -17,7 +17,6 @@ dataset_format="yolo")`` for object detection.
 
 from __future__ import annotations
 
-import ast
 import logging
 import math
 import struct
@@ -25,6 +24,8 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
+
+import yaml
 
 from datamaite._formats.yolo._common import (
     IMAGE_EXTENSIONS,
@@ -1285,101 +1286,14 @@ def _read_data_yaml(path: Path | None) -> dict[str, Any]:
         logger.warning("Could not read YOLO data YAML %s: %s", path, exc)
         return {}
     try:
-        import yaml  # type: ignore[import-untyped]
-    except ImportError:
-        yaml = None  # type: ignore[assignment]
-    if yaml is not None:
-        try:
-            data = yaml.safe_load(text)
-        except Exception as exc:
-            logger.warning("Could not parse YOLO data YAML %s with PyYAML: %s", path, exc)
-            return {}
-        if not isinstance(data, dict):
-            logger.warning("YOLO data YAML %s must contain a mapping", path)
-            return {}
-        return dict(data)
-    return _parse_simple_yaml(text)
-
-
-def _parse_simple_yaml(text: str) -> dict[str, Any]:
-    """Small fallback parser for the data.yaml shapes YOLO datasets usually use."""
-    lines = text.splitlines()
-    data: dict[str, Any] = {}
-    index = 0
-    while index < len(lines):
-        raw = _strip_yaml_comment(lines[index])
-        if not raw.strip():
-            index += 1
-            continue
-        if raw[:1].isspace() or ":" not in raw:
-            index += 1
-            continue
-        key, value = raw.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if value:
-            data[key] = _parse_yaml_scalar(value)
-            index += 1
-            continue
-        block: list[str] = []
-        index += 1
-        while index < len(lines):
-            block_raw = _strip_yaml_comment(lines[index])
-            if block_raw.strip() and not block_raw[:1].isspace():
-                break
-            if block_raw.strip():
-                block.append(block_raw.strip())
-            index += 1
-        data[key] = _parse_yaml_block(block)
-    return data
-
-
-def _strip_yaml_comment(line: str) -> str:
-    quote: str | None = None
-    escaped = False
-    chars: list[str] = []
-    for char in line:
-        if escaped:
-            chars.append(char)
-            escaped = False
-            continue
-        if char == "\\" and quote is not None:
-            chars.append(char)
-            escaped = True
-            continue
-        if char in {"'", '"'}:
-            quote = None if quote == char else char if quote is None else quote
-            chars.append(char)
-            continue
-        if char == "#" and quote is None:
-            break
-        chars.append(char)
-    return "".join(chars).rstrip()
-
-
-def _parse_yaml_scalar(value: str) -> Any:
-    text = value.strip()
-    if not text or text.lower() in {"null", "none", "~"}:
-        return None
-    try:
-        return ast.literal_eval(text)
-    except (ValueError, SyntaxError):
-        return text.strip("\"'")
-
-
-def _parse_yaml_block(block: list[str]) -> Any:
-    if not block:
-        return None
-    if all(line.startswith("-") for line in block):
-        return [_parse_yaml_scalar(line[1:].strip()) for line in block]
-    if all(":" in line for line in block):
-        result: dict[Any, Any] = {}
-        for line in block:
-            key, value = line.split(":", 1)
-            parsed_key = _parse_yaml_scalar(key.strip())
-            result[parsed_key] = _parse_yaml_scalar(value.strip())
-        return result
-    return [_parse_yaml_scalar(line) for line in block]
+        data = yaml.safe_load(text)
+    except Exception as exc:
+        logger.warning("Could not parse YOLO data YAML %s: %s", path, exc)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("YOLO data YAML %s must contain a mapping", path)
+        return {}
+    return dict(data)
 
 
 def _names_from_yaml(raw_names: Any) -> tuple[tuple[int, str], ...]:
@@ -1392,7 +1306,11 @@ def _names_from_yaml(raw_names: Any) -> tuple[tuple[int, str], ...]:
     if raw_names is None:
         return ()
     if isinstance(raw_names, str):
-        parsed = _parse_yaml_scalar(raw_names)
+        # A quoted collection (``names: "[person, car]"``) arrives as text.
+        try:
+            parsed = yaml.safe_load(raw_names)
+        except yaml.YAMLError:
+            parsed = None
         if isinstance(parsed, Mapping | Sequence) and not isinstance(parsed, str):
             return _names_from_yaml(parsed)
         name = raw_names.strip()

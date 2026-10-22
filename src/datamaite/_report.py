@@ -979,12 +979,21 @@ var REPORT_DATA = {{DATA_JSON}};
 """
 
 
+def _script_safe_json(data: Any) -> str:
+    """JSON that cannot end or alter the ``<script>`` element it is embedded in.
+
+    Escaping only ``</`` is not enough: ``<!--<script>`` in a label or file
+    name puts the HTML parser in a state where the closing tag is ignored, so
+    the report's script never runs. Escaping every ``<``, ``>`` and ``&`` as
+    ``\\uXXXX`` keeps the same JSON value.
+    """
+    return json.dumps(data, default=str).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
 def render_html_report(result: ValidationResult) -> str:
     """Render a single-dataset validation result as a self-contained HTML report."""
     data = prepare_report_data(result)
-    data_json = json.dumps(data, default=str)
-    safe_json = data_json.replace("</", "<\\/")
-    return _HTML_TEMPLATE.replace("{{DATA_JSON}}", safe_json)
+    return _HTML_TEMPLATE.replace("{{DATA_JSON}}", _script_safe_json(data))
 
 
 def _batch_label(batch_dir: Path, root: Path) -> str:
@@ -1050,6 +1059,4 @@ def render_html_report_multi(
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
     }
 
-    data_json = json.dumps(multi_data, default=str)
-    safe_json = data_json.replace("</", "<\\/")
-    return _HTML_TEMPLATE.replace("{{DATA_JSON}}", safe_json)
+    return _HTML_TEMPLATE.replace("{{DATA_JSON}}", _script_safe_json(multi_data))
