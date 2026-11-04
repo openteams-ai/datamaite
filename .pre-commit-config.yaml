@@ -1,3 +1,10 @@
+# Exact Node for the node hooks (markdownlint-cli2). With no version, nodeenv
+# reads the newest entry in nodejs.org's index, and a "v27.0.0-alpha.0.0.0"
+# entry there makes it crash. Keep in sync with PYRIGHT_PYTHON_NODE_VERSION in
+# .gitlab-ci.yml.
+default_language_version:
+  node: "24.22.2"
+
 repos:
   # -----------------------------------------------------------------------
   # General file hygiene
