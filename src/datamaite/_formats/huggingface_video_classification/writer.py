@@ -13,6 +13,12 @@ Video classification labels are video-level metadata rather than per-frame
 boxes. The writer consumes :class:`~datamaite.model.VideoClassificationDataset`
 records from the matching loader, copies each source video, and records
 ``file_name`` plus ``label`` in metadata so the loader can recover the dataset.
+
+A split with another name, such as ``holdout``, is also written to a
+``split`` metadata column. Hugging Face only infers a split from a folder
+named like one (``train``, ``val``, ``test``, ...), and a loader cannot tell
+any other first folder from a class folder, so the column is what lets such a
+split load back. Rows in standard splits keep the plain Hugging Face layout.
 """
 
 from __future__ import annotations
@@ -43,7 +49,8 @@ _SPLIT_ALIASES = {
     "val": "validation",
     "test": "test",
 }
-_RESERVED_COLUMNS = frozenset({"file_name", "label"})
+_SPLIT_COLUMN = "split"
+_RESERVED_COLUMNS = frozenset({"file_name", "label", _SPLIT_COLUMN})
 
 
 @register_writer
@@ -87,9 +94,11 @@ class HuggingFaceVideoClassificationWriter(Writer[VideoClassificationDataset]):
             ``None`` (default) to write unsplit videos under ``data/``.
             Common aliases such as ``"val"`` normalise to ``"validation"``.
         preserve_splits
-            When True (default), a sample with ``split`` set to a known Hugging
-            Face split is written under that split; otherwise the fallback
-            ``split`` is used.
+            When True (default), a sample with ``split`` set is written under
+            that split (aliases such as ``"val"`` normalise to
+            ``"validation"``; a split that is not a standard Hugging Face
+            name is also recorded in a ``split`` metadata column so it loads
+            back); otherwise the fallback ``split`` is used.
         metadata_format
             ``"csv"`` (default) writes ``metadata.csv``; ``"jsonl"`` writes
             ``metadata.jsonl`` and can preserve JSON-safe per-sample metadata
@@ -128,12 +137,14 @@ class HuggingFaceVideoClassificationWriter(Writer[VideoClassificationDataset]):
             )
             if record is None:
                 continue
-            source, rel_path, label = record
+            source, rel_path, label, row_split = record
             out_path = dest.joinpath(*PurePosixPath(rel_path).parts)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             _copy_video(source, out_path)
             _append_written(written, written_seen, out_path)
-            rows.append(_metadata_row(sample, file_name=rel_path, label=label, metadata_format=metadata_format))
+            rows.append(
+                _metadata_row(sample, file_name=rel_path, label=label, split=row_split, metadata_format=metadata_format)
+            )
 
         metadata_path = dest / f"metadata.{metadata_format}"
         _write_metadata(metadata_path, rows, metadata_format=metadata_format)
@@ -150,7 +161,7 @@ def _record_for_sample(
     fallback_split: str | None,
     preserve_splits: bool,
     used_paths: set[str],
-) -> tuple[Path, str, str | None] | None:
+) -> tuple[Path, str, str | None, str | None] | None:
     if not sample.video_path:
         logger.warning("Skipping Hugging Face video classification sample %s with no source video", sample.video_id)
         return None
@@ -177,7 +188,7 @@ def _record_for_sample(
     rel_path = _unique_rel_path(prefix, stem, suffix, used_paths)
     if same_resource(dest / rel_path, source):
         rel_path = _unique_rel_path(prefix, f"{stem}-copy", suffix, used_paths)
-    return source, rel_path, label
+    return source, rel_path, label, split
 
 
 def _source_stem(sample: VideoClassificationSample, source: Path) -> str:
@@ -193,6 +204,7 @@ def _metadata_row(
     *,
     file_name: str,
     label: str | None,
+    split: str | None,
     metadata_format: str,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {}
@@ -202,6 +214,9 @@ def _metadata_row(
         row.update(_csv_metadata(sample.metadata))
     row["file_name"] = file_name
     row["label"] = label or ""
+    if split is not None and split not in _SPLIT_ALIASES.values():
+        # Only a split-named folder carries a split; record any other split explicitly.
+        row[_SPLIT_COLUMN] = split
     return row
 
 
@@ -221,7 +236,8 @@ def _write_metadata(path: Path, rows: list[dict[str, Any]], *, metadata_format: 
 
 def _csv_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
     extras = sorted({key for row in rows for key in row if key not in _RESERVED_COLUMNS})
-    return ["file_name", "label", *extras]
+    split = [_SPLIT_COLUMN] if any(_SPLIT_COLUMN in row for row in rows) else []
+    return ["file_name", "label", *split, *extras]
 
 
 def _copy_video(source: Path, dest: Path) -> None:

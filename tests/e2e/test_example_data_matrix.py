@@ -40,6 +40,7 @@ which passes ``-s``).
 from __future__ import annotations
 
 import os
+import shutil
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
@@ -47,11 +48,17 @@ from pathlib import Path
 import pytest
 
 from datamaite import load, load_ic, load_od, write
+from datamaite._types import DatasetFormat
 from datamaite.conversion import convert
 from datamaite.image_classification import ImageClassificationDataset
 from datamaite.loaders import load_mot
 from datamaite.model import BoxTrackDataset, VideoClassificationDataset
 from datamaite.object_detection import ObjectDetectionDataset
+
+from ..harness import FORMATS, compare
+from ..harness.known_bugs import KnownBug, check_differences
+from ..harness.output import tree_digest
+from ._harness import disk_snapshot
 
 pytestmark = [pytest.mark.optional, pytest.mark.integration]
 
@@ -197,6 +204,17 @@ def test_conversion_preserves_counts_and_geometry(
 OD_ROUNDTRIP: dict[str, tuple[str, str, int, int]] = {
     "coco": ("coco/valid", "coco", 7, 11),
 }
+# coco/valid's annotations have no area, so the written file has none either.
+OD_ROUNDTRIP_BUGS: dict[str, tuple[KnownBug, ...]] = {
+    "coco": (
+        KnownBug(
+            "#163",
+            "the COCO writer leaves out area when a box has none, though COCO evaluation (pycocotools) needs it",
+            (),
+            (r": box '[^']+' \(id \d+\) at \[[\d., ]+\]: area expected \d+(\.\d+)?, got None$",),
+        ),
+    ),
+}
 OD_LOAD_ONLY: dict[str, tuple[str, str, int, int]] = {
     "visdrone_static": ("visdrone_static/valid", "visdrone", 7, 11),
 }
@@ -211,20 +229,6 @@ IC_LOAD_ONLY: dict[str, tuple[str, str, int]] = {
 VC_ROUNDTRIP: dict[str, tuple[str, str, int]] = {
     "hf_video_cls": ("hf_video_cls/valid", "huggingface_video_classification", 8),
 }
-
-
-def _od_boxes(dataset: ObjectDetectionDataset) -> Counter[BBox]:
-    """Multiset of rounded ``(left, top, width, height)`` over every detection."""
-    counts: Counter[BBox] = Counter()
-    for sample in dataset.iter_samples():
-        for det in sample.detections:
-            left, top, width, height = det.bbox
-            counts[(round(left, 1), round(top, 1), round(width, 1), round(height, 1))] += 1
-    return counts
-
-
-def _od_categories(dataset: ObjectDetectionDataset) -> Counter[str]:
-    return Counter(det.category_name for s in dataset.iter_samples() for det in s.detections)
 
 
 def _od_taxonomy(dataset: ObjectDetectionDataset) -> list[tuple[int | None, str]]:
@@ -267,21 +271,32 @@ def test_od_loads_with_expected_counts(datasets_root: Path, fmt: str) -> None:
 
 @pytest.mark.parametrize("fmt", list(OD_ROUNDTRIP), ids=list(OD_ROUNDTRIP))
 def test_od_roundtrip_preserves_counts_and_geometry(datasets_root: Path, tmp_path: Path, fmt: str) -> None:
-    """OD: load -> write -> reload preserves image/detection/category counts + bbox geometry (#56)."""
+    """OD: load -> write -> reload keeps the counts, taxonomy order and the whole dataset (#56, #150).
+
+    The dataset comparison is the conversion harness's (``tests/harness``):
+    every record field, unless a format declares it lost.
+    """
     rel, dataset_format, exp_images, exp_detections = OD_ROUNDTRIP[fmt]
-    source = load_od(datasets_root / rel, dataset_format=dataset_format)
+    # A copy, so a writer that changes its source can't touch the example data.
+    src = Path(shutil.copytree(datasets_root / rel, tmp_path / "src"))
+    source = load_od(src, dataset_format=dataset_format)
     assert source.sample_count == exp_images
     assert source.num_detections == exp_detections
+    # Snapshot (and hash every image) before writing, so a writer that
+    # overwrites the source images can't make them match its output.
+    before = disk_snapshot(source)
+    digest = tree_digest(src)
 
     dest = tmp_path / f"{fmt}__roundtrip"
     write(source, dest, output_format=dataset_format)
+    assert tree_digest(src) == digest, f"{fmt}: write changed its source folder"
     reloaded = load_od(dest, dataset_format=dataset_format)
 
     assert reloaded.sample_count == exp_images, f"{fmt}: images {reloaded.sample_count} != {exp_images}"
     assert reloaded.num_detections == exp_detections, f"{fmt}: detections {reloaded.num_detections} != {exp_detections}"
-    assert _od_categories(reloaded) == _od_categories(source), f"{fmt}: per-category detection counts changed"
     assert _od_taxonomy(reloaded) == _od_taxonomy(source), f"{fmt}: taxonomy categories changed (order/id/name)"
-    assert _od_boxes(reloaded) == _od_boxes(source), f"{fmt}: bbox geometry (L,T,W,H) not preserved through round-trip"
+    differences = compare(before, disk_snapshot(reloaded), allowed=FORMATS[DatasetFormat(dataset_format)].losses)
+    check_differences(differences, list(OD_ROUNDTRIP_BUGS.get(fmt, ())))
 
 
 @pytest.mark.parametrize("fmt", list(IC_LOAD_ONLY), ids=list(IC_LOAD_ONLY))

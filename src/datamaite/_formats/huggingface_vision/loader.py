@@ -74,6 +74,12 @@ _IMAGE_EXTENSIONS = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", 
 _METADATA_FILENAMES = ("metadata.csv", "metadata.jsonl", "metadata.parquet")
 _LABEL_COLUMNS = ("label", "labels", "class", "category", "category_name")
 _OBJECTS_COLUMN = "objects"
+# Box layouts ``objects.bbox`` may use: COCO-style x, y, width, height (what
+# the matching writer emits, and the Hugging Face object-detection guide's
+# example) or corner coordinates x_min, y_min, x_max, y_max.
+_BBOX_FORMATS = frozenset({"xywh", "xyxy"})
+# Hugging Face's "no label" value (ClassLabel -1, as in unlabelled test splits).
+_NO_LABEL = -1
 # The split-directory keywords Hugging Face ImageFolder split inference
 # recognizes (datasets' data_files keyword lists), normalized to the three
 # canonical split names. Kept in sync with the writer's table so every split
@@ -207,6 +213,7 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
         root: str | Path,
         *,
         image_extensions: Collection[str] | str | None = None,
+        bbox_format: str = "xywh",
         storage_options: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> ObjectDetectionDataset:
@@ -220,7 +227,28 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
         background image with zero detections; a repository without any
         metadata file has no boxes to read and loads empty with a warning
         (use the IC variant or another format for label-free folders).
+        A category of ``-1`` is Hugging Face's "no label": the box loads with
+        no category rather than as a class named ``"-1"``.
+
+        Parameters
+        ----------
+        root
+            Local or remote dataset repository root.
+        image_extensions
+            Optional allowlist of image extensions (see the IC loader).
+        bbox_format
+            How ``objects.bbox`` values are laid out. ``"xywh"`` (default) is
+            x, y, width, height, as datamaite's writer and the Hugging Face
+            object-detection guide use; ``"xyxy"`` is x_min, y_min, x_max,
+            y_max, as some Hub datasets store them. Boxes are converted to
+            x, y, width, height on load. Any other value raises
+            ``ValueError``. A box that extends past the image size recorded
+            in the row's ``width``/``height`` is kept, with a warning: it
+            usually means the wrong ``bbox_format``.
+        storage_options
+            fsspec options for a remote ``root``.
         """
+        bbox_format = _validate_bbox_format(bbox_format)
         root = to_dataset_path(root, storage_options)
         if not root.is_dir():
             logger.warning("Hugging Face vision root is not a directory: %s", root)
@@ -246,7 +274,7 @@ class HuggingFaceVisionObjectDetectionLoader(Loader):
 
         samples: list[ImageObjectDetectionSample] = []
         for row in sorted(rows, key=_row_sort_key):
-            detections = _parse_objects(row, category_names=category_names)
+            detections = _parse_objects(row, category_names=category_names, bbox_format=bbox_format)
             samples.append(
                 ImageObjectDetectionSample(
                     image_id=row.rel_path,
@@ -569,8 +597,15 @@ def _integer_label_values(labels: Iterable[str]) -> dict[str, int] | None:
 # ---------------------------------------------------------------------------
 
 
+def _validate_bbox_format(value: object) -> str:
+    bbox_format = value.strip().lower() if isinstance(value, str) else None
+    if bbox_format not in _BBOX_FORMATS:
+        raise ValueError(f"bbox_format must be one of {sorted(_BBOX_FORMATS)!r}; got {value!r}")
+    return bbox_format
+
+
 def _parse_objects(  # noqa: C901 - per-detection validation is intentionally explicit
-    row: _ImageRow, *, category_names: tuple[str, ...] | None = None
+    row: _ImageRow, *, category_names: tuple[str, ...] | None = None, bbox_format: str = "xywh"
 ) -> tuple[ObjectDetectionAnnotation, ...]:
     """Parse one row's ``objects`` value into detections, skipping bad boxes with warnings."""
     raw = row.objects
@@ -606,10 +641,13 @@ def _parse_objects(  # noqa: C901 - per-detection validation is intentionally ex
         )
 
     detections: list[ObjectDetectionAnnotation] = []
+    outside = 0
     for index, raw_bbox in enumerate(bboxes):
-        bbox = _parse_bbox(raw_bbox, rel_path=row.rel_path, index=index)
+        bbox = _parse_bbox(raw_bbox, rel_path=row.rel_path, index=index, bbox_format=bbox_format)
         if bbox is None:
             continue
+        if _extends_past_image(bbox, width=row.width, height=row.height):
+            outside += 1
         category = categories[index] if categories is not None and index < len(categories) else None
         category_id, category_name, source_category_id = _parse_category(category, category_names=category_names)
         detections.append(
@@ -622,10 +660,28 @@ def _parse_objects(  # noqa: C901 - per-detection validation is intentionally ex
                 area=_area_or_none(areas, index),
             )
         )
+    if outside:
+        logger.warning(
+            "%d Hugging Face bbox(es) for %s extend past the %dx%d image; check bbox_format (read as %r)",
+            outside,
+            row.rel_path,
+            row.width,
+            row.height,
+            bbox_format,
+        )
     return tuple(detections)
 
 
-def _parse_bbox(value: Any, *, rel_path: str, index: int) -> BBox | None:
+def _extends_past_image(bbox: BBox, *, width: int | None, height: int | None) -> bool:
+    """Whether an x, y, width, height box extends past a known image size (a small rounding slack is allowed)."""
+    x, y, w, h = bbox
+    slack = 0.5
+    if width is not None and (x < -slack or x + w > width + slack):
+        return True
+    return height is not None and (y < -slack or y + h > height + slack)
+
+
+def _parse_bbox(value: Any, *, rel_path: str, index: int, bbox_format: str = "xywh") -> BBox | None:
     if not isinstance(value, (list, tuple)) or len(value) != 4:
         logger.warning("Skipping Hugging Face bbox %d for %s: expected 4 values", index, rel_path)
         return None
@@ -636,7 +692,10 @@ def _parse_bbox(value: Any, *, rel_path: str, index: int) -> BBox | None:
             logger.warning("Skipping Hugging Face bbox %d for %s with non-numeric value", index, rel_path)
             return None
         coords.append(number)
-    bbox: BBox = (coords[0], coords[1], coords[2], coords[3])
+    if bbox_format == "xyxy":
+        bbox: BBox = (coords[0], coords[1], coords[2] - coords[0], coords[3] - coords[1])
+    else:
+        bbox = (coords[0], coords[1], coords[2], coords[3])
     if not has_positive_area(bbox):
         logger.warning("Skipping Hugging Face bbox %d for %s with non-positive area", index, rel_path)
         return None
@@ -652,7 +711,7 @@ def _parse_category(
     recovered from parquet metadata (``category_names``) the id also resolves to
     its class name, so the write side emits the name instead of the bare int.
     """
-    if isinstance(value, bool) or _is_missing(value):
+    if isinstance(value, bool) or _is_missing(value) or _is_no_label(value, text=False):
         return None, None, None
     if isinstance(value, int):
         return value, _classlabel_name(value, category_names), value
@@ -1055,6 +1114,10 @@ def _label_from_metadata(
         if column not in row:
             continue
         value = row[column]
+        if _is_no_label(value, text=True):
+            # Hugging Face's "no label" (e.g. an unlabelled test split): the image
+            # has no class, rather than a class named "-1".
+            return None
         if class_tables and column in class_tables:
             decoded = _decode_classlabel(value, class_tables[column])
             if decoded is not None:
@@ -1104,6 +1167,19 @@ def _coerce_label(value: object) -> str | None:
         stripped = value.strip()
         return stripped or None
     return None
+
+
+def _is_no_label(value: object, *, text: bool) -> bool:
+    """Whether ``value`` is Hugging Face's ``-1`` "no label" value.
+
+    ``text`` also accepts the string ``"-1"``, which is how a CSV label column
+    carries it; in an ``objects.categories`` list a string is a class name.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value == _NO_LABEL
+    return text and isinstance(value, str) and value.strip() == str(_NO_LABEL)
 
 
 def _is_missing(value: object) -> bool:

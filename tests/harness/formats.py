@@ -137,7 +137,9 @@ def _annotation_ids(dataset: ObjectDetectionDataset) -> Callable[[ImageObjectDet
 
 
 def author_coco(dataset: ObjectDetectionDataset, root: Path) -> Path:
-    """COCO layout: ``annotations/instances.json``, or ``instances_<split>.json`` per split, images at ``file_name``.
+    """COCO layout: ``annotations/instances_<split>.json`` per split, images at ``file_name``.
+
+    Images with no split go to ``annotations/instances.json``.
 
     Like a labelling tool's export, every annotation has an ``area`` (the box's
     when the source has none) and a ``segmentation`` (empty when there is
@@ -147,7 +149,6 @@ def author_coco(dataset: ObjectDetectionDataset, root: Path) -> Path:
     by_split: dict[str | None, list[ImageObjectDetectionSample]] = {}
     for sample in dataset.samples:
         by_split.setdefault(sample.split, []).append(sample)
-    single = len(by_split) == 1
     (root / "annotations").mkdir(parents=True, exist_ok=True)
     annotation_id = _annotation_ids(dataset)
     metadata = dataset.dataset_metadata
@@ -185,7 +186,7 @@ def author_coco(dataset: ObjectDetectionDataset, root: Path) -> Path:
             "annotations": annotations,
             "categories": _coco_categories(dataset),
         }
-        file_name = "instances.json" if single else f"instances_{split}.json"
+        file_name = "instances.json" if split is None else f"instances_{split}.json"
         (root / "annotations" / file_name).write_text(json.dumps(document), encoding="utf-8")
     return root
 
@@ -196,8 +197,6 @@ FORMATS: dict[DatasetFormat, FormatSpec] = {
         author=author_coco,
         cannot_store=frozenset(
             {
-                # There is no list of split names.
-                Loss.SPLIT_LIST,
                 # An annotation has one category_id; a separate source class id has nowhere to go.
                 Loss.SOURCE_CATEGORY_IDS,
                 # Ground-truth annotations have no score.
@@ -215,13 +214,8 @@ FORMATS: dict[DatasetFormat, FormatSpec] = {
                 # Every annotation has an area and an id; a box with none gets w*h and a new id.
                 Loss.AREA_FROM_BOX,
                 Loss.NEW_ANNOTATION_IDS,
-            }
-        ),
-        chooses=frozenset(
-            {
-                # The writer puts a single split in instances.json, which has no split name,
-                # though instances_<split>.json would keep it. Several splits are #131.
-                Loss.SINGLE_SPLIT_NAME,
+                # There is no list of split names: it is the instances_<split>.json files' splits, by name.
+                Loss.SPLIT_LIST_BY_NAME,
             }
         ),
     ),
@@ -236,6 +230,8 @@ FORMATS: dict[DatasetFormat, FormatSpec] = {
                 Loss.LABEL_FILE_STEMS,
                 Loss.LABEL_IDS,
                 Loss.SOURCE_CATEGORY_IDS,
+                # File names are relative to images/<split>/, so a split folder in them is dropped.
+                Loss.SPLIT_FOLDER_IN_FILE_NAME,
                 # data.yaml names hold only class names.
                 Loss.LABEL_DETAILS,
                 # A ground-truth label row is a class and a box: no crowd flag, score,

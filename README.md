@@ -632,7 +632,9 @@ preserves the loaded sequence variant when present.
 
 YOLO classification writes split/class/image directories; YOLO object detection
 writes `images/<split>` and mirrored `labels/<split>` directories plus
-`data.yaml`:
+`data.yaml`, which lists every split (`validation` and `valid` under `val`).
+With `mode="append"`, YOLO object detection keeps the classes already in
+`data.yaml` and adds new class names after them:
 
 ```python
 from datamaite import load_ic, load_od, write

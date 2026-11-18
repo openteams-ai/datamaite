@@ -56,6 +56,11 @@ _MOT_CLASS_NAMES = {
     12: "reflection",
 }
 _VALID_SOURCES = {"gt", "det"}
+# MOT15 (2D MOT 2015) ground truth has 10 columns -- frame, id, bbox, conf and
+# world x, y, z -- and no class or visibility columns; MOT16/17/20 ground truth
+# has 9 (..., conf, class, visibility). MOT15 annotates pedestrians only.
+_MOT15_GT_COLUMNS = 10
+_MOT15_CLASS_ID = 1  # "pedestrian" in the MOT16+ class table
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,11 @@ class MotChallengeLoader(Loader):
             issue; pass the benchmark root so split membership is preserved.
         annotation_source
             ``"gt"`` reads ``gt/gt.txt`` ground truth. ``"det"`` reads
-            ``det/det.txt`` detector proposals.
+            ``det/det.txt`` detector proposals. A ``gt.txt`` whose rows all
+            have 10 columns is MOT15 ground truth (columns 8-10 are world
+            coordinates, kept as ``world_x``/``world_y``/``world_z``
+            attributes): MOT15 is pedestrian-only, so its boxes get MOT class
+            1 (``pedestrian``).
         include_ignored
             For ``annotation_source="gt"``, include rows whose MOT ``conf`` /
             valid flag is ``0`` or negative. Defaults to ``False``.
@@ -390,23 +399,34 @@ def _parse_annotation_file(
     boxes: list[BoxAnnotation] = []
     try:
         with path.open(newline="", encoding="utf-8") as fh:
-            reader = csv.reader(fh)
-            for line_no, row in enumerate(reader, start=1):
-                parsed = _parse_row(
-                    row,
-                    line_no=line_no,
-                    path=path,
-                    source=source,
-                    categories=categories,
-                    include_ignored=include_ignored,
-                    class_filter=class_filter,
-                    class_names=class_names,
-                )
-                if parsed is not None:
-                    boxes.append(parsed)
-    except (OSError, UnicodeDecodeError) as exc:
+            rows = list(csv.reader(fh))
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
         logger.warning("Could not read MOTChallenge annotation file %s: %s", path, exc)
+        return boxes
+    mot15 = source == "gt" and _is_mot15_gt(rows)
+    if mot15:
+        logger.info("Reading %s as MOT15 ground truth: every box is class %d (pedestrian)", path, _MOT15_CLASS_ID)
+    for line_no, row in enumerate(rows, start=1):
+        parsed = _parse_row(
+            row,
+            line_no=line_no,
+            path=path,
+            source=source,
+            categories=categories,
+            include_ignored=include_ignored,
+            class_filter=class_filter,
+            class_names=class_names,
+            mot15=mot15,
+        )
+        if parsed is not None:
+            boxes.append(parsed)
     return boxes
+
+
+def _is_mot15_gt(rows: list[list[str]]) -> bool:
+    """Whether ``gt.txt`` rows use the 10-column MOT15 layout (no class or visibility columns)."""
+    data_rows = [row for row in rows if not _is_blank_or_comment(row)]
+    return bool(data_rows) and all(len(row) == _MOT15_GT_COLUMNS for row in data_rows)
 
 
 def _parse_row(
@@ -419,6 +439,7 @@ def _parse_row(
     include_ignored: bool,
     class_filter: frozenset[int] | None,
     class_names: Mapping[int, str],
+    mot15: bool = False,
 ) -> BoxAnnotation | None:
     """Parse one MOT row, returning None when it should be skipped."""
     if _is_blank_or_comment(row):
@@ -440,6 +461,7 @@ def _parse_row(
             confidence=base.confidence,
             include_ignored=include_ignored,
             class_filter=class_filter,
+            mot15=mot15,
         )
         if gt_fields is None:
             return None
@@ -449,7 +471,9 @@ def _parse_row(
         mot_class_id, categories, class_names=class_names
     )
     track_id = base.mot_id if source == "gt" or base.mot_id > 0 else -line_no
-    attributes = _row_attributes(row, source=source, base=base, mot_class_id=mot_class_id, visibility=visibility)
+    attributes = _row_attributes(
+        row, source=source, base=base, mot_class_id=mot_class_id, visibility=visibility, world_coordinates=mot15
+    )
     seq_name = path.parent.parent.name
     split = path.parent.parent.parent.name
 
@@ -511,10 +535,19 @@ def _parse_gt_fields(
     confidence: float | None,
     include_ignored: bool,
     class_filter: frozenset[int] | None,
+    mot15: bool = False,
 ) -> tuple[int | None, float | None] | None:
-    """Parse and filter GT-only class/visibility fields."""
+    """Parse and filter GT-only class/visibility fields.
+
+    MOT15 rows have no class or visibility columns (columns 8-10 are world
+    coordinates), so they get the pedestrian class and no visibility.
+    """
     if not include_ignored and confidence is not None and confidence <= 0:
         return None
+    if mot15:
+        if class_filter is not None and _MOT15_CLASS_ID not in class_filter:
+            return None
+        return _MOT15_CLASS_ID, None
     mot_class_id: int | None = None
     if len(row) > 7:
         mot_class_id = _parse_int(row[7])
@@ -542,6 +575,7 @@ def _row_attributes(
     base: _BaseRow,
     mot_class_id: int | None,
     visibility: float | None,
+    world_coordinates: bool = False,
 ) -> dict[str, Any]:
     """Build source-preserving attributes for one parsed row."""
     attributes: dict[str, Any] = {
@@ -556,7 +590,7 @@ def _row_attributes(
         attributes["mot_class_id"] = mot_class_id
     if visibility is not None:
         attributes["visibility"] = visibility
-    if source == "det":
+    if source == "det" or world_coordinates:
         _add_detection_world_coordinates(row, attributes)
     return attributes
 

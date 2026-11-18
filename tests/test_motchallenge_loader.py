@@ -347,3 +347,52 @@ class TestMotChallengeImageProbe:
 
         assert ds.sequences[0].width == 34
         assert ds.sequences[0].height == 12
+
+
+class TestMot15GroundTruth:
+    """#134 case 6: MOT15 gt.txt has world coordinates where MOT16+ has class and visibility."""
+
+    _ROWS = ("1,1,10,10,5,5,1,-1,-1,-1", "2,1,11,10,5,5,1,-1,-1,-1", "1,2,30,20,8,9,1,1.5,-2.25,0")
+
+    def test_mot15_boxes_are_pedestrians(self, tmp_path: Path) -> None:
+        _write_mot_sequence(tmp_path, name="ADL-Rundle-6", gt_rows=list(self._ROWS))
+
+        ds = load_motchallenge(tmp_path)
+
+        boxes = ds.sequences[0].boxes
+        assert len(boxes) == 3
+        assert {(b.category_id, b.category_name, b.category_uri) for b in boxes} == {
+            (1, "pedestrian", "motchallenge/pedestrian")
+        }
+        assert ds.categories == {"motchallenge/pedestrian": 1}
+        assert all(b.attributes["mot_class_id"] == 1 and "visibility" not in b.attributes for b in boxes)
+        world = {(b.track_id, tuple(b.attributes.get(f"world_{axis}") for axis in "xyz")) for b in boxes}
+        assert world == {(1, (None, None, None)), (2, (1.5, -2.25, 0.0))}
+
+    def test_mot15_class_filter_uses_the_pedestrian_class(self, tmp_path: Path) -> None:
+        _write_mot_sequence(tmp_path, name="ADL-Rundle-6", gt_rows=list(self._ROWS))
+
+        assert len(load_motchallenge(tmp_path, classes={1}).sequences[0].boxes) == 3
+        assert load_motchallenge(tmp_path, classes={3}).sequences[0].boxes == []
+
+    def test_mixed_column_counts_keep_the_mot16_layout(self, tmp_path: Path) -> None:
+        _write_mot_sequence(tmp_path, gt_rows=["1,1,10,10,5,5,1,3,0.5", "1,2,10,10,5,5,1,-1,-1,-1"])
+
+        boxes = load_motchallenge(tmp_path).sequences[0].boxes
+
+        assert sorted(b.category_id for b in boxes) == [-1, 3]
+
+    def test_mot15_round_trip_keeps_the_rows(self, tmp_path: Path) -> None:
+        from datamaite import write
+
+        _write_mot_sequence(tmp_path / "src", name="ADL-Rundle-6", gt_rows=list(self._ROWS))
+        ds = load_motchallenge(tmp_path / "src")
+
+        write(ds, tmp_path / "out", output_format="motchallenge")
+
+        gt_text = next((tmp_path / "out").rglob("gt.txt")).read_text(encoding="utf-8")
+        assert len(gt_text.splitlines()) == 3
+        back = load_motchallenge(tmp_path / "out")
+        assert sorted((b.frame_index, b.track_id, b.bbox, b.category_name) for b in back.sequences[0].boxes) == sorted(
+            (b.frame_index, b.track_id, b.bbox, b.category_name) for b in ds.sequences[0].boxes
+        )

@@ -217,3 +217,51 @@ class TestHuggingFaceVideoClassificationWriterMalformedInputs:
             write(ds, tmp_path / "out", output_format="huggingface_video_classification", metadata_format="parquet")
         with pytest.raises(ValueError, match="split"):
             write(ds, tmp_path / "out", output_format="huggingface_video_classification", split="../train")
+
+
+class TestHuggingFaceVideoClassificationOtherSplits:
+    """#131 case 3: a split the writer writes as a folder must load back."""
+
+    @pytest.mark.parametrize("metadata_format", ["csv", "jsonl"])
+    def test_non_standard_split_round_trips(self, tmp_path: Path, metadata_format: str) -> None:
+        ds = _dataset(
+            _sample(0, _write_video(tmp_path / "src" / "0.mp4"), label="run", split="train"),
+            _sample(1, _write_video(tmp_path / "src" / "1.mp4"), label="run", split="holdout"),
+            _sample(2, _write_video(tmp_path / "src" / "2.mp4"), label="walk", split="val"),
+        )
+
+        write(ds, tmp_path / "out", output_format="huggingface_video_classification", metadata_format=metadata_format)
+        back = load_huggingface_video_classification(tmp_path / "out")
+
+        assert sorted((s.file_name, s.split, s.label) for s in back.samples) == [
+            ("holdout/1.mp4", "holdout", "run"),
+            ("train/0.mp4", "train", "run"),
+            ("validation/2.mp4", "validation", "walk"),
+        ]
+
+    def test_only_non_standard_splits_get_a_split_column(self, tmp_path: Path) -> None:
+        ds = _dataset(
+            _sample(0, _write_video(tmp_path / "src" / "0.mp4"), label="run", split="train"),
+            _sample(1, _write_video(tmp_path / "src" / "1.mp4"), label="run", split="holdout"),
+            _sample(2, _write_video(tmp_path / "src" / "2.mp4"), label="run"),
+        )
+
+        write(ds, tmp_path / "out", output_format="huggingface_video_classification")
+
+        with (tmp_path / "out" / "metadata.csv").open(newline="", encoding="utf-8") as fh:
+            rows = {row["file_name"]: row["split"] for row in csv.DictReader(fh)}
+        assert rows == {"train/0.mp4": "", "holdout/1.mp4": "holdout", "data/2.mp4": ""}
+
+    def test_a_class_folder_is_not_read_as_a_split(self, tmp_path: Path) -> None:
+        _write_video(tmp_path / "holdout" / "1.mp4")
+        _write_video(tmp_path / "train" / "run" / "0.mp4")
+        (tmp_path / "metadata.csv").write_text(
+            "file_name,label\nholdout/1.mp4,run\ntrain/run/0.mp4,run\n", encoding="utf-8"
+        )
+
+        back = load_huggingface_video_classification(tmp_path)
+
+        assert sorted((s.file_name, s.split) for s in back.samples) == [
+            ("holdout/1.mp4", None),
+            ("train/run/0.mp4", "train"),
+        ]

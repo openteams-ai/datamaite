@@ -574,23 +574,24 @@ class TestFlatImagesMaiteDecode:
         image_path.parent.mkdir(parents=True)
         image_path.write_bytes(encoded.tobytes() + b"\0" * (1024 * 1024))
         dataset = load_flat_images(root)
-        calls: list[tuple[int | None, int | None]] = []
-        original_cat_file = root.fs.cat_file
+        block_sizes: list[int | None] = []
+        original_open = root.fs._open
 
-        def counted_cat_file(path, start=None, end=None, **kwargs):  # type: ignore[no-untyped-def]
-            calls.append((start, end))
-            return original_cat_file(path, start=start, end=end, **kwargs)
+        def counted_open(path, mode="rb", block_size=None, **kwargs):  # type: ignore[no-untyped-def]
+            block_sizes.append(block_size)
+            return original_open(path, mode, block_size=block_size, **kwargs)
 
         def fail_decode(*args, **kwargs):  # type: ignore[no-untyped-def]
             raise AssertionError("get_metadata must not decode image pixels")
 
-        monkeypatch.setattr(root.fs, "cat_file", counted_cat_file)
+        monkeypatch.setattr(root.fs, "_open", counted_open)
         monkeypatch.setattr("datamaite.maite._od.od_input", fail_decode)
 
         metadata = dataset.get_metadata(0)
 
         assert (metadata["width"], metadata["height"]) == (96, 64)
-        assert calls == [(0, 32)]
+        # One open, buffered in a small block rather than the whole 1 MiB file.
+        assert block_sizes == [64 * 1024]
         assert dataset.samples[0].width is None
         assert dataset.samples[0].height is None
 

@@ -19,15 +19,12 @@ cells until they are removed from the entry.
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import fnmatch
-import hashlib
 import json
 import re
 import sys
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -45,49 +42,15 @@ from .harness import (
     loss_stages,
     snapshot,
 )
-from .harness.compare import expected_after_losses
+from .harness.compare import expected_after_losses, without_classes
 from .harness.formats import FORMATS, NOT_YET_COVERED, convertible_od_formats, harness_formats
-from .harness.output import output_problems
+from .harness.guards import changed_inputs, input_snapshots, only_writes_to
+from .harness.known_bugs import APPENDED_IMAGES, CROSS_CHECKS, IGNORING_CLASSES, KnownBug, check_differences
+from .harness.output import output_problems, relocate, tree_digest
 from .harness.scenarios import APPEND_CASES, CONVERT, LOAD, MEMORY, ROUNDTRIP, SCENARIOS, AppendCase, Scenario
 from .harness.snapshot import SampleSnapshot, edit
 
 FORMATS_UNDER_TEST = harness_formats()
-
-_SPLIT_SCENARIOS = ("standard_splits", "nested_split", "named_splits", "valid_split")
-_CONVERTED_SPLIT_SCENARIOS = ("standard_splits", "named_splits", "valid_split")
-
-
-@dataclass(frozen=True)
-class KnownBug:
-    """A known bug: the cells it breaks and the differences it causes there.
-
-    A cell with known bugs is an expected failure only if every difference it
-    reports matches one of its bugs' ``differences`` patterns (regular
-    expressions, searched in each difference), and each of its bugs explains at
-    least one difference. Any other difference fails the cell, so a new
-    regression in a cell with a known bug is still caught. A cell that no longer
-    shows one of its bugs fails too, until the cell is removed from ``cells``.
-
-    A bug that only gives boxes the wrong class sets ``relabels_only``: its
-    cells are also compared with every class left out, and nothing may differ
-    there, so a box that is lost or moved is not taken for a relabelled one.
-    """
-
-    issue: str
-    summary: str
-    cells: tuple[str, ...]  # fnmatch patterns over cell ids
-    differences: tuple[str, ...]
-    relabels_only: bool = False
-
-    @property
-    def reason(self) -> str:
-        return f"{self.issue}: {self.summary}"
-
-    def applies_to(self, cell_id: str) -> bool:
-        return any(fnmatch.fnmatchcase(cell_id, pattern) for pattern in self.cells)
-
-    def explains(self, difference: str) -> bool:
-        return any(re.search(pattern, difference) for pattern in self.differences)
 
 
 def _missing(*samples: str) -> str:
@@ -95,39 +58,8 @@ def _missing(*samples: str) -> str:
     return rf"^({'|'.join(re.escape(sample) for sample in samples)}): missing \(\d+ box\(es\)\)$"
 
 
-def _unlisted(*images: str) -> str:
-    """A pattern for exactly these written images reached by no split path in data.yaml."""
-    return rf"^output: data\.yaml: no split path reaches ({'|'.join(re.escape(image) for image in images)})$"
-
-
-def _split_list(expected: list[str], got: list[str]) -> str:
-    """A pattern for exactly this change to the dataset's list of split names."""
-    return re.escape(f"dataset: dataset_metadata.splits expected {expected!r}, got {got!r}").join("^$")
-
-
-def _coco_split_loader_bug(scenario: str, read: str, splits: list[str], *lost: str) -> KnownBug:
-    """#131 where a hand-written multi-file COCO is loaded: ``read`` comes back unsplit, ``lost`` is missing.
-
-    The loader reads the first ``instances_<split>.json`` by name. YOLO then
-    writes the unsplit images to ``train``, so its split list is ``train``
-    instead of ``splits``.
-    """
-    converted = (f"convert-{scenario}-coco-*",) if scenario in _CONVERTED_SPLIT_SCENARIOS else ()
-    return KnownBug(
-        "#131",
-        "the COCO loader reads one instances_<split>.json and never sets a split",
-        (f"load-{scenario}-coco", *converted),
-        (
-            rf"^{re.escape(read)} \[split \w+\]: split expected '\w+', got (None|'train')$",
-            _missing(*lost),
-            _split_list(splits, ["train"]),
-        ),
-    )
-
-
-# Scenarios whose boxes the COCO writer drops altogether (#152, #153 and the NumPy taxonomy id bug below).
+# Scenarios whose boxes the COCO writer drops altogether (#152, #153 and #160).
 _NO_BOXES_WRITTEN_BY_COCO = ("numpy_ids", "numpy_taxonomy_ids", "no_taxonomy")
-
 
 COCO_AREA_BUG = KnownBug(
     "#163",
@@ -139,130 +71,13 @@ COCO_AREA_BUG = KnownBug(
             if ROUNDTRIP in scenario.operations and scenario.name not in _NO_BOXES_WRITTEN_BY_COCO
         ),
         *(f"convert-{scenario.name}-yolo-coco" for scenario in SCENARIOS if CONVERT in scenario.operations),
-        *(f"append-{case.name}-coco" for case in APPEND_CASES if case.name != "nothing"),
+        *(f"append-{case.name}-coco" for case in APPEND_CASES),
     ),
     (r": box '\w+' \(id '?\w+'?\) at \[[\d., ]+\]( \(crowd\))?: area expected \d+(\.\d+)?, got None$",),
 )
 
 # Cell ids are "<operation>-<scenario>-<format>" and "convert-<scenario>-<from>-<to>".
 KNOWN_BUGS: tuple[KnownBug, ...] = (
-    KnownBug(
-        "#130",
-        "YOLO append rewrites data.yaml from the appended data only",
-        ("append-subset_of_classes-yolo", "append-new_class-yolo"),
-        (
-            r"^labels \{id: name\}: expected ",
-            r"^class '(person|car)' \(id [01]\): name expected '(person|car)', got '(car|bus)'$",
-            r"^[ac]\.png \[split train\]: (missing|unexpected) box ",
-            r"^output: labels/train/a\.txt: line \d: class 1 is outside names \(0\.\.0\)$",
-        ),
-        relabels_only=True,
-    ),
-    KnownBug(
-        "#130",
-        "YOLO append rewrites data.yaml from the appended data only",
-        ("append-conflicting_classes-yolo",),
-        # The appended c.png reads back right; the earlier a.png's ids now name the appended classes.
-        (r"^labels \{id: name\}: expected ", r"^a\.png \[split train\]: (missing|unexpected) box "),
-        relabels_only=True,
-    ),
-    _coco_split_loader_bug(
-        "standard_splits",
-        "d.png",
-        ["train", "val", "test"],
-        "a.png [split train]",
-        "b.png [split train]",
-        "c.png [split val]",
-    ),
-    _coco_split_loader_bug("nested_split", "a.png", ["train", "val"], "cam1/c.png [split val]"),
-    # YOLO aliases the expected "validation" split to "val".
-    _coco_split_loader_bug(
-        "named_splits",
-        "c.png",
-        ["train", "val", "holdout"],
-        "a.png [split train]",
-        "b.png [split validation]",
-        "b.png [split val]",
-    ),
-    _coco_split_loader_bug("valid_split", "a.png", ["train", "val"], "b.png [split valid]", "b.png [split val]"),
-    KnownBug(
-        "#131",
-        "COCO writes every split to one file",
-        (
-            *(f"roundtrip-{name}-coco" for name in _SPLIT_SCENARIOS),
-            *(f"convert-{name}-*-coco" for name in _CONVERTED_SPLIT_SCENARIOS),
-        ),
-        # Only the split names are lost: every image and box must still be there.
-        (r"^\S+ \[split \w+\]: split expected '\w+', got None$",),
-    ),
-    KnownBug(
-        "#131",
-        "YOLO drops splits not named train, val or test, and splits of nested file names",
-        ("roundtrip-nested_split-yolo",),
-        (
-            _missing("cam1/c.png [split val]"),
-            _unlisted("images/val/cam1/c.png"),
-            _split_list(["train", "val"], ["train"]),
-        ),
-    ),
-    KnownBug(
-        "#131",
-        "YOLO drops splits not named train, val or test, and splits of nested file names",
-        ("roundtrip-valid_split-yolo",),
-        (_missing("b.png [split val]"), _unlisted("images/valid/b.png"), _split_list(["train", "val"], ["train"])),
-    ),
-    KnownBug(
-        "#131",
-        "YOLO drops splits not named train, val or test, and splits of nested file names",
-        ("load-named_splits-yolo", "convert-named_splits-yolo-*"),
-        (_missing("c.png [split holdout]"), _split_list(["train", "val", "holdout"], ["train", "val"])),
-    ),
-    KnownBug(
-        "#131",
-        "YOLO drops splits not named train, val or test, and splits of nested file names",
-        ("roundtrip-named_splits-yolo",),
-        (
-            _missing("b.png [split val]", "c.png [split holdout]"),
-            _unlisted("images/validation/b.png", "images/holdout/c.png"),
-            _split_list(["train", "val", "holdout"], ["train"]),
-        ),
-    ),
-    KnownBug(
-        "#133",
-        "YOLO boxes on EXIF-rotated photos use the stored size",
-        ("*-exif_photo-yolo",),
-        (
-            r"^problem: a\.jpg: stored size 64x32 but the image decodes to 32x64$",
-            r"^a\.jpg( \[split train\])?: (width|height) expected \d+, got \d+$",
-            r"^a\.jpg( \[split train\])?: (missing|unexpected) box 'person'",
-        ),
-    ),
-    KnownBug(
-        "#134",
-        "YOLO drops labels on .webp and .tif images",
-        ("*-webp_tiff-yolo",),
-        (
-            r"^problem: (b\.webp|c\.tif): stored size NonexNone but the image decodes to 64x48$",
-            r"^(b\.webp|c\.tif)( \[split train\])?: (width|height) expected \d+, got None$",
-            r"^(b\.webp|c\.tif)( \[split train\])?: missing box 'car'",
-        ),
-    ),
-    KnownBug(
-        "#134",
-        "the YOLO writer orders class ids as text",
-        ("roundtrip-no_taxonomy-yolo",),
-        (
-            r"^labels \{id: name\}: expected \{0: 'two', 1: 'ten'\}, got \{0: 'ten', 1: 'two'\}$",
-            r"^class '(two|ten)' \(id [01]\): name expected '(two|ten)', got '(two|ten)'$",
-            r": (missing|unexpected) box '(two|ten)'",
-        ),
-    ),
-    KnownBug(
-        "#134",
-        "NumPy integer class ids become MAITE label -1",
-        ("memory-numpy_ids",),
-        (r"^problem: .* \(id np\.int64\(\d+\)\) has MAITE target label -1$",),
-    ),
     KnownBug(
         "#159",
         "NumPy integer taxonomy ids are left out of the MAITE index2label",
@@ -280,7 +95,7 @@ KNOWN_BUGS: tuple[KnownBug, ...] = (
             r"^labels \{id: name\}: expected \{0: 'person', 1: 'car', 2: 'bus'\}, got \{\}$",
             r": missing box '(person|car|bus)'",
             r": unexpected box None \(id [012]\)",
-            r"^output: annotations/instances\.json: annotation \d refers to a missing category$",
+            r"^output: annotations/instances_train\.json: annotation \d refers to a missing category$",
         ),
     ),
     KnownBug(
@@ -288,10 +103,10 @@ KNOWN_BUGS: tuple[KnownBug, ...] = (
         "the COCO writer writes a.png and ./a.png to one file, so the second image overwrites the first",
         ("roundtrip-filename_alias-coco",),
         (
-            r"^a\.png: image_sha256 expected '\w+', got '\w+'$",
+            r"^a\.png \[split train\]: image_sha256 expected '\w+', got '\w+'$",
             # The two records now share one image, so they pair up crosswise.
-            r"^a\.png: image_id expected [12], got [12]$",
-            r"^a\.png: (missing|unexpected) box '(person|car)'",
+            r"^a\.png \[split train\]: image_id expected [12], got [12]$",
+            r"^a\.png \[split train\]: (missing|unexpected) box '(person|car)'",
         ),
     ),
     KnownBug(
@@ -312,19 +127,21 @@ KNOWN_BUGS: tuple[KnownBug, ...] = (
         "the COCO writer numbers boxes from 1 in order, so a box with no id takes an id another box has",
         ("roundtrip-annotation_ids-coco",),
         (
-            r"^a\.png: box 'car' \(id 1\) at \[20, 10, 10, 8\]: source_annotation_id expected 1, got 2$",
-            r"^b\.png: box 'car' \(id 1\) at \[4, 4, 10, 8\]: source_annotation_id expected 2, got 3$",
+            r"^a\.png \[split train\]: box 'car' \(id 1\) at \[20, 10, 10, 8\]"
+            r": source_annotation_id expected 1, got 2$",
+            r"^b\.png \[split train\]: box 'car' \(id 1\) at \[4, 4, 10, 8\]"
+            r": source_annotation_id expected 2, got 3$",
         ),
     ),
     KnownBug(
         "#151",
-        "COCO append replaces instances.json, dropping the earlier images",
-        ("append-*-coco",),
+        "COCO append replaces an existing annotation file, dropping the earlier images",
+        tuple(f"append-{case.name}-coco" for case in APPEND_CASES if case.name != "nothing"),
         (
             r"^labels \{id: name\}: expected ",
             # a.png and b.png are the images written before the append.
-            r"^[ab]\.png: missing \(\d box\(es\)\)$",
-            r"^[ab]\.png: box classes expected \[.*\], got None$",
+            r"^[ab]\.png \[split train\]: missing \(\d box\(es\)\)$",
+            r"^[ab]\.png \[split train\]: box classes expected \[.*\], got None$",
         ),
     ),
     KnownBug(
@@ -335,7 +152,7 @@ KNOWN_BUGS: tuple[KnownBug, ...] = (
             r"^labels \{id: name\}: expected \{2: 'two', 10: 'ten'\}, got \{\}$",
             r": missing box '(two|ten)'",
             r": unexpected box None \(id (2|10)\)",
-            r"^output: annotations/instances\.json: annotation \d refers to a missing category$",
+            r"^output: annotations/instances_train\.json: annotation \d refers to a missing category$",
         ),
     ),
     KnownBug(
@@ -345,23 +162,6 @@ KNOWN_BUGS: tuple[KnownBug, ...] = (
         (r": missing box '(person|car|bus)'",),
     ),
 )
-
-
-def check_differences(differences: list[str], bugs: list[KnownBug]) -> None:
-    """Fail on any difference the cell's known bugs don't explain; mark the cell xfail if they explain all."""
-    unexplained = [d for d in differences if not any(bug.explains(d) for bug in bugs)]
-    if unexplained:
-        lines = "\n".join(f"  - {difference}" for difference in unexplained)
-        known = f" (not explained by its known bugs: {'; '.join(b.reason for b in bugs)})" if bugs else ""
-        raise AssertionError(f"{len(unexplained)} difference(s) from the expected dataset{known}:\n{lines}")
-    fixed = [bug for bug in bugs if not any(bug.explains(d) for d in differences)]
-    if fixed:
-        raise AssertionError(
-            "known bug no longer reproduces here; remove this cell from its KNOWN_BUGS entry: "
-            + "; ".join(bug.reason for bug in fixed)
-        )
-    if bugs:
-        pytest.xfail("; ".join(bug.reason for bug in bugs))
 
 
 def _cells() -> list[tuple[str, str, Scenario, tuple[DatasetFormat, ...]]]:
@@ -398,7 +198,7 @@ def run_cell(operation: str, scenario: Scenario, formats: tuple[DatasetFormat, .
     # Snapshot before anything runs: most scenarios' input and expected are one object, so a
     # writer that edits a list or dict of its input in place would otherwise edit the answer too.
     want = snapshot(expected, decode=decode)
-    inputs = _input_snapshots(input=source, expected=expected)
+    inputs = input_snapshots(input=source, expected=expected)
     written_problems: list[str] = []
     if operation == MEMORY:
         actual = source
@@ -407,8 +207,9 @@ def run_cell(operation: str, scenario: Scenario, formats: tuple[DatasetFormat, .
         actual = load_od(FORMATS[fmt].author(expected, tmp_path / "src"), dataset_format=fmt)
     elif operation == ROUNDTRIP:
         (fmt,) = formats
-        with _only_writes_to(tmp_path, "out"):
+        with only_writes_to(tmp_path, "out"):
             write(source, tmp_path / "out", output_format=fmt)
+        assert_no_source_paths(tmp_path / "out", tmp_path)
         out = relocate(tmp_path)
         written_problems = output_problems(out, fmt)
         actual = load_od(out, dataset_format=fmt)
@@ -416,77 +217,16 @@ def run_cell(operation: str, scenario: Scenario, formats: tuple[DatasetFormat, .
         assert operation == CONVERT
         a, b = formats
         FORMATS[a].author(expected, tmp_path / "src")
-        with _only_writes_to(tmp_path, "out"):
+        with only_writes_to(tmp_path, "out"):
             convert(tmp_path / "src", tmp_path / "out", input_format=a, output_format=b, task="od")
+        assert_no_source_paths(tmp_path / "out", tmp_path)
         out = relocate(tmp_path)
         written_problems = output_problems(out, b)
         actual = load_od(out, dataset_format=b)
     # Each format's losses apply in turn: a conversion gives back what B makes of A's output.
     allowed = loss_stages(formats)
     differences = compare(want, snapshot(actual, decode=decode), allowed=allowed)
-    return written_problems + _changed_inputs(inputs) + differences
-
-
-def _input_snapshots(**datasets: ObjectDetectionDataset) -> dict[str, tuple[ObjectDetectionDataset, DatasetSnapshot]]:
-    """Each in-memory input with its snapshot now, before any operation runs."""
-    return {name: (dataset, snapshot(dataset)) for name, dataset in datasets.items()}
-
-
-def _changed_inputs(inputs: dict[str, tuple[ObjectDetectionDataset, DatasetSnapshot]]) -> list[str]:
-    """How each input now differs from its snapshot before the operation: no operation may change its input."""
-    return [
-        f"{name} dataset changed: {difference}"
-        for name, (dataset, before) in inputs.items()
-        # Only the data: the input's own problems are the scenario's, not the operation's.
-        for difference in compare(before, dataclasses.replace(snapshot(dataset), problems=()))
-    ]
-
-
-def relocate(tmp_path: Path) -> Path:
-    """Check the written dataset in ``tmp_path / "out"`` for source paths, then move it and hide the source.
-
-    The test folder holds the source (if any) and the output (#157). Loading
-    from the new place with the source gone shows the output stands on its own:
-    every image it lists is read from inside it.
-    """
-    assert_no_source_paths(tmp_path / "out", tmp_path)
-    if (tmp_path / "src").exists():
-        (tmp_path / "src").rename(tmp_path / "src-gone")
-    moved = tmp_path / "moved" / "dataset"
-    moved.parent.mkdir()
-    return (tmp_path / "out").rename(moved)
-
-
-@contextlib.contextmanager
-def _only_writes_to(root: Path, destination: str) -> Iterator[None]:
-    """Fail if the block changes, adds or removes any file under ``root`` outside ``root / destination``.
-
-    ``root`` holds the source folder (for a conversion) and a neighbouring
-    folder, so a writer that writes beside its destination, or into its source,
-    is caught.
-    """
-    neighbour = root / "neighbour"
-    neighbour.mkdir(exist_ok=True)
-    (neighbour / "keep.txt").write_text("not the writer's", encoding="utf-8")
-
-    def outside() -> dict[str, str]:
-        return {path: digest for path, digest in tree_digest(root).items() if not path.startswith(f"{destination}/")}
-
-    before = outside()
-    yield
-    after = outside()
-    changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
-    if changed:
-        raise AssertionError(f"the operation changed files outside {destination}/: {changed}")
-
-
-def tree_digest(root: Path) -> dict[str, str]:
-    """``{relative path: sha256}`` of every file under ``root``."""
-    return {
-        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    return written_problems + changed_inputs(inputs) + differences
 
 
 @pytest.mark.parametrize(("cell_id", "operation", "scenario", "formats"), _params())
@@ -512,13 +252,13 @@ def run_append(case: AppendCase, fmt: DatasetFormat, tmp_path: Path, *, class_bl
     """
     first, second, expected = case.build()
     want = snapshot(expected)
-    inputs = _input_snapshots(first=first, second=second, expected=expected)
+    inputs = input_snapshots(first=first, second=second, expected=expected)
     out = tmp_path / "out"
-    with _only_writes_to(tmp_path, "out"):
+    with only_writes_to(tmp_path, "out"):
         write(first, out, output_format=fmt)
     before = tree_digest(out)
     refused = False
-    with _only_writes_to(tmp_path, "out"):
+    with only_writes_to(tmp_path, "out"):
         try:
             write(second, out, output_format=fmt, mode="append")
         except ValueError:
@@ -529,7 +269,8 @@ def run_append(case: AppendCase, fmt: DatasetFormat, tmp_path: Path, *, class_bl
         # A writer may refuse an append whose class lists disagree, if it leaves the dataset as it was.
         after = tree_digest(out)
         changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
-        return _changed_inputs(inputs) + ([f"the refused append changed {changed}"] if changed else [])
+        return changed_inputs(inputs) + ([f"the refused append changed {changed}"] if changed else [])
+    assert_no_source_paths(out, tmp_path)
     out = relocate(tmp_path)
     written_problems = output_problems(out, fmt)
     got = snapshot(load_od(out, dataset_format=fmt))
@@ -538,14 +279,14 @@ def run_append(case: AppendCase, fmt: DatasetFormat, tmp_path: Path, *, class_bl
         # Only the class ids may differ, so compare with every id replaced by its class name, after
         # the format's losses: the values a format derives from the ids, such as id_density, follow them.
         want, got, allowed = _ids_as_names(expected_after_losses(want, allowed)), _ids_as_names(got), set()
-    differences = written_problems + _changed_inputs(inputs) + compare(want, got, allowed=allowed)
+    differences = written_problems + changed_inputs(inputs) + compare(want, got, allowed=allowed)
     if class_blind:
-        blind_want, blind_got = _without_classes(expected_after_losses(want, allowed)), _without_classes(got)
-        differences += [f"ignoring classes: {d}" for d in compare(blind_want, blind_got)]
+        blind_want, blind_got = without_classes(expected_after_losses(want, allowed)), without_classes(got)
+        differences += [f"{IGNORING_CLASSES}{d}" for d in compare(blind_want, blind_got)]
         # A bug that relabels the earlier boxes does not excuse a wrong class on an appended box.
         appended = {sample.key for sample in snapshot(second).samples}
         new_want = _class_names_on(expected_after_losses(want, allowed), appended)
-        differences += [f"appended images: {d}" for d in compare(new_want, _class_names_on(got, appended))]
+        differences += [f"{APPENDED_IMAGES}{d}" for d in compare(new_want, _class_names_on(got, appended))]
     return differences
 
 
@@ -558,15 +299,6 @@ def _class_names_on(snap: DatasetSnapshot, keys: set[str]) -> DatasetSnapshot:
     return DatasetSnapshot(
         fields={}, samples=tuple(SampleSnapshot(s.key, fields) for s, fields in samples if s.key in keys)
     )
-
-
-def _without_classes(snap: DatasetSnapshot) -> DatasetSnapshot:
-    """``snap`` with no taxonomy and no class on any box: only the boxes' places and other fields are left."""
-    tree = snap.tree
-    tree["dataset_metadata"]["taxonomy"] = None
-    for field in ("category_id", "category_name", "source_category_id"):
-        edit(tree, f"samples[*].detections[*].{field}", lambda _value: None)
-    return snap.with_tree(tree)
 
 
 def _ids_as_names(snap: DatasetSnapshot) -> DatasetSnapshot:
@@ -606,9 +338,9 @@ def test_coco_writer_keeps_images_that_share_an_id(tmp_path: Path) -> None:
     write(original, tmp_path / "out", output_format="coco")
     reloaded = load_od(tmp_path / "out", dataset_format="coco")
     allowed = FORMATS[DatasetFormat.COCO].losses | {Loss.IMAGE_IDS}
-    bug = KnownBug("#134", "the COCO writer drops images that share an id", (), (r"^b\.png: missing \(1 box\(es\)\)$",))
     differences = compare(want, snapshot(original)) + compare(want, snapshot(reloaded), allowed=allowed)
-    check_differences(differences, [bug, COCO_AREA_BUG])
+    check_differences(differences, [COCO_AREA_BUG])
+    assert sorted(sample.image_id for sample in reloaded.samples) == [1, 2]
 
 
 def test_yolo_classes_txt_without_data_yaml(tmp_path: Path) -> None:
@@ -626,7 +358,7 @@ def test_yolo_classes_txt_without_data_yaml(tmp_path: Path) -> None:
 
     want, got, allowed = snapshot(expected), snapshot(load_od(root, dataset_format="yolo")), loss_stages(["yolo"])
     # Every box must still be there and in its place: the bug only loses class names.
-    blind = compare(_without_classes(expected_after_losses(want, allowed)), _without_classes(got))
+    blind = compare(without_classes(expected_after_losses(want, allowed)), without_classes(got))
     bug = KnownBug(
         "#154",
         "the YOLO loader ignores classes.txt, naming classes after their ids and dropping unused ones",
@@ -640,34 +372,43 @@ def test_yolo_classes_txt_without_data_yaml(tmp_path: Path) -> None:
         ),
         relabels_only=True,
     )
-    check_differences(compare(want, got, allowed=allowed) + [f"ignoring classes: {d}" for d in blind], [bug])
+    check_differences(compare(want, got, allowed=allowed) + [f"{IGNORING_CLASSES}{d}" for d in blind], [bug])
 
 
 @pytest.mark.optional
-def test_coco_exif_photo_sizes_match_pixels(tmp_path: Path) -> None:
-    """A COCO file from a tool that ignores EXIF: sizes and boxes in the stored frame (#133, case 1)."""
+def test_coco_exif_photo_sizes_match_pixels(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A COCO file from a tool that ignores EXIF: sizes and boxes in the stored frame (#133, case 1).
+
+    ``a.jpg`` is stored 64x32 and displayed 32x64 (orientation 6). Its marker is
+    at (2, 40, 20, 16) in the displayed frame, which is (40, 10, 16, 20) in the
+    stored one. The loader turns the record to the displayed frame and warns.
+    """
     from .harness.scenarios import exif_photo
 
     photo = exif_photo().samples[0]
     (tmp_path / "annotations").mkdir()
     (tmp_path / "a.jpg").write_bytes(photo.image_bytes or b"")
+    polygon = [40, 10, 56, 10, 56, 30, 40, 30]
     (tmp_path / "annotations" / "instances.json").write_text(
         json.dumps(
             {
                 "images": [{"id": 1, "file_name": "a.jpg", "width": 64, "height": 32}],
-                "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "bbox": [40, 0, 24, 8]}],
+                "annotations": [
+                    {"id": 1, "image_id": 1, "category_id": 1, "bbox": [40, 10, 16, 20], "segmentation": [polygon]}
+                ],
                 "categories": [{"id": 1, "name": "car"}],
             }
         )
     )
-    problems = snapshot(load_od(tmp_path, dataset_format="coco"), decode=True).problems
-    bug = KnownBug(
-        "#133",
-        "stored size ignores the EXIF rotation that decoding applies",
-        (),
-        (r"^a\.jpg: stored size 64x32 but the image decodes to 32x64$",),
-    )
-    check_differences(list(problems), [bug])
+    with caplog.at_level("WARNING", logger="datamaite._formats.coco.loader"):
+        loaded = load_od(tmp_path, dataset_format="coco")
+    sample = loaded.samples[0]
+    assert (sample.width, sample.height) == (32, 64)
+    assert sample.detections[0].bbox == (2, 40, 20, 16)
+    assert sample.detections[0].segmentation == [[22, 40, 22, 56, 2, 56, 2, 40]]
+    assert "EXIF-rotated" in caplog.text
+    assert snapshot(loaded, decode=True).problems == ()
+    assert _marker_misses(loaded) == []
 
 
 def test_hand_written_yolo_keeps_class_names_that_yaml_would_retype(tmp_path: Path) -> None:
@@ -716,12 +457,7 @@ def test_exif_photo_boxes_cover_their_pixels(path: str, tmp_path: Path) -> None:
     else:
         write(source, tmp_path / "out", output_format=fmt)
         loaded = load_od(tmp_path / "out", dataset_format=fmt)
-    bugs = (
-        [KnownBug("#133", "YOLO boxes on EXIF-rotated photos use the stored size", (), (r"^a\.jpg: box ",))]
-        if fmt == "yolo"
-        else []
-    )
-    check_differences(_marker_misses(loaded), bugs)
+    assert _marker_misses(loaded) == []
 
 
 def test_yolo_loader_keeps_a_sparse_names_mapping(tmp_path: Path) -> None:
@@ -750,7 +486,8 @@ def test_relocation_catches_output_that_points_at_its_source(tmp_path: Path) -> 
     src = FORMATS[DatasetFormat.COCO].author(expected, tmp_path / "src")
     out = tmp_path / "out"
     (out / "annotations").mkdir(parents=True)
-    (out / "annotations" / "instances.json").write_bytes((src / "annotations" / "instances.json").read_bytes())
+    annotations = "annotations/instances_train.json"
+    (out / annotations).write_bytes((src / annotations).read_bytes())
     for image in src.glob("*.png"):
         (out / image.name).symlink_to(Path("..") / "src" / image.name)
     allowed = FORMATS[DatasetFormat.COCO].losses
@@ -775,7 +512,7 @@ def _corrupted_coco_differences(tmp_path: Path, corrupt: Callable[[dict[str, Any
     write(record_details(), tmp_path / "out", output_format="coco")
     allowed = loss_stages(["coco"])
     before = compare(expected, snapshot(load_od(tmp_path / "out", dataset_format="coco")), allowed=allowed)
-    path = tmp_path / "out" / "annotations" / "instances.json"
+    path = tmp_path / "out" / "annotations" / "instances_train.json"
     document = json.loads(path.read_text(encoding="utf-8"))
     corrupt(next(annotation for annotation in document["annotations"] if annotation["id"] == 42))
     path.write_text(json.dumps(document), encoding="utf-8")
@@ -790,7 +527,7 @@ def test_a_corrupted_coco_polygon_is_reported(tmp_path: Path) -> None:
         annotation["segmentation"][0][1] += 1.0
 
     assert _corrupted_coco_differences(tmp_path, move_a_point) == [
-        "a.png: box 'car' (id 1) at [20, 10, 10, 8]: segmentation expected "
+        "a.png [split train]: box 'car' (id 1) at [20, 10, 10, 8]: segmentation expected "
         "[[22.0, 11.0, 29.5, 11.0, 29.5, 17.25, 22.0, 17.25]], got [[22.0, 12.0, 29.5, 11.0, 29.5, 17.25, 22.0, 17.25]]"
     ]
 
@@ -800,7 +537,7 @@ def test_a_deleted_coco_box_attribute_is_reported(tmp_path: Path) -> None:
         del annotation["occluded"]
 
     assert _corrupted_coco_differences(tmp_path, drop_occluded) == [
-        "a.png: box 'car' (id 1) at [20, 10, 10, 8]: attributes['occluded'] expected True, got <missing>"
+        "a.png [split train]: box 'car' (id 1) at [20, 10, 10, 8]: attributes['occluded'] expected True, got <missing>"
     ]
 
 
@@ -829,11 +566,14 @@ def test_a_writer_that_changes_its_input_is_caught(monkeypatch: pytest.MonkeyPat
     lost = "metadata['capture'] expected {'camera': 'cam1', 'exposure': 0.008}, got <missing>"
     # Reported twice: the input changed, and the written dataset lacks it (the answer was taken first).
     assert f"input dataset changed: a.png [split train]: {lost}" in differences
-    assert f"a.png: {lost}" in differences
+    assert f"a.png [split train]: {lost}" in differences
+
+
+#: Prefixes of the differences a class-blind append adds to its plain comparison.
 
 
 def test_a_known_relabelling_bug_does_not_hide_lost_boxes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """#130 relabels boxes; an append that also drops the appended boxes must still fail its cell."""
+    """A bug that only relabels boxes (as #130 did) must not explain an append that also drops boxes."""
 
     def drop_appended_boxes(dataset: ObjectDetectionDataset, kwargs: dict[str, Any]) -> Any:
         if kwargs.get("mode") != "append":
@@ -844,16 +584,19 @@ def test_a_known_relabelling_bug_does_not_hide_lost_boxes(monkeypatch: pytest.Mo
 
     _patch_write(monkeypatch, drop_appended_boxes)
     case = next(c for c in APPEND_CASES if c.name == "subset_of_classes")
-    bugs = [bug for bug in KNOWN_BUGS if bug.applies_to("append-subset_of_classes-yolo")]
+    pattern = r"^c\.png \[split train\]: missing box "
+    relabelling = KnownBug("#130", "relabels boxes", (), (pattern,), relabels_only=True)
     differences = run_append(case, DatasetFormat.YOLO, tmp_path, class_blind=True)
+    # Without the class-blind comparison, the relabelling bug would explain the lost box.
+    assert all(relabelling.explains(d) for d in differences if not d.startswith(CROSS_CHECKS))
     with pytest.raises(AssertionError, match=r"ignoring classes: c\.png \[split train\]: missing box"):
-        check_differences(differences, bugs)
+        check_differences(differences, [relabelling])
 
 
 def test_a_known_relabelling_bug_does_not_hide_a_wrong_class_on_an_appended_box(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """#130 relabels the earlier boxes; an appended bus written as a car must still fail its cell."""
+    """A bug that relabels the earlier boxes (as #130 did) must not explain a wrong class on an appended box."""
 
     def bus_as_car(dataset: ObjectDetectionDataset, kwargs: dict[str, Any]) -> Any:
         if kwargs.get("mode") != "append":
@@ -876,10 +619,13 @@ def test_a_known_relabelling_bug_does_not_hide_a_wrong_class_on_an_appended_box(
 
     _patch_write(monkeypatch, bus_as_car)
     case = next(c for c in APPEND_CASES if c.name == "new_class")
-    bugs = [bug for bug in KNOWN_BUGS if bug.applies_to("append-new_class-yolo")]
+    pattern = r"^c\.png \[split train\]: (missing|unexpected) box "
+    relabelling = KnownBug("#130", "relabels boxes", (), (pattern,), relabels_only=True)
     differences = run_append(case, DatasetFormat.YOLO, tmp_path, class_blind=True)
+    # Without the appended images' own check, the relabelling bug would explain the wrong class.
+    assert all(relabelling.explains(d) for d in differences if not d.startswith(CROSS_CHECKS))
     with pytest.raises(AssertionError, match=r"appended images: c\.png \[split train\]: missing box 'bus'"):
-        check_differences(differences, bugs)
+        check_differences(differences, [relabelling])
 
 
 def test_an_append_that_writes_outside_the_destination_is_caught(
@@ -899,11 +645,11 @@ def test_an_append_that_writes_outside_the_destination_is_caught(
 def test_a_write_outside_the_destination_is_caught(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.txt").write_text("source")
-    with _only_writes_to(tmp_path, "out"):
+    with only_writes_to(tmp_path, "out"):
         (tmp_path / "out").mkdir()
         (tmp_path / "out" / "fine.txt").write_text("output")
     for stray in (tmp_path / "stray.txt", tmp_path / "neighbour" / "keep.txt", tmp_path / "src" / "a.txt"):
-        with pytest.raises(AssertionError, match="changed files outside out/"), _only_writes_to(tmp_path, "out"):
+        with pytest.raises(AssertionError, match="changed files outside out/"), only_writes_to(tmp_path, "out"):
             stray.write_text("written by the writer")
 
 
@@ -977,22 +723,6 @@ def test_every_known_bug_matches_a_cell() -> None:
     assert not stale, f"KNOWN_BUGS patterns that match no cell: {stale}"
 
 
-def test_a_known_bug_that_allows_lost_split_names_does_not_explain_lost_images() -> None:
-    """COCO's one-file writer may lose split names (#131), never images or boxes; its loader loses only named ones."""
-    writer = next(bug for bug in KNOWN_BUGS if bug.summary == "COCO writes every split to one file")
-    unsplit = "a.png [split train]: split expected 'train', got None"
-    assert writer.applies_to("roundtrip-standard_splits-coco")
-    assert writer.explains(unsplit)
-    for lost in ("a.png [split train]: missing (1 box(es))", "a.png [split train]: missing box 'car' (id 1) at [1, 2]"):
-        assert not writer.explains(lost)
-        with pytest.raises(AssertionError, match=r"1 difference\(s\) .*not explained by its known bugs"):
-            check_differences([unsplit, lost], [writer])
-
-    loader = next(bug for bug in KNOWN_BUGS if bug.applies_to("load-standard_splits-coco"))
-    assert loader.explains("a.png [split train]: missing (1 box(es))")
-    assert not loader.explains("d.png [split test]: missing (1 box(es))")  # d.png is in the file it reads
-
-
 def test_source_path_check_finds_a_planted_absolute_path(tmp_path: Path) -> None:
     """The #157 check catches an absolute source path and names the file and field."""
     source = tmp_path / "src"
@@ -1041,3 +771,17 @@ def test_source_path_check_covers_both_spellings_of_a_linked_folder(tmp_path: Pa
         (out / "labels.txt").write_text(f"{unresolved}/a.png\n")
         with pytest.raises(AssertionError, match=r"labels\.txt: line 1"):
             assert_no_source_paths(out, tmp_path)
+
+
+def test_a_relabelling_bug_never_explains_its_cross_checks() -> None:
+    bug = KnownBug("#155", "names boxes wrongly", (), (r"missing box None \(id \d+\)",), relabels_only=True)
+    other = KnownBug("#163", "no area", (), (r"missing box None \(id \d+\)",))
+    difference = "a.jpg: missing box None (id 21) at [0, 0, 1, 1]"
+
+    assert bug.explains(difference)
+    assert not bug.explains(f"{IGNORING_CLASSES}{difference}")
+    assert not bug.explains(f"{APPENDED_IMAGES}{difference}")
+    assert other.explains(f"{IGNORING_CLASSES}{difference}")
+    # Matched without the prefix, so an anchored pattern applies to a cross-check too.
+    anchored = KnownBug("#156", "no size", (), (r"^a\.jpg: width expected \d+, got None$",))
+    assert anchored.explains(f"{IGNORING_CLASSES}a.jpg: width expected 64, got None")

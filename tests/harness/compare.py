@@ -63,15 +63,18 @@ class Loss(enum.Enum):
     IMAGE_IDS = "image_ids"
     #: Class ids are renumbered 0..n-1 in taxonomy order. Names must still match.
     LABEL_IDS = "label_ids"
-    #: Split names are normalised: ``validation``/``valid`` become ``val``, ``training`` becomes ``train``.
+    #: Split names are normalised: ``validation``/``valid`` become ``val``, ``training`` becomes ``train``,
+    #: ignoring case (CVAT's ``Train`` becomes ``train``).
     SPLIT_ALIASES = "split_aliases"
+    #: File names are relative to the split's image folder: a leading ``images/``
+    #: and a folder whose name is the image's split (``train/a.jpg`` in split
+    #: ``train``, ``Valid/b.jpg`` in split ``val``) are dropped.
+    SPLIT_FOLDER_IN_FILE_NAME = "split_folder_in_file_name"
     #: A label file is named after its image without the extension, so of images in one split
     #: whose names differ only in it (``a.png``, ``a.jpg``), the writer must rename all but one.
     LABEL_FILE_STEMS = "label_file_stems"
     #: Images with no split are written to ``train``.
     DEFAULT_SPLIT = "default_split"
-    #: A dataset with only one split comes back with no split name at all.
-    SINGLE_SPLIT_NAME = "single_split_name"
     #: Classes have only an id and a name: no supercategory, synset, attributes or other details.
     LABEL_DETAILS = "label_details"
     #: Classes have no flag for being left out of evaluation, so they come back included.
@@ -80,6 +83,13 @@ class Loss(enum.Enum):
     CLASS_SOURCE_DATASET = "class_source_dataset"
     #: Boxes have no crowd flag, so crowd boxes come back as ordinary boxes.
     CROWD = "crowd"
+    #: Classes that no box uses are dropped.
+    UNUSED_LABELS = "unused_labels"
+    #: Boxes store a class name, not an id, so the ids are rebuilt on reload. A
+    #: class whose name is its id as text (``2: "2"``) keeps its id; the others
+    #: are numbered after those ids, in case-insensitive name order. The classes
+    #: come back in id order.
+    LABEL_IDS_FROM_NAMES = "label_ids_from_names"
     #: A box's source class id is not stored apart from its class id, so it comes back as the class id.
     SOURCE_CATEGORY_IDS = "source_category_ids"
     #: Boxes have no confidence score.
@@ -98,9 +108,9 @@ class Loss(enum.Enum):
     NEW_ANNOTATION_IDS = "new_annotation_ids"
     #: Images have no metadata.
     IMAGE_METADATA = "image_metadata"
-    #: The dataset has no list of its split names.
-    SPLIT_LIST = "split_list"
-    #: The dataset's split list is its images' splits: train, val and test first, then the rest by name.
+    #: The dataset's split list is its images' splits, in name order.
+    SPLIT_LIST_BY_NAME = "split_list_by_name"
+    #: The dataset's split list is its images' splits: train, val (or validation) and test first, then the rest by name.
     SPLIT_LIST_FROM_IMAGES = "split_list_from_images"
     #: The dataset has no ``info``.
     INFO = "info"
@@ -112,6 +122,9 @@ class Loss(enum.Enum):
     #: ``source_format``, ``variant``, ``source_file_name`` and ``label_file``, and box
     #: attributes ``yolo_bbox`` (the normalised row) and ``source_line``.
     YOLO_SOURCE_DETAILS = "yolo_source_details"
+    #: The Hugging Face loader records where each image came from: image metadata
+    #: ``source_format``, ``source_file_name`` and ``metadata_file``.
+    HUGGINGFACE_SOURCE_DETAILS = "huggingface_source_details"
     #: The taxonomy's ``id_density`` is not stored, so it comes back ``'sparse'``.
     ID_DENSITY = "id_density"
     #: The taxonomy's ``id_density`` is worked out from its class ids: ``'dense'``
@@ -121,7 +134,7 @@ class Loss(enum.Enum):
 
 SPLIT_ALIASES = {"training": "train", "validation": "val", "valid": "val"}
 DEFAULT_SPLIT = "train"
-SPLIT_ORDER = {"train": 0, "val": 1, "test": 2}
+SPLIT_ORDER = {"train": 0, "val": 1, "validation": 1, "test": 2}
 
 _BOXES = "samples[*].detections[*]"
 _ENTRIES = "dataset_metadata.taxonomy.entries"
@@ -158,6 +171,23 @@ def assert_same(expected: DatasetSnapshot, actual: DatasetSnapshot, *, allowed: 
         raise AssertionError(f"{len(differences)} difference(s) from the expected dataset:\n{lines}")
 
 
+def without_classes(snap: DatasetSnapshot) -> DatasetSnapshot:
+    """``snap`` with no taxonomy and no class on any box: only the boxes' places and other fields are left."""
+    tree = snap.tree
+    tree["dataset_metadata"]["taxonomy"] = None
+    for field in ("category_id", "category_name", "source_category_id"):
+        edit(tree, f"samples[*].detections[*].{field}", lambda _value: None)
+    return snap.with_tree(tree)
+
+
+def without_class_names(snap: DatasetSnapshot) -> DatasetSnapshot:
+    """``snap`` with no taxonomy and no class name on any box: the boxes keep their class ids."""
+    tree = snap.tree
+    tree["dataset_metadata"]["taxonomy"] = None
+    edit(tree, "samples[*].detections[*].category_name", lambda _value: None)
+    return snap.with_tree(tree)
+
+
 # ---------------------------------------------------------------------------
 # Normalisation for allowed losses
 # ---------------------------------------------------------------------------
@@ -185,25 +215,49 @@ def _expected_after_losses(expected: DatasetSnapshot, allowed: frozenset[Loss]) 
     _class_fields_after_losses(tree, allowed)
     if Loss.CROWD in allowed:
         edit(tree, f"{_BOXES}.iscrowd", lambda _: 0)
-    if Loss.LABEL_IDS in allowed:
-        rank = _dense_ranks(expected)
-        edit(tree, f"{_ENTRIES}[*].source_id", lambda label_id: rank.get(label_id, label_id))
-        edit(tree, f"{_BOXES}.category_id", lambda label_id: rank.get(label_id, label_id))
+    _class_ids_after_losses(tree, allowed)
     if Loss.IMAGE_IDS in allowed:
         edit(tree, "samples[*].image_id", lambda _: AnyValue(object))
     for sample in tree["samples"]:
         _image_fields_after_losses(sample, allowed)
         for box in sample.get("detections", ()):
             _box_fields_after_losses(box, sample, allowed)
-    if Loss.SPLIT_ALIASES in allowed:
-        edit(tree, "samples[*].split", lambda split: SPLIT_ALIASES.get(split, split) if split else None)
-    if Loss.DEFAULT_SPLIT in allowed:
-        edit(tree, "samples[*].split", lambda split: split or DEFAULT_SPLIT)
-    if Loss.SINGLE_SPLIT_NAME in allowed and len({s.get("split") for s in tree["samples"]}) == 1:
-        edit(tree, "samples[*].split", lambda _: None)
+    _image_splits_after_losses(tree, allowed)
     _file_names_after_losses(tree, allowed)
     _dataset_fields_after_losses(tree, allowed)
     return expected.with_tree(tree)
+
+
+def _image_splits_after_losses(tree: dict[str, Any], allowed: frozenset[Loss]) -> None:
+    """Each image's split, and its file name's split folder, after the losses."""
+    if Loss.SPLIT_FOLDER_IN_FILE_NAME in allowed:
+        # The writer drops the folder before it renames the split.
+        for sample in tree["samples"]:
+            sample["file_name"] = _without_split_folder(sample.get("file_name"), sample.get("split") or DEFAULT_SPLIT)
+    if Loss.SPLIT_ALIASES in allowed:
+        edit(tree, "samples[*].split", _split_alias)
+    if Loss.DEFAULT_SPLIT in allowed:
+        edit(tree, "samples[*].split", lambda split: split or DEFAULT_SPLIT)
+
+
+def _class_ids_after_losses(tree: dict[str, Any], allowed: frozenset[Loss]) -> None:
+    """The classes and the boxes' class ids after the losses that drop or renumber classes."""
+    if Loss.UNUSED_LABELS in allowed:
+        used = {box.get("category_id") for sample in tree["samples"] for box in sample.get("detections", ())}
+        edit(tree, _ENTRIES, lambda entries: [entry for entry in entries if entry.get("source_id") in used])
+    if Loss.LABEL_IDS_FROM_NAMES in allowed:
+        by_name = _ranks_from_names(_entries(tree))
+        _renumber(tree, by_name)
+        # The reload lists its classes by their rebuilt ids.
+        edit(tree, _ENTRIES, lambda entries: sorted(entries, key=lambda entry: _id_sort_key(entry.get("source_id"))))
+    if Loss.LABEL_IDS in allowed:
+        _renumber(tree, _dense_ranks(tree))
+
+
+def _renumber(tree: dict[str, Any], rank: dict[Any, Any]) -> None:
+    """Replace each class id in the classes and the boxes with ``rank``'s, where it has one."""
+    edit(tree, f"{_ENTRIES}[*].source_id", lambda label_id: rank.get(label_id, label_id))
+    edit(tree, f"{_BOXES}.category_id", lambda label_id: rank.get(label_id, label_id))
 
 
 def _file_names_after_losses(tree: dict[str, Any], allowed: frozenset[Loss]) -> None:
@@ -241,10 +295,10 @@ def _class_fields_after_losses(tree: dict[str, Any], allowed: frozenset[Loss]) -
 
 def _dataset_fields_after_losses(tree: dict[str, Any], allowed: frozenset[Loss]) -> None:
     """The dataset's own fields after the losses; its samples already have their splits as the format gives them."""
-    if Loss.SPLIT_LIST in allowed:
-        edit(tree, "dataset_metadata.splits", lambda _: [])
+    splits = {s.get("split") for s in tree["samples"]} - {None}
+    if Loss.SPLIT_LIST_BY_NAME in allowed:
+        edit(tree, "dataset_metadata.splits", lambda _: sorted(splits))
     if Loss.SPLIT_LIST_FROM_IMAGES in allowed:
-        splits = {s.get("split") for s in tree["samples"]} - {None}
         listed = sorted(splits, key=lambda split: (SPLIT_ORDER.get(split, len(SPLIT_ORDER)), split))
         edit(tree, "dataset_metadata.splits", lambda _: listed)
     if Loss.INFO in allowed:
@@ -272,6 +326,14 @@ def _image_fields_after_losses(sample: dict[str, Any], allowed: frozenset[Loss])
             "variant": "default",
             "source_file_name": AnyValue(str),
             "label_file": AnyValue(str),
+        }
+    if Loss.HUGGINGFACE_SOURCE_DETAILS in allowed:
+        # metadata_file is the absolute path of the metadata.jsonl or .parquet the row came from.
+        sample["metadata"] = {
+            **sample.get("metadata", {}),
+            "source_format": "huggingface_vision",
+            "source_file_name": AnyValue(str),
+            "metadata_file": AnyValue(str),
         }
 
 
@@ -320,20 +382,58 @@ def _normalised_box(bbox: list[float], width: Any, height: Any) -> Any:
     ]
 
 
+def _split_alias(split: str | None) -> str | None:
+    """``split`` as a format that normalises split names gives it back."""
+    if not split:
+        return None
+    lowered = split.lower()
+    if lowered in SPLIT_ALIASES:
+        return SPLIT_ALIASES[lowered]
+    return lowered if lowered in SPLIT_ALIASES.values() else split
+
+
+def _without_split_folder(file_name: Any, split: str) -> Any:
+    """``file_name`` without a leading ``images/`` or a folder named for ``split``, as YOLO writes it."""
+    if not isinstance(file_name, str):
+        return file_name
+    parts = list(PurePosixPath(file_name).parts)
+    if parts and parts[0] == "images":
+        parts.pop(0)
+    if parts and split in ("train", "val", "test") and _split_alias(parts[0]) == split:
+        parts.pop(0)
+    if parts and parts[0] == "images":
+        parts.pop(0)
+    stripped = PurePosixPath(*parts).as_posix() if parts else file_name
+    # A name the writer keeps is kept as it is (``./a.png`` too).
+    return stripped if len(parts) < len(PurePosixPath(file_name).parts) else file_name
+
+
+def _ranks_from_names(entries: list[dict[str, Any]]) -> dict[Any, Any]:
+    """Each class id as a reload rebuilds it from the class names (see ``Loss.LABEL_IDS_FROM_NAMES``)."""
+    labels = {entry.get("source_id"): entry.get("name") for entry in entries}
+    kept = [label_id for label_id, name in labels.items() if isinstance(label_id, int) and name == str(label_id)]
+    named = sorted((i for i in labels if i not in kept), key=lambda i: (labels[i].casefold(), labels[i]))
+    start = max(kept, default=-1) + 1
+    rank: dict[Any, Any] = {label_id: label_id for label_id in kept}
+    rank.update({label_id: start + offset for offset, label_id in enumerate(named)})
+    return rank
+
+
 def _entries(tree: dict[str, Any]) -> list[dict[str, Any]]:
     taxonomy = (tree.get("dataset_metadata") or {}).get("taxonomy")
     return list(taxonomy.get("entries", ())) if isinstance(taxonomy, dict) else []
 
 
-def _dense_ranks(snap: DatasetSnapshot) -> dict[Any, int]:
+def _dense_ranks(tree: dict[str, Any]) -> dict[Any, int]:
     """Each class id's position in ``0..n-1``.
 
     The labels come first, in their (taxonomy) order, which is the order a YOLO
     writer must follow. Class ids used by boxes but missing from the labels
     follow in numeric order, the fallback for a dataset with no taxonomy.
     """
-    labels = snap.labels
-    unlisted = {b.label_id for s in snap.samples for b in s.boxes if b.label_id is not None} - set(labels)
+    labels = list(dict.fromkeys(entry.get("source_id") for entry in _entries(tree)))
+    box_ids = {box.get("category_id") for sample in tree["samples"] for box in sample.get("detections", ())}
+    unlisted = box_ids - {None} - set(labels)
     ordered = [*labels, *sorted(unlisted, key=_id_sort_key)]
     return {label_id: index for index, label_id in enumerate(ordered)}
 

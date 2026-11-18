@@ -21,17 +21,21 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from datamaite._image_header import read_image_header
 from datamaite._io import resolve_path
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import storage_options_for, to_dataset_path
 from datamaite.loaders import Loader, register_loader
 from datamaite.object_detection import ObjectDetectionDataset
 from datamaite.records import DatasetMetadata, ImageObjectDetectionSample, ObjectDetectionAnnotation
-from datamaite.taxonomy import CategoryEntry, Taxonomy
+from datamaite.taxonomy import CategoryEntry, SourceId, Taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +54,10 @@ class CocoLoader(Loader):
     @classmethod
     def sniff(cls, root: str | Path) -> bool:
         path = to_dataset_path(root)
-        ann_path = _resolve_annotation_file(path, None)
-        if ann_path is None:
+        ann_paths = _resolve_annotation_files(path, None)
+        if not ann_paths:
             return False
-        data = _read_json(ann_path)
+        data = _read_json(ann_paths[0])
         return bool(
             data is not None and "images" in data and "annotations" in data and not ({"videos", "tracks"} & data.keys())
         )
@@ -75,19 +79,30 @@ def load_coco(
     ----------
     root
         Either the COCO annotation JSON file itself, or a directory containing
-        it (``annotations/instances_*.json`` or any top-level ``*.json``).
+        it (``annotations/instances*.json`` or any top-level ``*.json``). A
+        directory with several ``instances*.json`` files loads all of them:
+        each ``instances_<split>.json`` holds split ``<split>`` (CVAT's
+        ``instances_Train.json`` holds split ``Train``), and ``instances.json``
+        holds images with no split, as does CVAT's ``instances_default.json``
+        (a task with no subsets).
     annotation_file
         Explicit annotation JSON path, overriding discovery under ``root``. A
         relative path anchors to ``root`` (not the caller's CWD), matching the
         other loaders' override style. Raises ``FileNotFoundError`` when it
         does not exist -- a wrong user argument, unlike malformed data, is not
-        a best-effort case.
+        a best-effort case. Only this file is loaded; if it is named
+        ``instances_<split>.json``, its images get split ``<split>``.
     images_dir
         Directory the ``images[].file_name`` paths are relative to; a relative
-        path anchors to ``root``. Defaults to the annotation file's parent --
-        or its grandparent when the file lives in an ``annotations/``
-        subdirectory (the standard COCO layout, where file names are relative
-        to the dataset root).
+        path anchors to ``root``. Defaults to the dataset root: the annotation
+        file's parent, or its grandparent when the file lives in an
+        ``annotations/`` subdirectory (the standard COCO layout). For an
+        ``instances_<split>.json`` file, ``images/<split>/``, ``<split>/`` and
+        ``images/`` under that root are also tried (CVAT puts the images of
+        ``instances_Train.json`` in ``images/Train/``, COCO 2017 those of
+        ``instances_train2017.json`` in ``train2017/``), and the first that
+        holds the file's images is used. With ``images_dir`` set, that
+        directory and its ``<split>/`` subdirectory are tried.
     """
     root = to_dataset_path(root, storage_options)
     # Relative override paths anchor to ``root`` (its parent when root is the
@@ -95,14 +110,28 @@ def load_coco(
     anchor = root.parent if root.is_file() else root
     if annotation_file is not None:
         annotation_file = resolve_path(anchor, annotation_file)
-    ann_path = _resolve_annotation_file(root, annotation_file)
-    if ann_path is None:
+    ann_paths = _resolve_annotation_files(root, annotation_file)
+    if not ann_paths:
         logger.warning("No COCO annotation JSON found under %s", root)
         return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="coco"))
+    images_override = resolve_path(anchor, images_dir) if images_dir is not None else None
 
-    data = _read_json(ann_path)
-    if data is None:
+    merged = _MergedFiles()
+    for ann_path in ann_paths:
+        data = _read_json(ann_path)
+        if data is not None:
+            merged.add(ann_path, data, images_dir=images_override)
+    if not merged.read_any:
         return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="coco"))
+    return ObjectDetectionDataset(
+        samples=tuple(merged.samples), dataset_metadata=merged.metadata(), _storage_options=storage_options_for(root)
+    )
+
+
+def _load_file(
+    ann_path: Path, data: dict[str, Any], *, images_dir: Path | None
+) -> tuple[list[ImageObjectDetectionSample], Taxonomy]:
+    """One annotation file's samples, with its split if it has one, and its categories."""
     if any(key in data for key in ("videos", "tracks")):
         # A TAO-style video-dataset JSON also carries images/annotations/
         # categories, so it would otherwise "load" with tracks silently
@@ -112,14 +141,11 @@ def load_coco(
             "dataset, not still-image COCO. Use load_mot(..., dataset_format='tao') instead",
             ann_path,
         )
-
-    base_dir = (
-        resolve_path(anchor, images_dir)
-        if images_dir is not None
-        else ann_path.parent.parent
-        if ann_path.parent.name == "annotations"
-        else ann_path.parent
-    )
+    file_split = _split_from_file_name(ann_path)
+    # CVAT names the file of a task with no subsets instances_default.json: its images are in
+    # images/default/, but have no split.
+    split = None if file_split is not None and file_split.lower() == _CVAT_NO_SUBSET else file_split
+    base_dir = _images_base_dir(ann_path, file_split, data.get("images"), images_dir=images_dir)
 
     taxonomy, names_by_id = _build_taxonomy(data.get("categories"), ann_path=ann_path)
     boxes_by_image = _annotations_by_image(data.get("annotations"), names_by_id, ann_path=ann_path)
@@ -133,40 +159,169 @@ def load_coco(
             len(orphaned_ids),
             ann_path,
         )
-
-    meta = DatasetMetadata(
-        taxonomy=taxonomy,
-        source_dataset="coco",
-        info=dict(data["info"]) if isinstance(data.get("info"), dict) else {},
-        licenses=tuple(lic for lic in data.get("licenses", []) if isinstance(lic, dict)),
-    )
+    if split is not None:
+        samples = [replace(sample, split=split) for sample in samples]
     logger.info("Loaded %d COCO image(s), %d categories from %s", len(samples), len(names_by_id), ann_path)
-    return ObjectDetectionDataset(
-        samples=tuple(samples), dataset_metadata=meta, _storage_options=storage_options_for(root)
+    return samples, taxonomy
+
+
+class _MergedFiles:
+    """Several annotation files (one per split) as one dataset.
+
+    Samples are concatenated in file order. Each category id keeps the first
+    file's entry. A later file that names an id differently has that class
+    moved, with a warning, to the id that already has its name, or else to a
+    new id after the others, and its boxes follow, so every box's id and name
+    agree with the taxonomy. ``info`` is the first file's, and ``licenses``
+    lists each distinct license once.
+    """
+
+    def __init__(self) -> None:
+        self.read_any = False
+        self.samples: list[ImageObjectDetectionSample] = []
+        self._categories: dict[SourceId, CategoryEntry] = {}
+        self._info: dict[str, Any] | None = None
+        self._licenses: list[dict[str, Any]] = []
+        self._splits: list[str] = []
+
+    def add(self, ann_path: Path, data: dict[str, Any], *, images_dir: Path | None) -> None:
+        self.read_any = True
+        samples, taxonomy = _load_file(ann_path, data, images_dir=images_dir)
+        moved = self._add_categories(taxonomy.entries, ann_path)
+        if moved:
+            samples = [_with_category_ids(sample, moved) for sample in samples]
+        self.samples.extend(samples)
+        for split in dict.fromkeys(sample.split for sample in samples if sample.split is not None):
+            if split not in self._splits:
+                self._splits.append(split)
+        if self._info is None and isinstance(data.get("info"), dict):
+            self._info = dict(data["info"])
+        licenses = data.get("licenses")
+        for lic in licenses if isinstance(licenses, list) else []:
+            if isinstance(lic, dict) and lic not in self._licenses:
+                self._licenses.append(lic)
+
+    def _add_categories(self, entries: tuple[CategoryEntry, ...], ann_path: Path) -> dict[SourceId, SourceId]:
+        """Add a file's categories; return the ids of those moved because an earlier file names the id differently."""
+        moved: dict[SourceId, SourceId] = {}
+        for entry in entries:
+            known = self._categories.setdefault(entry.source_id, entry)
+            if known.name == entry.name:
+                continue
+            same_name = next((e.source_id for e in self._categories.values() if e.name == entry.name), None)
+            new_id = same_name if same_name is not None else self._next_id()
+            if same_name is None:
+                self._categories[new_id] = replace(entry, source_id=new_id)
+            moved[entry.source_id] = new_id
+            logger.warning(
+                "COCO category id %s is %r in %s but %r in an earlier annotation file; its boxes in %s get id %s",
+                entry.source_id,
+                entry.name,
+                ann_path,
+                known.name,
+                ann_path,
+                new_id,
+            )
+        return moved
+
+    def _next_id(self) -> int:
+        return max((i for i in self._categories if isinstance(i, int) and not isinstance(i, bool)), default=0) + 1
+
+    def metadata(self) -> DatasetMetadata:
+        return DatasetMetadata(
+            taxonomy=Taxonomy(entries=tuple(self._categories.values()), source_dataset="coco", id_density="sparse"),
+            source_dataset="coco",
+            splits=tuple(self._splits),
+            info=self._info or {},
+            licenses=tuple(self._licenses),
+        )
+
+
+def _with_category_ids(
+    sample: ImageObjectDetectionSample, moved: dict[SourceId, SourceId]
+) -> ImageObjectDetectionSample:
+    """``sample`` with each box whose category id is in ``moved`` given its new id."""
+    detections = tuple(
+        replace(box, category_id=moved[box.category_id], source_category_id=moved[box.category_id])
+        if box.category_id in moved
+        else box
+        for box in sample.detections
     )
+    return replace(sample, detections=detections)
 
 
-def _resolve_annotation_file(root: Path, annotation_file: str | Path | None) -> Path | None:
+# ``instances_<split>.json``: the per-split annotation file name (COCO 2017, CVAT, datamaite's writer).
+_SPLIT_FILE_RE = re.compile(r"^instances_(?P<split>.+)\.json$")
+_CVAT_NO_SUBSET = "default"
+
+
+def _split_from_file_name(ann_path: Path) -> str | None:
+    """The split an ``instances_<split>.json`` file holds, or None for any other name."""
+    match = _SPLIT_FILE_RE.match(ann_path.name)
+    split = match.group("split") if match else None
+    return split if split and split.strip(".") else None
+
+
+def _images_base_dir(ann_path: Path, split: str | None, raw_images: object, *, images_dir: Path | None) -> Path:
+    """The directory this annotation file's ``file_name`` paths are relative to.
+
+    Tries each candidate in turn and keeps the first that holds one of the
+    file's first few images; with none found, the first candidate.
+    """
+    if images_dir is not None:
+        candidates = [images_dir]
+        if split is not None:
+            candidates.append(images_dir / split)
+    else:
+        dataset_root = ann_path.parent.parent if ann_path.parent.name == "annotations" else ann_path.parent
+        candidates = [dataset_root]
+        if split is not None:
+            candidates += [dataset_root / "images" / split, dataset_root / split]
+        candidates.append(dataset_root / "images")
+    if len(candidates) == 1:
+        return candidates[0]
+    names = [
+        raw["file_name"]
+        for raw in (raw_images if isinstance(raw_images, list) else [])
+        if isinstance(raw, dict) and isinstance(raw.get("file_name"), str) and raw["file_name"].strip()
+    ][:_IMAGES_DIR_PROBES]
+    for candidate in candidates:
+        for name in names:
+            path = _resolve_image_path(candidate, name, warn=False)
+            if path is not None and path.is_file():
+                return candidate
+    return candidates[0]
+
+
+# How many of an annotation file's images are looked for when choosing its images directory.
+_IMAGES_DIR_PROBES = 5
+
+
+def _resolve_annotation_files(root: Path, annotation_file: str | Path | None) -> list[Path]:
+    """The annotation files to load: an explicit file, ``root`` itself, or those discovered under it."""
     if annotation_file is not None:
         path = to_dataset_path(annotation_file)
         if not path.is_file():
             # An explicit argument naming a missing file is a caller mistake,
             # not malformed data -- raising beats returning an empty dataset.
             raise FileNotFoundError(f"COCO annotation file does not exist: {path}")
-        return path
+        return [path]
     if root.is_file():
-        return root
+        return [root]
     if not root.is_dir():
-        return None
+        return []
     ann_dir = root / "annotations"
     search_dirs = [ann_dir, root] if ann_dir.is_dir() else [root]
     for directory in search_dirs:
-        # Prefer instances_*.json (the detection split), else any json.
-        candidates = sorted(directory.glob("instances*.json")) or sorted(directory.glob("*.json"))
+        # Every instances*.json is part of the dataset: one file per split
+        # (instances_train2017.json, instances_val2017.json, ...).
+        instances = sorted(directory.glob("instances*.json"))
+        if instances:
+            return instances
+        candidates = sorted(directory.glob("*.json"))
         if len(candidates) > 1:
-            # A real COCO root often has several splits (instances_train2017,
-            # instances_val2017, ...); picking one silently would misrepresent
-            # the dataset.
+            # Without the instances naming there is no telling which files are
+            # detection splits; picking one silently would misrepresent the dataset.
             logger.warning(
                 "Multiple COCO annotation JSONs under %s; loading %s and ignoring %s. "
                 "Pass annotation_file to select a specific one",
@@ -175,8 +330,8 @@ def _resolve_annotation_file(root: Path, annotation_file: str | Path | None) -> 
                 ", ".join(path.name for path in candidates[1:]),
             )
         if candidates:
-            return candidates[0]
-    return None
+            return candidates[:1]
+    return []
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -296,6 +451,7 @@ def _build_samples(
 ) -> list[ImageObjectDetectionSample]:
     samples: list[ImageObjectDetectionSample] = []
     seen_ids: set[int] = set()
+    turned: list[str] = []
     for raw in raw_images if isinstance(raw_images, list) else []:
         if not isinstance(raw, dict):
             logger.warning("Skipping malformed COCO image in %s", ann_path)
@@ -322,6 +478,11 @@ def _build_samples(
         if height is not None:
             consumed.add("height")
         image_metadata = {k: v for k, v in raw.items() if k not in consumed}
+        detections = tuple(boxes_by_image.get(image_id, []))
+        displayed = _exif_display_frame(path, width, height, detections)
+        if displayed is not None:
+            width, height, detections = displayed
+            turned.append(file_name)
         samples.append(
             ImageObjectDetectionSample(
                 image_id=image_id,
@@ -329,14 +490,89 @@ def _build_samples(
                 file_name=file_name,
                 width=width,
                 height=height,
-                detections=tuple(boxes_by_image.get(image_id, [])),
+                detections=detections,
                 metadata=image_metadata,
             )
+        )
+    if turned:
+        logger.warning(
+            "%d COCO image(s) in %s are EXIF-rotated JPEGs whose stored width/height are the unrotated size, "
+            "so their sizes and boxes were turned to the displayed frame that decoding produces: %s",
+            len(turned),
+            ann_path,
+            ", ".join(turned[:5]) + (", ..." if len(turned) > 5 else ""),
         )
     return samples
 
 
-def _resolve_image_path(base_dir: Path, file_name: str) -> Path | None:
+_JPEG_SUFFIXES = frozenset({".jpg", ".jpeg", ".jpe", ".jfif"})
+
+
+def _exif_display_frame(
+    path: Path | None, width: int | None, height: int | None, detections: tuple[ObjectDetectionAnnotation, ...]
+) -> tuple[int, int, tuple[ObjectDetectionAnnotation, ...]] | None:
+    """The size and boxes in the displayed frame, for a record written in an EXIF-rotated JPEG's stored frame (#133).
+
+    Decoding applies the EXIF orientation, so a tool that ignored it wrote the
+    size and boxes in the wrong frame. That is only detectable when the
+    orientation swaps the axes (5-8) and the record's size is the stored,
+    unrotated one; orientations 2-4 keep the size and are left alone. Returns
+    ``None`` when nothing changes.
+    """
+    if path is None or width is None or height is None or width == height:
+        return None
+    if path.suffix.lower() not in _JPEG_SUFFIXES:
+        return None
+    try:
+        header = read_image_header(path)
+    except OSError:
+        return None  # a missing image is reported where it is decoded
+    if header is None or not header.transposed or (header.width, header.height) != (width, height):
+        return None
+    turn = _orientation_transform(header.orientation, width, height)
+    return height, width, tuple(_turn_detection(detection, turn) for detection in detections)
+
+
+def _orientation_transform(orientation: int, width: int, height: int) -> Callable[[float, float], tuple[float, float]]:
+    """Map a point in a ``width`` x ``height`` stored frame to the frame EXIF ``orientation`` 5-8 displays."""
+    if orientation == 5:  # transpose
+        return lambda x, y: (y, x)
+    if orientation == 6:  # turn 90 degrees clockwise
+        return lambda x, y: (height - y, x)
+    if orientation == 7:  # transverse
+        return lambda x, y: (height - y, width - x)
+    return lambda x, y: (y, width - x)  # 8: turn 90 degrees anticlockwise
+
+
+def _turn_detection(
+    detection: ObjectDetectionAnnotation, turn: Callable[[float, float], tuple[float, float]]
+) -> ObjectDetectionAnnotation:
+    x, y, w, h = detection.bbox
+    (x1, y1), (x2, y2) = turn(x, y), turn(x + w, y + h)
+    bbox = (min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+    segmentation = detection.segmentation
+    if isinstance(segmentation, list) and all(isinstance(polygon, list) for polygon in segmentation):
+        segmentation = [_turn_polygon(polygon, turn) for polygon in segmentation]
+    elif segmentation is not None:
+        # RLE masks are run-length coded over the stored frame; turning one means decoding it.
+        logger.warning(
+            "COCO annotation %r: the RLE segmentation stays in the stored (unrotated) frame of its "
+            "EXIF-rotated image; only its box was turned",
+            detection.source_annotation_id,
+        )
+    return replace(detection, bbox=bbox, segmentation=segmentation)
+
+
+def _turn_polygon(polygon: list[Any], turn: Callable[[float, float], tuple[float, float]]) -> list[Any]:
+    if len(polygon) % 2 or not all(isinstance(v, int | float) and not isinstance(v, bool) for v in polygon):
+        return polygon
+    turned: list[Any] = []
+    for index in range(0, len(polygon), 2):
+        turned.extend(turn(polygon[index], polygon[index + 1]))
+    return turned
+
+
+def _resolve_image_path(base_dir: Path, file_name: str, *, warn: bool = True) -> Path | None:
     """Resolve a COCO ``file_name`` under ``base_dir``, rejecting names that escape it.
 
     ``:`` and ``\\`` alone do not escape: timestamped frames use ``12:00:00.png``
@@ -344,7 +580,8 @@ def _resolve_image_path(base_dir: Path, file_name: str) -> Path | None:
     that file exists (POSIX names may contain ``\\``), else as a Windows path.
     """
     if "://" in file_name or _escapes_root(file_name):
-        logger.warning("Skipping COCO image with unsafe file_name %r", file_name)
+        if warn:
+            logger.warning("Skipping COCO image with unsafe file_name %r", file_name)
         return None
     name = file_name.strip()
     path = base_dir.joinpath(*PurePosixPath(name).parts)

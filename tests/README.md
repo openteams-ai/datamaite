@@ -173,9 +173,9 @@ COCO today.
   for a limit of the format. `cannot_store` is what the format has no standard
   place for, such as YOLO renumbering class ids to `0..n-1` in taxonomy order
   or having no polygons, box attributes or image metadata. `chooses` is what
-  the format could keep but datamaite does not, such as COCO writing a single
-  split to `instances.json`, which has no split name; each of these could be
-  fixed instead. `derives` is a value the format makes up:
+  the format could keep but datamaite does not, such as the YOLO writer
+  putting images with no split in `train` rather than a flat folder; each of
+  these could be fixed instead. `derives` is a value the format makes up:
   COCO gives a box with no area `width * height` and one with no annotation id
   a new integer id, the YOLO loader records each image's label file and each
   box's label row, and marks the taxonomy dense when its class ids are
@@ -184,12 +184,12 @@ COCO today.
   turns the expected snapshot into what the format must give back, by editing
   its tree at paths such as `samples[*].detections[*].iscrowd`; the actual
   snapshot is never changed, so a loss can't hide a change the format did not
-  need to make (renumbered ids must still be dense, a dataset may lose its
-  single split name but not be repartitioned).
+  need to make (renumbered ids must still be dense, images with no split may
+  go to `train` but not be repartitioned).
   For a conversion, `allowed` is one set per format in pipeline order, from
-  `loss_stages(["coco", "yolo"])`, and each format's losses apply in turn: a
-  single `val` split comes back unnamed from COCO, then YOLO writes it to
-  `train`. One format's losses as a set are `FORMATS[fmt].losses`.
+  `loss_stages(["yolo", "coco"])`, and each format's losses apply in turn:
+  images with no split go to `train` in YOLO, then COCO lists that split.
+  One format's losses as a set are `FORMATS[fmt].losses`.
 - `assert_no_source_paths(written_dir, source_dir)` fails if any text file a
   writer produced (JSON, JSONL, YAML, TXT, CSV, XML, INI) contains the
   absolute path of `source_dir`, resolved or as given, and names the file and
@@ -254,8 +254,9 @@ explain every difference it reports, so a new regression in that cell still
 fails it. When a fix stops a bug showing in a cell, the cell fails until it is
 removed from the entry. The source-path check is never covered by a known bug.
 An entry for a bug that only gives boxes the wrong class sets `relabels_only`:
-its cells are also compared with every class left out, and nothing may differ
-there, so a lost or moved box is never taken for a relabelled one.
+its cells are also compared with every class left out, and that bug can't
+explain a difference there (the cell's other bugs can), so a lost or moved
+box is never taken for a relabelled one.
 
 To compare datasets in another test, for example real datasets in
 `tests/e2e/`:
@@ -266,6 +267,53 @@ from tests.harness import assert_same, loss_stages, snapshot
 original = snapshot(load_od(src, dataset_format="coco"))
 converted = snapshot(load_od(out, dataset_format="yolo"))
 assert_same(original, converted, allowed=loss_stages(["coco", "yolo"]))
+```
+
+### Real-world exports
+
+`tests/e2e/test_real_world_exports.py` runs the harness on real exports in the
+example-data repo: COCO and YOLO files written by CVAT, Label Studio,
+FiftyOne, Roboflow and Ultralytics, and Hugging Face `metadata.jsonl` and
+`metadata.parquet` sets. Each case is one loader call. Its cells check three
+things separately:
+
+- `load`: every field reachable from the loaded dataset matches
+  `tests/e2e/real_world_expected.json`: classes and their details, images,
+  splits, sizes, image metadata, boxes, crowd flags, polygons and masks,
+  areas, annotation ids and attributes, and the dataset's `info` and
+  `licenses`. That file is read from the exports' own files without
+  datamaite; regenerate it with
+  `python tests/e2e/real_world_expected.py "$DATAMAITE_DATASETS_ROOT"` when
+  the example data changes. The expected snapshot is the snapshot of a
+  dataset built from that file, so a field the files don't hold is at its
+  default, except values the loader derives, such as the YOLO loader's
+  record of each box's label row, the split list and whether the class ids
+  are dense (`LOADER_DERIVES`).
+- `self-check`: the dataset agrees with itself, its MAITE targets and its
+  pixels.
+- `roundtrip`, `to-coco`, `to-yolo`: a copy of the export is written or
+  converted and reloaded, as in the hermetic harness, and compared after
+  what the source loader derives and the target's losses. The source
+  writer's losses don't apply, as it never ran. The copy is snapshotted
+  before writing and must be unchanged after, and nothing outside the
+  output folder, nor the in-memory input, may change.
+
+`test_paired_exports` also checks that two tools' exports of the same data
+load the same. Known bugs are `KnownBug` entries in the module, as in the
+hermetic harness, including the class-blind comparison for `relabels_only`.
+There it leaves out only class names: #154 and #155 keep the class ids, so a
+box given another id still fails its cell.
+
+It is part of the e2e tier, so it needs an example-data checkout. A case
+whose export is missing is skipped, unless `DATAMAITE_REQUIRE_REAL_EXPORTS=1`
+is set, as it is in the `integration` job. The Hugging Face parquet case needs
+`pyarrow`, which the `dev` extra installs:
+
+```bash
+git lfs install
+git clone https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite-example-datasets.git
+export DATAMAITE_DATASETS_ROOT=$PWD/datamaite-example-datasets/datasets
+uv run pytest tests/e2e/test_real_world_exports.py -m integration --no-cov -rx
 ```
 
 ### Adding a format to the harness

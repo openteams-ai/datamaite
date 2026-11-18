@@ -4,7 +4,10 @@ The Hugging Face Hub video dataset guide describes the video classification
 layout as the ``VideoFolder`` convention: video files live under class-named
 folders, optionally nested under split folders such as ``train/`` and ``test/``.
 A dataset may instead provide ``metadata.csv`` or ``metadata.jsonl`` rows with
-a required ``file_name`` column and optional ``label`` metadata. Experimental
+a required ``file_name`` column and optional ``label`` metadata. A ``split``
+column, as datamaite's writer emits, gives a row's split; without one the split
+comes from a split-named folder (``train``, ``val``, ``test``, ...), since any
+other folder may be a class folder. Experimental
 ``metadata.parquet`` reading is attempted when optional ``pyarrow`` or
 ``pandas`` support is installed; otherwise the loader warns and can fall back
 to folder discovery. This loader implements that local repository layout
@@ -201,7 +204,7 @@ def _record_from_metadata_row(
         )
         return None
 
-    split = _split_for_metadata_path(root, metadata_path) or _split_from_parts(posix.parts)
+    split = _split_from_column(row) or _split_for_metadata_path(root, metadata_path) or _split_from_parts(posix.parts)
     label = _label_from_metadata(row, path=metadata_path, row_number=row_number) or _label_from_parts(posix.parts)
     return _VideoRecord(
         path=video_path,
@@ -482,6 +485,20 @@ def _split_for_metadata_path(root: Path, metadata_path: Path) -> str | None:
     except ValueError:
         return None
     return _infer_split(parts[0]) if parts else None
+
+
+def _split_from_column(row: Mapping[str, Any]) -> str | None:
+    """The split a metadata row names in its ``split`` column (aliases normalised), if any.
+
+    The writer records every split here, including ones such as ``holdout``
+    that no folder name could carry: a first folder that is not split-named
+    may be a class folder.
+    """
+    value = row.get("split")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    return _SPLIT_ALIASES.get(raw.lower().replace("_", "-"), raw)
 
 
 def _split_from_parts(parts: tuple[str, ...]) -> str | None:

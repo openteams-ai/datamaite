@@ -8,7 +8,9 @@ import zlib
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
+import yaml
 
 from datamaite import (
     DatasetFormat,
@@ -1006,3 +1008,344 @@ class TestYoloOdLoaderOptionSafety:
 
         assert ds.sample_count == 1
         assert [det.category_name for det in ds.samples[0].detections] == ["cat"]
+
+
+def _named_od(*samples: ImageObjectDetectionSample, names: dict[int, str] | None = None) -> ObjectDetectionDataset:
+    taxonomy = (
+        Taxonomy(entries=tuple(CategoryEntry(source_id=i, name=n) for i, n in names.items()))
+        if names is not None
+        else None
+    )
+    return ObjectDetectionDataset(samples=samples, dataset_metadata=DatasetMetadata(taxonomy=taxonomy))
+
+
+def _sample(
+    image_id: str, file_name: str, *detections: ObjectDetectionAnnotation, split: str | None = None
+) -> ImageObjectDetectionSample:
+    return ImageObjectDetectionSample(
+        image_id=image_id,
+        file_name=file_name,
+        image_bytes=_png_bytes(64, 48),
+        width=64,
+        height=48,
+        split=split,
+        detections=detections,
+    )
+
+
+def _box(category_id: int, name: str | None = None) -> ObjectDetectionAnnotation:
+    return ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=category_id, category_name=name)
+
+
+def _tree(root: Path) -> dict[str, bytes]:
+    return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+class TestYoloAppendKeepsClasses:
+    """#130 case 1: an append keeps the written classes and ids and adds new names after them."""
+
+    def test_issue_reproducer(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(
+            _named_od(_sample("a", "a.png", _box(1, "car")), names={0: "pedestrian", 1: "car"}),
+            out,
+            output_format="yolo",
+        )
+        write(
+            _named_od(_sample("b", "b.png", _box(0, "bus")), names={0: "bus", 1: "truck"}),
+            out,
+            output_format="yolo",
+            mode="append",
+        )
+
+        ds = load_od(out, dataset_format="yolo")
+
+        assert [(s.file_name, [(d.category_id, d.category_name) for d in s.detections]) for s in ds.samples] == [
+            ("a.png", [(1, "car")]),
+            ("b.png", [(2, "bus")]),
+        ]
+        assert ds.dataset_metadata.taxonomy is not None
+        assert ds.dataset_metadata.taxonomy.ordered_names == ("pedestrian", "car", "bus", "truck")
+
+    def test_shared_names_keep_their_ids(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(
+            _named_od(_sample("a", "a.png", _box(0, "person")), names={0: "person", 1: "car"}),
+            out,
+            output_format="yolo",
+        )
+        write(
+            _named_od(_sample("c", "c.png", _box(7, "car")), names={7: "car"}), out, output_format="yolo", mode="append"
+        )
+
+        assert (out / "labels" / "train" / "c.txt").read_text(encoding="utf-8").split()[0] == "1"
+        assert 'names: ["person", "car"]' in (out / "data.yaml").read_text(encoding="utf-8")
+
+    def test_append_keeps_earlier_splits(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        names = {0: "car"}
+        write(_named_od(_sample("a", "a.png", _box(0, "car"), split="holdout"), names=names), out, output_format="yolo")
+        write(
+            _named_od(_sample("b", "b.png", _box(0, "car"), split="train"), names=names),
+            out,
+            output_format="yolo",
+            mode="append",
+        )
+
+        assert [(s.file_name, s.split) for s in load_od(out, dataset_format="yolo").samples] == [
+            ("b.png", "train"),
+            ("a.png", "holdout"),
+        ]
+
+    @pytest.mark.parametrize(
+        "data_yaml",
+        ["names: [car\n", "datamaite_task: ic\nnames: [car]\n", "names:\n  3: car\n", "- a list\n"],
+        ids=["unparseable", "ic", "sparse-names", "not-a-mapping"],
+    )
+    def test_refused_append_leaves_the_dataset_unchanged(self, tmp_path: Path, data_yaml: str) -> None:
+        out = tmp_path / "out"
+        write(_named_od(_sample("a", "a.png", _box(0, "car")), names={0: "car"}), out, output_format="yolo")
+        (out / "data.yaml").write_text(data_yaml, encoding="utf-8")
+        before = _tree(out)
+
+        with pytest.raises(ValueError, match="append"):
+            write(
+                _named_od(_sample("b", "b.png", _box(0, "car")), names={0: "car"}),
+                out,
+                output_format="yolo",
+                mode="append",
+            )
+
+        assert _tree(out) == before
+
+    def test_append_keeps_a_data_yaml_path_that_points_elsewhere(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        names = {0: "car"}
+        write(_named_od(_sample("a", "a.png", _box(0, "car")), names=names), tmp_path / "shared", output_format="yolo")
+        (tmp_path / "out").mkdir()
+        (tmp_path / "out" / "data.yaml").write_text(
+            "path: ../shared\ntrain: images/train\nnames: [car]\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        # A relative destination, as a user would pass it.
+        write(_named_od(_sample("b", "b.png", _box(0, "car")), names=names), "out", output_format="yolo", mode="append")
+
+        data_yaml = (tmp_path / "out" / "data.yaml").read_text(encoding="utf-8")
+        assert 'path: "../shared"' in data_yaml
+        assert 'train: [images/train, "../out/images/train"]' in data_yaml
+        assert str(tmp_path) not in data_yaml
+        # Both folders moved together still load both images.
+        moved = tmp_path / "moved"
+        moved.mkdir()
+        for name in ("shared", "out"):
+            (tmp_path / name).rename(moved / name)
+        assert sorted(s.file_name for s in load_od(moved / "out", dataset_format="yolo").samples) == ["a.png", "b.png"]
+
+    def test_remote_append_keeps_a_data_yaml_path_that_points_elsewhere(self, memory_root) -> None:  # type: ignore[no-untyped-def]
+        names = {0: "car"}
+        write(
+            _named_od(_sample("a", "a.png", _box(0, "car")), names=names), memory_root / "shared", output_format="yolo"
+        )
+        out = memory_root / "out"
+        out.mkdir()
+        (out / "data.yaml").write_text("path: ../shared\ntrain: images/train\nnames: [car]\n", encoding="utf-8")
+
+        write(_named_od(_sample("b", "b.png", _box(0, "car")), names=names), out, output_format="yolo", mode="append")
+
+        assert 'train: [images/train, "../out/images/train"]' in (out / "data.yaml").read_text(encoding="utf-8")
+        # The loader refuses remote sources outside the dataset root, so only the appended image loads from out/.
+        assert [s.file_name for s in load_od(out, dataset_format="yolo").samples] == ["b.png"]
+
+    def test_append_without_rewriting_data_yaml_keeps_its_class_ids(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        names = {0: "person", 1: "car", 2: "bus"}
+        write(_named_od(_sample("a", "a.png", _box(0, "person")), names=names), out, output_format="yolo")
+        write(
+            _named_od(_sample("b", "b.png", _box(0, "bus")), names={0: "bus"}),
+            out,
+            output_format="yolo",
+            mode="append",
+            write_data_yaml=False,
+        )
+
+        sample = next(s for s in load_od(out, dataset_format="yolo").samples if s.file_name == "b.png")
+        assert [(d.category_id, d.category_name) for d in sample.detections] == [(2, "bus")]
+
+    def test_append_without_rewriting_data_yaml_refuses_a_new_class(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(_named_od(_sample("a", "a.png", _box(0, "car")), names={0: "car"}), out, output_format="yolo")
+        before = _tree(out)
+
+        with pytest.raises(ValueError, match=r"write_data_yaml=False: classes \['truck'\]"):
+            write(
+                _named_od(_sample("b", "b.png", _box(0, "truck")), names={0: "truck"}),
+                out,
+                output_format="yolo",
+                mode="append",
+                write_data_yaml=False,
+            )
+
+        assert _tree(out) == before
+
+    @staticmethod
+    def _roboflow(root: Path) -> Path:
+        """A Roboflow YOLO export: data.yaml says ../train/images beside train/ and valid/ folders."""
+        for split, name in (("train", "a"), ("valid", "b")):
+            (root / split / "images").mkdir(parents=True)
+            (root / split / "labels").mkdir(parents=True)
+            (root / split / "images" / f"{name}.png").write_bytes(_png_bytes(64, 48))
+            (root / split / "labels" / f"{name}.txt").write_text("0 0.5 0.5 0.25 0.25\n", encoding="utf-8")
+        (root / "data.yaml").write_text(
+            "train: ../train/images\nval: ../valid/images\nnc: 1\nnames: ['car']\n"
+            "roboflow:\n  workspace: w\n  version: 1\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_roboflow_parent_paths_load_as_ultralytics_reads_them(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        root = self._roboflow(tmp_path / "rf")
+        with caplog.at_level(logging.WARNING):
+            ds = load_od(root, dataset_format="yolo")
+        assert [(s.file_name, s.split) for s in ds.samples] == [("a.png", "train"), ("b.png", "val")]
+        assert "does not exist" not in caplog.text
+
+    def test_append_to_a_roboflow_export_keeps_its_images_and_settings(self, tmp_path: Path) -> None:
+        root = self._roboflow(tmp_path / "rf")
+        write(
+            _named_od(_sample("c", "c.png", _box(0, "car"), split="train"), names={0: "car"}),
+            root,
+            output_format="yolo",
+            mode="append",
+        )
+
+        ds = load_od(root, dataset_format="yolo")
+        assert [(s.file_name, s.split) for s in ds.samples] == [
+            ("a.png", "train"),
+            ("c.png", "train"),
+            ("b.png", "val"),
+        ]
+        data = yaml.safe_load((root / "data.yaml").read_text(encoding="utf-8"))
+        assert data["train"] == ["train/images", "images/train"]
+        assert (data["nc"], data["roboflow"]) == (1, {"workspace": "w", "version": 1})
+
+    def test_append_without_a_data_yaml_writes_one(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        write(
+            _named_od(_sample("b", "b.png", _box(0, "car")), names={0: "car"}), out, output_format="yolo", mode="append"
+        )
+        assert load_od(out, dataset_format="yolo").samples[0].detections[0].category_name == "car"
+
+
+class TestYoloSplits:
+    """#131 cases 1 and 2: every split is recorded in data.yaml, taken from ``sample.split``."""
+
+    def test_any_split_name_round_trips(self, tmp_path: Path) -> None:
+        names = {0: "car"}
+        samples = (
+            _sample("a", "a.png", _box(0, "car"), split="train"),
+            _sample("b", "b.png", _box(0, "car"), split="validation"),
+            _sample("c", "c.png", _box(0, "car"), split="holdout"),
+        )
+        write(_named_od(*samples, names=names), tmp_path / "out", output_format="yolo")
+
+        ds = load_od(tmp_path / "out", dataset_format="yolo")
+
+        # Ultralytics reads validation as val, so the YOLO split is val.
+        assert [(s.file_name, s.split) for s in ds.samples] == [
+            ("a.png", "train"),
+            ("b.png", "val"),
+            ("c.png", "holdout"),
+        ]
+        assert ds.dataset_metadata.splits == ("train", "val", "holdout")
+        text = (tmp_path / "out" / "data.yaml").read_text(encoding="utf-8")
+        assert "val: images/validation\n" in text
+        assert "holdout: images/holdout\n" in text
+
+    def test_coco_2017_splits_go_under_the_standard_keys(self, tmp_path: Path) -> None:
+        """Ultralytics needs a train key: train2017 and val2017 are listed under train and val."""
+        samples = (_sample("a", "a.png", split="train2017"), _sample("b", "b.png", split="val2017"))
+        write(_named_od(*samples, names={0: "car"}), tmp_path / "out", output_format="yolo")
+
+        text = (tmp_path / "out" / "data.yaml").read_text(encoding="utf-8")
+        assert "train: images/train2017\n" in text
+        assert "val: images/val2017\n" in text
+
+    def test_a_named_split_can_be_selected(self, tmp_path: Path) -> None:
+        samples = (_sample("a", "a.png", split="train"), _sample("c", "c.png", split="holdout"))
+        write(_named_od(*samples, names={0: "car"}), tmp_path / "out", output_format="yolo")
+
+        ds = load_od(tmp_path / "out", dataset_format="yolo", split="holdout")
+
+        assert [(s.file_name, s.split) for s in ds.samples] == [("c.png", "holdout")]
+
+    def test_splits_sharing_a_key_are_listed_together(self, tmp_path: Path) -> None:
+        samples = (_sample("a", "a.png", split="val"), _sample("b", "b.png", split="valid"))
+        write(_named_od(*samples, names={0: "car"}), tmp_path / "out", output_format="yolo")
+
+        assert "val: [images/val, images/valid]\n" in (tmp_path / "out" / "data.yaml").read_text(encoding="utf-8")
+        ds = load_od(tmp_path / "out", dataset_format="yolo")
+        assert [(s.file_name, s.split) for s in ds.samples] == [("a.png", "val"), ("b.png", "val")]
+
+    def test_nested_file_names_keep_their_split(self, tmp_path: Path) -> None:
+        samples = (
+            _sample("a", "a.png", _box(0, "car"), split="train"),
+            _sample("b", "cam1/b.png", _box(0, "car"), split="val"),
+        )
+        write(_named_od(*samples, names={0: "car"}), tmp_path / "out", output_format="yolo")
+
+        ds = load_od(tmp_path / "out", dataset_format="yolo")
+
+        assert [(s.file_name, s.split) for s in ds.samples] == [("a.png", "train"), ("cam1/b.png", "val")]
+
+    def test_split_names_yaml_would_retype_are_quoted(self, tmp_path: Path) -> None:
+        samples = (_sample("a", "a.png", split="yes"), _sample("b", "b.png", split="2024"))
+        write(_named_od(*samples, names={0: "car"}), tmp_path / "out", output_format="yolo")
+
+        ds = load_od(tmp_path / "out", dataset_format="yolo")
+
+        assert sorted((s.file_name, s.split) for s in ds.samples) == [("a.png", "yes"), ("b.png", "2024")]
+
+    def test_other_yaml_keys_are_not_splits(self, tmp_path: Path) -> None:
+        _od_dataset(tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "data.yaml").write_text(
+            "path: .\ntrain: images/train\nval: images/val\nlicense: CC-BY\ndownload: docs\nnames: ['cat', 'dog']\n",
+            encoding="utf-8",
+        )
+
+        ds = load_od(tmp_path, dataset_format="yolo")
+
+        assert ds.dataset_metadata.splits == ("train", "val")
+
+
+class TestYoloClassIdsAndImageTypes:
+    """#134 cases 2 and 3."""
+
+    @pytest.mark.parametrize("as_id", [int, np.int64], ids=["int", "numpy"])
+    def test_class_ids_without_a_taxonomy_are_ordered_numerically(self, tmp_path: Path, as_id: type) -> None:
+        ds = _named_od(_sample("a", "a.png", _box(as_id(2)), _box(as_id(10))))
+        write(ds, tmp_path / "out", output_format="yolo")
+
+        assert 'names: ["2", "10"]' in (tmp_path / "out" / "data.yaml").read_text(encoding="utf-8")
+
+    @pytest.mark.optional
+    @pytest.mark.parametrize("ext", ["webp", "tif", "tiff"])
+    def test_labels_on_webp_and_tiff_images_are_kept(self, tmp_path: Path, ext: str) -> None:
+        import cv2
+        import numpy as np
+
+        (tmp_path / "images" / "train").mkdir(parents=True)
+        (tmp_path / "labels" / "train").mkdir(parents=True)
+        assert cv2.imwrite(str(tmp_path / "images" / "train" / f"a.{ext}"), np.zeros((48, 64, 3), np.uint8))
+        (tmp_path / "labels" / "train" / "a.txt").write_text("0 0.5 0.5 0.25 0.5\n", encoding="utf-8")
+        (tmp_path / "data.yaml").write_text("path: .\ntrain: images/train\nnames: [car]\n", encoding="utf-8")
+
+        sample = load_od(tmp_path, dataset_format="yolo").samples[0]
+
+        assert (sample.width, sample.height) == (64, 48)
+        assert [tuple(round(v, 6) for v in d.bbox) for d in sample.detections] == [(24.0, 12.0, 16.0, 24.0)]

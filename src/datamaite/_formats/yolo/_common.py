@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
+from typing import Any
 
-from datamaite._io import current_write_mode
+import yaml
+
+from datamaite._io import current_write_mode, resolve_path
 from datamaite._upath import is_remote_path
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,10 @@ SPLIT_ALIASES = {
     "test": "test",
 }
 SPLIT_ORDER = {"train": 0, "val": 1, "test": 2}
+#: Top-level data.yaml keys that are never splits, though their values may look like paths.
+RESERVED_YAML_KEYS = frozenset(
+    {"path", "names", "nc", "download", "datamaite_task", "kpt_shape", "flip_idx", "channels", "yaml_file"}
+)
 
 
 def normalize_extensions(image_extensions: Collection[str] | str | None) -> frozenset[str]:
@@ -37,6 +44,25 @@ def safe_children(path: Path) -> list[Path]:
     except OSError as exc:
         logger.warning("Could not read directory %s: %s", path, exc)
         return []
+
+
+#: The data.yaml keys that always declare a split's images.
+OD_SPLIT_KEYS = ("train", "val", "test")
+
+#: The data.yaml keys whose missing ``../<path>`` Ultralytics retries as ``<path>`` (``check_det_dataset``),
+#: for a single path. Roboflow writes ``train: ../train/images`` beside a ``train/`` folder.
+PARENT_FALLBACK_KEYS = frozenset({"train", "val", "test", "minival"})
+
+
+def ultralytics_split_path(base: Path, key: str, value: Any) -> Any:
+    """A data.yaml split value as Ultralytics reads it: a missing ``../x`` under a train, val, test or
+    minival key becomes ``x`` when that exists. Any other value is returned unchanged."""
+    if key not in PARENT_FALLBACK_KEYS or not isinstance(value, str) or not value.strip().startswith("../"):
+        return value
+    text = value.strip()
+    if resolve_path(base, text).exists() or not resolve_path(base, text[3:]).exists():
+        return value
+    return text[3:]
 
 
 def infer_split(name: str) -> str | None:
@@ -125,3 +151,50 @@ def free_target(target: Path, used: set[Path], *, check_storage: bool = True) ->
     if is_remote_path(target) and current_write_mode() in {"error", "replace"}:
         return True
     return not target.exists() and not target.is_symlink()
+
+
+def names_from_yaml(raw_names: Any) -> tuple[tuple[int, str], ...]:
+    """Parse YOLO ``names`` into ``(source_id, name)`` pairs.
+
+    Ultralytics normally writes a dense list, but YAML also commonly appears as
+    a mapping (``{0: person, 1: car}``). Preserve mapping keys as source ids so
+    sparse/non-contiguous mappings do not silently relabel detections.
+    """
+    if raw_names is None:
+        return ()
+    if isinstance(raw_names, str):
+        # A quoted collection (``names: "[person, car]"``) arrives as text.
+        try:
+            parsed = yaml.safe_load(raw_names)
+        except yaml.YAMLError:
+            parsed = None
+        if isinstance(parsed, Mapping | Sequence) and not isinstance(parsed, str):
+            return names_from_yaml(parsed)
+        name = raw_names.strip()
+        return ((0, name),) if name else ()
+    if isinstance(raw_names, Mapping):
+        items: list[tuple[int, str]] = []
+        for key, value in raw_names.items():
+            class_id = coerce_yaml_int(key)
+            if class_id is None:
+                continue
+            name = str(value).strip()
+            if name:
+                items.append((class_id, name))
+        return tuple(sorted(items))
+    if isinstance(raw_names, Sequence):
+        return tuple((idx, name) for idx, value in enumerate(raw_names) if (name := str(value).strip()))
+    return ()
+
+
+def coerce_yaml_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None

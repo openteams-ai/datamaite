@@ -79,33 +79,17 @@ def test_class_ids_missing_from_the_labels_are_renumbered_in_numeric_order() -> 
     )
 
 
-def test_single_split_name_unnames_a_single_split_dataset_but_does_not_allow_repartitioning() -> None:
-    expected = _snap(_sample("a.png"), _sample("b.png"), _sample("c.png"), labels={})
-    unnamed = _snap(*(_with(s, split=None) for s in expected.samples), labels={})
-    repartitioned = _snap(
-        _sample("a.png", split="val"), _sample("b.png", split="test"), _sample("c.png", split="test"), labels={}
-    )
-    partly_unnamed = _snap(_sample("a.png", split=None), _sample("b.png"), _sample("c.png"), labels={})
-
-    assert compare(expected, unnamed, allowed={Loss.SINGLE_SPLIT_NAME}) == []
-    assert len(compare(expected, repartitioned, allowed={Loss.SINGLE_SPLIT_NAME})) == 3
-    assert compare(expected, partly_unnamed, allowed={Loss.SINGLE_SPLIT_NAME}) == [
-        "b.png: split expected None, got 'train'",
-        "c.png: split expected None, got 'train'",
-    ]
-    two_splits = _snap(_sample("a.png"), _sample("b.png", split="val"), labels={})
-    assert compare(two_splits, two_splits, allowed={Loss.SINGLE_SPLIT_NAME}) == []
-
-
 def test_losses_of_each_format_apply_in_conversion_order() -> None:
-    """A single ``val`` split through COCO (unnamed) then YOLO (unnamed goes to train) comes back as ``train``."""
-    expected = _snap(_sample("a.png", split="val"), _sample("b.png", split="val"), labels={})
-    in_train = _snap(_sample("a.png"), _sample("b.png"), labels={})
-    coco, yolo = {Loss.SINGLE_SPLIT_NAME}, {Loss.DEFAULT_SPLIT}
+    """Images with no split through YOLO (written to train), then COCO (split list from its files), list train."""
+    expected = _snap(_sample("a.png", split=None), _sample("b.png", split=None), labels={})
+    in_train = _snap(_sample("a.png"), _sample("b.png"), labels={}, splits=("train",))
+    yolo, coco = {Loss.DEFAULT_SPLIT}, {Loss.SPLIT_LIST_BY_NAME}
 
-    assert compare(expected, in_train, allowed=[coco, yolo]) == []
-    assert len(compare(expected, in_train, allowed=[yolo, coco])) == 2
-    assert len(compare(expected, in_train, allowed=coco | yolo)) == 2
+    assert compare(expected, in_train, allowed=[yolo, coco]) == []
+    # The other way round, COCO lists no split, and YOLO's train split comes too late for the list.
+    assert compare(expected, in_train, allowed=[coco, yolo]) == [
+        "dataset: dataset_metadata.splits expected [], got ['train']"
+    ]
     with pytest.raises(TypeError, match="not a mix"):
         compare(expected, in_train, allowed=[Loss.DEFAULT_SPLIT, coco])  # type: ignore[list-item]
 
@@ -598,6 +582,40 @@ def test_image_ids_loss_ignores_only_image_ids() -> None:
     ]
 
 
+def test_unused_labels_loss_drops_only_classes_no_box_uses() -> None:
+    expected = _snap(_sample("a.png", _box("car", 0)), labels={0: "car", 1: "unused"})
+    without_unused = _snap(_sample("a.png", _box("car", 0)), labels={0: "car"})
+    without_car = _snap(_sample("a.png", _box("car", 0)), labels={1: "unused"})
+
+    assert compare(expected, without_unused, allowed={Loss.UNUSED_LABELS}) == []
+    assert compare(expected, without_unused)
+    assert compare(expected, without_car, allowed={Loss.UNUSED_LABELS})
+
+
+def test_label_ids_from_names_renumber_named_classes_in_name_order() -> None:
+    expected = _snap(_sample("a.png", _box("zebra", 0), _box("ant", 1, x=5)), labels={0: "zebra", 1: "ant"})
+    by_name = _snap(_sample("a.png", _box("zebra", 1), _box("ant", 0, x=5)), labels={0: "ant", 1: "zebra"})
+
+    assert compare(expected, by_name, allowed={Loss.LABEL_IDS_FROM_NAMES}) == []
+    assert compare(expected, by_name)
+    assert compare(expected, expected, allowed={Loss.LABEL_IDS_FROM_NAMES})
+
+
+def test_label_ids_from_names_keep_ids_whose_name_is_the_id() -> None:
+    expected = _snap(
+        _sample("a.png", _box("2", 2), _box("10", 10, x=5), _box("ant", 0, x=9)), labels={0: "ant", 2: "2", 10: "10"}
+    )
+    rebuilt = _snap(
+        _sample("a.png", _box("2", 2), _box("10", 10, x=5), _box("ant", 11, x=9)), labels={2: "2", 10: "10", 11: "ant"}
+    )
+    renumbered_as_text = _snap(
+        _sample("a.png", _box("2", 1), _box("10", 0, x=5), _box("ant", 2, x=9)), labels={0: "10", 1: "2", 2: "ant"}
+    )
+
+    assert compare(expected, rebuilt, allowed={Loss.LABEL_IDS_FROM_NAMES}) == []
+    assert compare(expected, renumbered_as_text, allowed={Loss.LABEL_IDS_FROM_NAMES})
+
+
 # ---------------------------------------------------------------------------
 # Every other record field
 # ---------------------------------------------------------------------------
@@ -782,8 +800,8 @@ def test_dataset_and_image_field_losses_each_clear_only_their_field() -> None:
         licenses=({"id": 1},),
         extras={"note": "x"},
     )
-    plain = _snap(_sample("a.png"), labels={})
-    every_loss = {Loss.IMAGE_METADATA, Loss.SPLIT_LIST, Loss.INFO, Loss.LICENSES, Loss.DATASET_EXTRAS}
+    plain = _snap(_sample("a.png"), labels={}, splits=("train",))
+    every_loss = {Loss.IMAGE_METADATA, Loss.INFO, Loss.LICENSES, Loss.DATASET_EXTRAS}
 
     assert compare(expected, plain, allowed=every_loss) == []
     for loss in every_loss:
@@ -801,7 +819,7 @@ def test_class_field_losses_each_clear_only_their_field() -> None:
         assert len(compare(expected, plain, allowed=every_loss - {loss})) == 1, loss
 
 
-def test_split_list_from_images_lists_the_splits_in_yolo_order() -> None:
+def test_split_lists_from_images_list_the_splits_in_yolo_or_name_order() -> None:
     samples = (
         _sample("a.png", split="holdout"),
         _sample("b.png", split="test"),
@@ -814,6 +832,8 @@ def test_split_list_from_images_lists_the_splits_in_yolo_order() -> None:
     assert compare(expected, listed, allowed={Loss.SPLIT_LIST_FROM_IMAGES}) == []
     reordered = _snap(*samples, labels={}, splits=("extra", "holdout", "test", "train"))
     assert len(compare(expected, reordered, allowed={Loss.SPLIT_LIST_FROM_IMAGES})) == 1
+    assert compare(expected, reordered, allowed={Loss.SPLIT_LIST_BY_NAME}) == []
+    assert len(compare(expected, listed, allowed={Loss.SPLIT_LIST_BY_NAME})) == 1
 
 
 def test_yolo_source_details_replace_nothing_but_add_the_loaders_provenance() -> None:
@@ -1016,3 +1036,63 @@ def test_snapshot_carries_every_record_field() -> None:
             assert any(word in difference for difference in differences), (record_type.__name__, field.name)
             checked.append(f"{prefix}{field.name}")
     assert len(checked) > 30
+
+
+def test_huggingface_source_details_add_the_loaders_provenance_and_keep_the_rest() -> None:
+    expected = _snap(_sample("a.png", metadata={"license": 1}), labels={})
+    provenance = {
+        "source_format": "huggingface_vision",
+        "source_file_name": "train/a.png",
+        "metadata_file": "/data/train/metadata.jsonl",
+    }
+    loaded = _snap(_sample("a.png", metadata={"license": 1, **provenance}), labels={})
+
+    assert compare(expected, loaded, allowed={Loss.HUGGINGFACE_SOURCE_DETAILS}) == []
+    assert len(compare(expected, loaded)) == 3
+    without_license = _snap(_sample("a.png", metadata=provenance), labels={})
+    assert compare(expected, without_license, allowed={Loss.HUGGINGFACE_SOURCE_DETAILS}) == [
+        "a.png [split train]: metadata['license'] expected 1, got <missing>"
+    ]
+
+
+def test_split_list_from_images_puts_validation_where_val_goes() -> None:
+    samples = (_sample("a.png", split="test"), _sample("b.png", split="validation"), _sample("c.png"))
+    expected = _snap(*samples, labels={})
+
+    listed = _snap(*samples, labels={}, splits=("train", "validation", "test"))
+    assert compare(expected, listed, allowed={Loss.SPLIT_LIST_FROM_IMAGES}) == []
+
+
+def test_split_aliases_ignore_case() -> None:
+    expected = _snap(_sample("a.png", split="Train"), _sample("b.png", split="Validation"), labels={})
+    aliased = _snap(_sample("a.png"), _sample("b.png", split="val"), labels={})
+
+    assert compare(expected, aliased, allowed={Loss.SPLIT_ALIASES}) == []
+    assert len(compare(expected, aliased)) == 2
+
+
+def test_split_folder_in_file_name_drops_only_the_images_own_split_folder() -> None:
+    expected = _snap(
+        _with(_sample("a.png"), file_name="train/a.png"),
+        _with(_sample("b.png", split="val"), file_name="images/Valid/b.png"),
+        _with(_sample("c.png", split="validation"), file_name="validation/c.png"),
+        _with(_sample("d.png", split="holdout"), file_name="holdout/d.png"),
+        _with(_sample("e.png", split="test"), file_name="./e.png"),
+        labels={},
+    )
+    written = _snap(
+        _sample("a.png"),
+        _sample("b.png", split="val"),
+        # The folder is the alias of "validation", not the split itself, so it stays.
+        _with(_sample("c.png", split="validation"), file_name="validation/c.png"),
+        _with(_sample("d.png", split="holdout"), file_name="holdout/d.png"),
+        _with(_sample("e.png", split="test"), file_name="./e.png"),
+        labels={},
+    )
+
+    assert compare(expected, written, allowed={Loss.SPLIT_FOLDER_IN_FILE_NAME}) == []
+    assert compare(expected, written) == [
+        "a.png [split train]: file_name expected 'train/a.png', got 'a.png'",
+        "b.png [split val]: file_name expected 'images/Valid/b.png', got 'b.png'",
+    ]
+    assert len(compare(expected, expected, allowed={Loss.SPLIT_FOLDER_IN_FILE_NAME})) == 2

@@ -67,6 +67,15 @@ def _coco_root(root: Path, payload: dict[str, Any] | None = None, *, with_images
     return root
 
 
+def _image_file_names(root: Path, *splits: str) -> list[str]:
+    """``images[].file_name`` of each split's ``annotations/instances_<split>.json``, in turn."""
+    names: list[str] = []
+    for split in splits:
+        document = json.loads((root / "annotations" / f"instances_{split}.json").read_text(encoding="utf-8"))
+        names += [img["file_name"] for img in document["images"]]
+    return names
+
+
 def _fingerprint(ds: ObjectDetectionDataset) -> tuple[Any, ...]:
     samples = tuple(
         (
@@ -233,19 +242,30 @@ class TestCocoWriterDrops:
         assert [(img["id"], img["file_name"]) for img in document["images"]] == [(2, "a.jpg"), (1, "b.jpg")]
         assert [ann["image_id"] for ann in document["annotations"]] == [2]
 
-    def test_duplicate_string_image_id_keeps_the_first(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        # Fresh integer ids must not hide a repeated source id as two images.
+    @pytest.mark.parametrize("image_id", [1, "img"])
+    def test_duplicate_image_id_gets_a_fresh_id(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, image_id: int | str
+    ) -> None:
+        # #134 case 5: the second sample and its boxes used to be dropped.
+        car = ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=1)
+        bus = ObjectDetectionAnnotation(bbox=(5.0, 6.0, 7.0, 8.0), category_id=2)
         ds = ObjectDetectionDataset(
             samples=(
-                ImageObjectDetectionSample(image_id="img", file_name="a.jpg"),
-                ImageObjectDetectionSample(image_id="img", file_name="b.jpg"),
+                ImageObjectDetectionSample(image_id=image_id, file_name="a.jpg", detections=(car,)),
+                ImageObjectDetectionSample(image_id=image_id, file_name="b.jpg", detections=(bus,)),
+                ImageObjectDetectionSample(image_id=2, file_name="c.jpg"),
             ),
         )
-        with caplog.at_level(logging.WARNING, logger="datamaite"):
+        with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
             write(ds, tmp_path, output_format="coco", include_images=False)
         document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
-        assert [img["file_name"] for img in document["images"]] == ["a.jpg"]
-        assert "Skipping duplicate image id img" in caplog.text
+        ids = {img["file_name"]: img["id"] for img in document["images"]}
+        assert sorted(ids) == ["a.jpg", "b.jpg", "c.jpg"]
+        assert len(set(ids.values())) == 3
+        assert ids["c.jpg"] == 2
+        boxes = {ann["image_id"]: ann["bbox"] for ann in document["annotations"]}
+        assert boxes == {ids["a.jpg"]: [1.0, 2.0, 3.0, 4.0], ids["b.jpg"]: [5.0, 6.0, 7.0, 8.0]}
+        assert "new COCO image id" in caplog.text
 
     def test_colliding_file_names_get_distinct_files(self, tmp_path: Path) -> None:
         # COCO keeps images in one flat directory. Same-named images from
@@ -258,8 +278,7 @@ class TestCocoWriterDrops:
             ),
         )
         write(ds, tmp_path, output_format="coco")
-        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
-        assert [img["file_name"] for img in document["images"]] == ["img.jpg", "img_2.jpg"]
+        assert _image_file_names(tmp_path, "train", "val") == ["img.jpg", "img_2.jpg"]
         assert (tmp_path / "img.jpg").read_bytes() == b"train-pixels"
         assert (tmp_path / "img_2.jpg").read_bytes() == b"val-pixels"
 
@@ -273,8 +292,7 @@ class TestCocoWriterDrops:
             ),
         )
         write(ds, tmp_path, output_format="coco")
-        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
-        assert [img["file_name"] for img in document["images"]] == ["IMG.jpg", "img_2.jpg"]
+        assert _image_file_names(tmp_path, "train", "val") == ["IMG.jpg", "img_2.jpg"]
         assert (tmp_path / "IMG.jpg").read_bytes() == b"train-pixels"
         assert (tmp_path / "img_2.jpg").read_bytes() == b"val-pixels"
 
@@ -392,8 +410,7 @@ class TestCocoWriterDrops:
         )
         with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
             write(ds, tmp_path, output_format="coco", include_images=False)
-        document = json.loads((tmp_path / "annotations" / "instances.json").read_text(encoding="utf-8"))
-        assert [img["file_name"] for img in document["images"]] == ["img.jpg", "img.jpg", "IMG.jpg"]
+        assert _image_file_names(tmp_path, "train", "val") == ["img.jpg", "img.jpg", "IMG.jpg"]
         # Case-only differences are distinct files on the user's own filesystem.
         assert "1 file_name(s) are shared by several images (e.g. 'img.jpg')" in caplog.text
 
@@ -547,3 +564,129 @@ class TestCocoWriterDrops:
         ds = ObjectDetectionDataset(samples=())
         with pytest.raises(ValueError, match="bare file name"):
             write(ds, tmp_path, output_format="coco", annotation_file_name=bad_name)
+
+
+def _split_sample(image_id: int, file_name: str, split: str | None) -> ImageObjectDetectionSample:
+    return ImageObjectDetectionSample(
+        image_id=image_id,
+        file_name=file_name,
+        split=split,
+        image_bytes=b"pixels",
+        width=64,
+        height=48,
+        detections=(ObjectDetectionAnnotation(bbox=(1.0, 1.0, 5.0, 5.0), category_id=1, category_name="car"),),
+    )
+
+
+def _annotation_files(root: Path) -> list[str]:
+    return sorted(path.name for path in (root / "annotations").glob("*.json"))
+
+
+class TestCocoWriterSplits:
+    """#131 case 4: each split gets its own ``instances_<split>.json``, and splits survive a reload."""
+
+    def test_issue_reproducer_keeps_splits_through_yolo(self, tmp_path: Path) -> None:
+        ds = ObjectDetectionDataset(samples=(_split_sample(1, "a.png", "train"), _split_sample(2, "b.png", "val")))
+        write(ds, tmp_path / "coco", output_format="coco")
+        assert _annotation_files(tmp_path / "coco") == ["instances_train.json", "instances_val.json"]
+        back = load_od(tmp_path / "coco", dataset_format="coco")
+        assert [s.split for s in back.samples] == ["train", "val"]
+        assert back.num_detections == 2
+        write(back, tmp_path / "yolo", output_format="yolo")
+        assert [s.split for s in load_od(tmp_path / "yolo", dataset_format="yolo").samples] == ["train", "val"]
+
+    def test_no_split_is_one_unnamed_file(self, tmp_path: Path) -> None:
+        ds = ObjectDetectionDataset(samples=(_split_sample(1, "a.png", None), _split_sample(2, "b.png", None)))
+        write(ds, tmp_path, output_format="coco")
+        assert _annotation_files(tmp_path) == ["instances.json"]
+        assert [s.split for s in load_od(tmp_path, dataset_format="coco").samples] == [None, None]
+
+    def test_a_single_split_keeps_its_name(self, tmp_path: Path) -> None:
+        """A val-only dataset reloads as val, so a later YOLO write does not put it in train."""
+        ds = ObjectDetectionDataset(samples=(_split_sample(1, "a.png", "val"), _split_sample(2, "b.png", "val")))
+        write(ds, tmp_path, output_format="coco")
+        assert _annotation_files(tmp_path) == ["instances_val.json"]
+        assert [s.split for s in load_od(tmp_path, dataset_format="coco").samples] == ["val", "val"]
+
+    def test_unsplit_samples_beside_split_ones_go_to_instances_json(self, tmp_path: Path) -> None:
+        ds = ObjectDetectionDataset(samples=(_split_sample(1, "a.png", None), _split_sample(2, "b.png", "train")))
+        write(ds, tmp_path, output_format="coco")
+        assert _annotation_files(tmp_path) == ["instances.json", "instances_train.json"]
+        assert [s.split for s in load_od(tmp_path, dataset_format="coco").samples] == [None, "train"]
+
+    def test_a_custom_annotation_file_name_is_not_used_with_splits(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The loader reads only instances*.json files back, so splits keep those names."""
+        ds = ObjectDetectionDataset(
+            samples=(
+                _split_sample(1, "a.png", "train"),
+                _split_sample(2, "b.png", "train"),
+                _split_sample(3, "c.png", "val"),
+            )
+        )
+        with caplog.at_level(logging.WARNING):
+            write(ds, tmp_path, output_format="coco", annotation_file_name="coco.json")
+
+        assert "annotation_file_name='coco.json' is not used" in caplog.text
+        assert _annotation_files(tmp_path) == ["instances_train.json", "instances_val.json"]
+        reloaded = load_od(tmp_path, dataset_format="coco")
+        assert sorted((s.file_name, s.split) for s in reloaded.samples) == [
+            ("a.png", "train"),
+            ("b.png", "train"),
+            ("c.png", "val"),
+        ]
+
+    def test_a_custom_annotation_file_name_is_used_without_splits(self, tmp_path: Path) -> None:
+        ds = ObjectDetectionDataset(samples=(_split_sample(1, "a.png", None), _split_sample(2, "b.png", None)))
+        write(ds, tmp_path, output_format="coco", annotation_file_name="coco.json")
+        assert _annotation_files(tmp_path) == ["coco.json"]
+        assert len(load_od(tmp_path, dataset_format="coco").samples) == 2
+
+    def test_ids_are_unique_across_files_and_every_file_lists_every_category(self, tmp_path: Path) -> None:
+        loaded = ObjectDetectionDataset(
+            samples=(_split_sample(1, "a.png", "Train"), _split_sample(1, "b.png", "Validation"))
+        )
+        write(loaded, tmp_path, output_format="coco")
+        documents = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((tmp_path / "annotations").glob("*"))]
+        assert [len(d["images"]) for d in documents] == [1, 1]
+        assert len({d["images"][0]["id"] for d in documents}) == 2
+        assert all(d["annotations"][0]["image_id"] == d["images"][0]["id"] for d in documents)
+        assert len({d["annotations"][0]["id"] for d in documents}) == 2
+
+    def test_split_names_that_cannot_be_file_names(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        ds = ObjectDetectionDataset(
+            samples=(
+                _split_sample(1, "a.png", "train"),
+                _split_sample(2, "b.png", "Train"),
+                _split_sample(3, "c.png", "cam/1"),
+            )
+        )
+        with caplog.at_level(logging.WARNING, logger=_WRITER_LOGGER):
+            write(ds, tmp_path, output_format="coco")
+        assert _annotation_files(tmp_path) == ["instances_Train_2.json", "instances_cam_1.json", "instances_train.json"]
+        assert "so it reloads as split 'cam_1'" in caplog.text
+        assert sorted(s.split or "" for s in load_od(tmp_path, dataset_format="coco").samples) == [
+            "Train_2",
+            "cam_1",
+            "train",
+        ]
+
+    def test_appending_a_new_split_adds_its_file(self, tmp_path: Path) -> None:
+        first = ObjectDetectionDataset(samples=(_split_sample(1, "a.png", "train"), _split_sample(2, "b.png", "val")))
+        write(first, tmp_path, output_format="coco")
+        second = ObjectDetectionDataset(samples=(_split_sample(3, "c.png", "test"), _split_sample(4, "d.png", "val2")))
+        write(second, tmp_path, output_format="coco", mode="append")
+        assert _annotation_files(tmp_path) == [
+            "instances_test.json",
+            "instances_train.json",
+            "instances_val.json",
+            "instances_val2.json",
+        ]
+        reloaded = load_od(tmp_path, dataset_format="coco")
+        assert sorted((s.file_name, s.split) for s in reloaded.samples) == [
+            ("a.png", "train"),
+            ("b.png", "val"),
+            ("c.png", "test"),
+            ("d.png", "val2"),
+        ]

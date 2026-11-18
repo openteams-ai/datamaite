@@ -98,6 +98,8 @@ variables:
   # Both the notebooks and the e2e tests read this env var to locate the
   # datasets. Absolute path so it resolves regardless of execution CWD.
   - export DATAMAITE_DATASETS_ROOT="${CI_PROJECT_DIR}/example-data/datasets"
+  # Record which example data the tests ran against.
+  - git -C "${CI_PROJECT_DIR}/example-data" log -1 --format='Example data at %H (%s)'
 
 .shared-setup:
   interruptible: true
@@ -788,11 +790,14 @@ integration:
   timeout: 30m
   variables:
     VERSION: "3.12"
+    # A missing real-world export, or a missing dependency for one, fails the
+    # job instead of skipping its tests.
+    DATAMAITE_REQUIRE_REAL_EXPORTS: "1"
   allow_failure: false
   script:
     # Clone the shared example datasets and export DATAMAITE_DATASETS_ROOT.
     # Clones the default branch (main): the multi-format datasets/<format>/
-    # layout and the counts this matrix asserts are merged there.
+    # layout and the counts the e2e tests assert are merged there.
     - *clone_example_data
     - uv sync --locked --extra dev --extra maite --extra all
     # -s so the end-of-run matrix summary table is shown in the job log.

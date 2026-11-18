@@ -21,10 +21,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TIFF run on the operations they are about, and appends are explicit cases.
   Written datasets must not contain the absolute path of their source folder
   (#157), must load after being moved with the source gone, and must pass
-  checks that read their files directly. Known bugs (#130, #131, #133, #134,
-  #151, #152, #153, and #159 to #164, which the harness found) are expected
-  failures only where they explain every difference. How a format joins the
-  harness is documented in `tests/README.md`.
+  checks that read their files directly. Known bugs (#151, #152, #153, and
+  #159 to #165, which the harness found) are expected failures only where they
+  explain every difference.
+  How a format joins the harness is documented in `tests/README.md`.
+- The `integration` job runs the harness on real exports from CVAT, Label
+  Studio, FiftyOne, Roboflow, Ultralytics and Hugging Face in the example-data
+  repo (`tests/e2e/test_real_world_exports.py`). Each loader call is checked
+  against the exports' contents, read from their files without datamaite
+  (`tests/e2e/real_world_expected.json`), and exports of the same data from
+  two tools must load the same. The job fails if an export is missing.
+- Strict expected failures for two Hugging Face bugs with no issue yet: a
+  class named as its id as text is renumbered by a write and reload, and
+  splits with conflicting parquet `ClassLabel` tables get each other's names.
+- The `dev` extra includes pyarrow, so the `integration` job also loads the
+  Hugging Face parquet export.
+- `load_od(..., dataset_format="huggingface_vision", bbox_format="xyxy")`
+  reads `objects.bbox` as x_min, y_min, x_max, y_max (#134). The default,
+  `"xywh"`, is unchanged, other values raise `ValueError`, and boxes that
+  extend past an image size given in the metadata are logged.
+
+### Changed
+
+- **Breaking:** MAITE `color_mode="native"` applies the EXIF orientation of
+  JPEG, PNG and WebP images, as `"rgb"` and `"gray"` do, so its pixels share a
+  frame with the image's size and boxes (#133). Before, it kept the stored
+  pixel grid (#76).
+- **Breaking:** the COCO writer writes one `annotations/instances_<split>.json`
+  per split when the samples are in more than one split, instead of one
+  `instances.json` (#131). Samples with no split among them go to
+  `instances.json`. A dataset with a single split is written to
+  `instances_<split>.json` too, so the split's name is kept (a `val` split
+  no longer reloads unnamed and then becomes `train` in YOLO); a dataset with
+  no splits is still one `instances.json`. A custom `annotation_file_name`
+  names that one file only: with splits it is not used, with a warning, as the
+  loader reads only `instances*.json` files back.
+
+### Fixed
+
+- YOLO `mode="append"` keeps the classes already in `data.yaml` and their ids
+  (#130). The appended dataset's classes are matched to them by name, and new
+  names are added after them. Before, earlier boxes were relabelled. An append
+  to a `data.yaml` that can't be read, belongs to a classification dataset or
+  has class ids other than `0..n-1` is refused before anything is written.
+  This holds with `write_data_yaml=False` too, which refuses classes
+  `data.yaml` does not name. An append keeps `data.yaml`'s `path`, and lists
+  new split folders relative to it. It keeps `nc` (with the new count) and
+  every other key, such as Roboflow's `roboflow:`.
+- The YOLO detection loader reads a missing `../x` split path (Roboflow's
+  `train: ../train/images`) as `x`, as Ultralytics does, so those images load
+  from `data.yaml`, and still load after an append (#130).
+- The YOLO detection writer lists every split in `data.yaml` (#131). Splits
+  named like `validation` or `valid` go under `val`, as Ultralytics reads them,
+  and any other split (such as `holdout`) under its own name. The loader reads
+  such keys back as splits, and `split="holdout"` selects them. Before, those
+  splits were lost on reload. A split with a year after it, such as COCO
+  2017's `train2017`, goes under its standard key (`train`), as Ultralytics
+  needs a `train` key.
+- The YOLO detection writer takes each image's split from `sample.split`, so
+  images with nested file names such as `cam1/b.png` keep their split (#131).
+- The YOLO detection loader measures images as OpenCV and Ultralytics decode
+  them, with the JPEG EXIF orientation applied, and scales boxes to that size
+  (#133). Before, boxes on rotated photos were scaled in the unrotated frame.
+  The orientation of PNG (`eXIf`) and WebP images is read too, as OpenCV
+  applies it.
+  Writers and the MAITE datasets measure a sample with no stored size the
+  same way, so YOLO no longer drops, and COCO no longer turns again, its boxes.
+- The COCO loader turns the size, boxes and polygons of an EXIF-rotated JPEG
+  (orientations 5-8) to the displayed frame when the record stores the
+  unrotated size, as tools that ignore EXIF write it, and logs a warning
+  (#133). RLE masks are kept as stored, with a warning. Orientations 2-4 keep
+  the size, so they can't be detected and are left alone.
+- With no taxonomy, the YOLO detection writer numbers class ids, NumPy ones
+  included, in numeric order, so `2` comes before `10` (#134).
+- The YOLO detection loader measures `.webp`, `.tif` and `.tiff` images, so
+  their labels are kept (#134). Image sizes are read by a new header reader
+  for PNG, GIF, BMP, JPEG, WebP and TIFF that needs no image library.
+- COCO splits are kept (#131): the loader reads every `instances*.json` under
+  `annotations/`, not just the first, and gives each image the split in its
+  file's name (`instances_Train.json` holds split `Train`), also for an
+  explicit `annotation_file`. Images are found under the root,
+  `images/<split>/` (CVAT), `<split>/` (COCO 2017) or `images/`. CVAT's
+  `instances_default.json` (a task with no subsets) has no split. A class id
+  that a later file names differently gets its own id, with a warning, so its
+  boxes keep their class through a write.
+- The COCO writer keeps a sample whose image id another sample already has
+  (#134): it gets a new unused id, and its boxes go with it.
+- Hugging Face vision detection writes with `mode="append"` add to the
+  existing `metadata.jsonl`/`metadata.csv` instead of replacing it, and never
+  overwrite an existing image (#130). An append the writer can't merge (another
+  metadata format, parquet metadata, a root-level metadata file, or a
+  metadata file that can't be read) raises before anything is written.
+- The HMIE writer gives every sequence its own snippet (#130). Before, an
+  append overwrote the earlier dataset's snippets, and sequences with the same
+  `video_id` overwrote each other.
+- Hugging Face video classification splits other than `train`, `validation`
+  and `test` (and their aliases), such as `holdout`, load back (#131). The
+  writer records them in a `split` metadata column, which the loader reads; a
+  folder alone can't say whether it is a split or a class.
+- NumPy and other integral class ids (`np.int64`) are MAITE labels instead of
+  `-1`, for detection and for classification without a taxonomy (#134).
+- A Hugging Face label of `-1` means "no label" (#134): the image loads with no
+  labels instead of a class named `"-1"`, and a detection category of `-1`
+  gives the box no category.
+- MOT15 ground truth loads with its boxes as pedestrians (#134). Its 10-column
+  `gt.txt` has world coordinates where MOT16+ has class and visibility, so
+  every box was class -1 and writing it back produced an empty `gt.txt`.
+- **Breaking:** loaded sizes and boxes of EXIF-rotated JPEGs (YOLO always, COCO
+  when the record stores the unrotated size) are now in the displayed frame,
+  YOLO `data.yaml` files written by datamaite list `validation` splits under
+  `val`, and YOLO class indices written without a taxonomy may change order.
 
 ## [0.7.0] - 2026-10-22
 

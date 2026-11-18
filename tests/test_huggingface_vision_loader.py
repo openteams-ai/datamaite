@@ -545,6 +545,42 @@ class TestHuggingFaceVisionClassLabel:
         assert taxonomy is not None
         assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "person"), (1, "dog")]
 
+    @pytest.mark.optional
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=(
+            "no issue yet: splits whose ClassLabel tables disagree are loaded with the first table, with a "
+            "warning, so a split's boxes get another split's names. Whether to reject the data or remap its ids "
+            "is for the fix to decide."
+        ),
+    )
+    def test_od_parquet_conflicting_classlabel_tables_do_not_relabel_a_split(self, tmp_path: Path) -> None:
+        for split, names in (("train", ["zebra", "ant"]), ("validation", ["ant", "zebra"])):
+            _touch_image(tmp_path / split / "a.jpg")
+            self._write_parquet(
+                tmp_path / split / "metadata.parquet",
+                {"file_name": ["a.jpg"], "objects": [{"bbox": [[1.0, 2.0, 3.0, 4.0]], "categories": [0]}]},
+                {
+                    "objects": {
+                        "bbox": {
+                            "feature": {"feature": {"dtype": "float32", "_type": "Value"}, "_type": "Sequence"},
+                            "_type": "Sequence",
+                        },
+                        "categories": {"feature": {"names": names, "_type": "ClassLabel"}, "_type": "Sequence"},
+                    }
+                },
+            )
+        alone = load_od(tmp_path / "validation", dataset_format="huggingface_vision")
+        assert alone.samples[0].detections[0].category_name == "ant"
+
+        try:
+            whole = load_od(tmp_path, dataset_format="huggingface_vision")
+        except ValueError:
+            return  # Rejecting the conflicting tables is a fix too.
+        (validation,) = (s for s in whole.samples if s.split == "validation")
+        assert validation.detections[0].category_name == "ant"
+
     def test_classlabel_tables_handles_wrapper_shapes(self) -> None:
         # Pure schema parsing: no parquet needed. Covers the modern List wrapper
         # and the legacy list-of-one Sequence serialization.
@@ -571,3 +607,120 @@ class TestHuggingFaceVisionClassLabel:
         assert _classlabel_tables(None, path=Path("m.parquet")) == {}
         assert _classlabel_tables({b"huggingface": b"not json"}, path=Path("m.parquet")) == {}
         assert _classlabel_tables({b"huggingface": b'{"info": {"features": 3}}'}, path=Path("m.parquet")) == {}
+
+
+class TestHuggingFaceVisionNoLabel:
+    """#134 case 4: Hugging Face label -1 means "no label", not a class named "-1"."""
+
+    def test_ic_label_minus_one_is_unlabelled(self, tmp_path: Path) -> None:
+        _touch_image(tmp_path / "test" / "a.jpg")
+        _touch_image(tmp_path / "test" / "b.jpg")
+        _write_jsonl(
+            tmp_path / "test" / "metadata.jsonl",
+            [{"file_name": "a.jpg", "label": -1}, {"file_name": "b.jpg", "label": 3}],
+        )
+
+        ds = load_ic(tmp_path, dataset_format="huggingface_vision")
+
+        assert [(s.file_name, [lab.category_name for lab in s.labels]) for s in ds.samples] == [
+            ("test/a.jpg", []),
+            ("test/b.jpg", ["3"]),
+        ]
+        taxonomy = ds.dataset_metadata.taxonomy
+        assert taxonomy is not None
+        assert taxonomy.ordered_names == ("3",)
+
+    def test_ic_all_unlabelled_has_no_classes(self, tmp_path: Path) -> None:
+        _touch_image(tmp_path / "test" / "a.jpg")
+        (tmp_path / "test" / "metadata.csv").write_text("file_name,label\na.jpg,-1\n", encoding="utf-8")
+
+        ds = load_ic(tmp_path, dataset_format="huggingface_vision")
+
+        assert ds.samples[0].labels == ()
+        assert ds.dataset_metadata.taxonomy is None
+
+    @pytest.mark.optional
+    def test_ic_parquet_classlabel_minus_one_is_unlabelled(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        _touch_image(tmp_path / "test" / "a.jpg")
+        TestHuggingFaceVisionClassLabel._write_parquet(
+            tmp_path / "test" / "metadata.parquet",
+            {"file_name": ["a.jpg"], "label": [-1]},
+            {"label": {"names": ["cat", "dog"], "_type": "ClassLabel"}},
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_ic(tmp_path, dataset_format="huggingface_vision")
+
+        assert ds.samples[0].labels == ()
+        assert "outside its ClassLabel" not in caplog.text
+        taxonomy = ds.dataset_metadata.taxonomy
+        assert taxonomy is not None
+        assert taxonomy.ordered_names == ("cat", "dog")
+
+    def test_od_category_minus_one_has_no_class(self, tmp_path: Path) -> None:
+        _touch_image(tmp_path / "train" / "a.jpg")
+        _write_jsonl(
+            tmp_path / "train" / "metadata.jsonl",
+            [{"file_name": "a.jpg", "objects": {"bbox": [[1, 1, 5, 5], [2, 2, 5, 5]], "categories": [-1, 0]}}],
+        )
+
+        ds = load_od(tmp_path, dataset_format="huggingface_vision")
+
+        assert [(d.category_id, d.category_name) for d in ds.samples[0].detections] == [(None, None), (0, None)]
+        taxonomy = ds.dataset_metadata.taxonomy
+        assert taxonomy is not None
+        assert [(e.source_id, e.name) for e in taxonomy.entries] == [(0, "0")]
+
+
+class TestHuggingFaceVisionBboxFormat:
+    """#134 case 7: ``objects.bbox`` may be x, y, width, height or x_min, y_min, x_max, y_max."""
+
+    def _root(self, tmp_path: Path, *, sized: bool = True) -> Path:
+        _touch_image(tmp_path / "train" / "a.jpg")
+        row: dict = {"file_name": "a.jpg", "objects": {"bbox": [[40, 20, 60, 40]], "categories": [0]}}
+        if sized:
+            row.update(width=64, height=48)
+        _write_jsonl(tmp_path / "train" / "metadata.jsonl", [row])
+        return tmp_path
+
+    def test_xyxy_boxes_are_converted(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(self._root(tmp_path), dataset_format="huggingface_vision", bbox_format="xyxy")
+
+        assert ds.samples[0].detections[0].bbox == (40.0, 20.0, 20.0, 20.0)
+        from datamaite.maite._od import _target
+
+        assert _target(ds.samples[0]).boxes.tolist() == [[40.0, 20.0, 60.0, 40.0]]
+        assert "extend past" not in caplog.text
+
+    def test_xywh_is_the_default_and_warns_past_the_image(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(self._root(tmp_path), dataset_format="huggingface_vision")
+
+        assert ds.samples[0].detections[0].bbox == (40.0, 20.0, 60.0, 40.0)
+        assert "1 Hugging Face bbox(es) for train/a.jpg extend past the 64x48 image" in caplog.text
+        assert "bbox_format" in caplog.text
+
+    def test_no_warning_without_a_known_image_size(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            load_od(self._root(tmp_path, sized=False), dataset_format="huggingface_vision")
+
+        assert "extend past" not in caplog.text
+
+    def test_xyxy_box_with_max_below_min_is_skipped(self, tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+        _touch_image(tmp_path / "a.jpg")
+        _write_jsonl(
+            tmp_path / "metadata.jsonl",
+            [{"file_name": "a.jpg", "objects": {"bbox": [[10, 10, 5, 20], [0, 0, 4, 4]], "categories": [0, 0]}}],
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            ds = load_od(tmp_path, dataset_format="huggingface_vision", bbox_format="xyxy")
+
+        assert [d.bbox for d in ds.samples[0].detections] == [(0.0, 0.0, 4.0, 4.0)]
+        assert "non-positive area" in caplog.text
+
+    @pytest.mark.parametrize("bad", ["cxcywh", "", None, 1])
+    def test_unknown_bbox_format_raises(self, tmp_path: Path, bad: object) -> None:
+        with pytest.raises(ValueError, match="bbox_format must be one of"):
+            load_od(self._root(tmp_path), dataset_format="huggingface_vision", bbox_format=bad)

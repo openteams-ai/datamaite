@@ -8,6 +8,7 @@ YOLO label files with no image.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -151,3 +152,26 @@ def _yolo_row_problems(row: str, n_classes: int) -> list[str]:
     if len(coords) != 4 or not all(0.0 <= value <= 1.0 for value in coords):
         problems.append(f"expected 4 coordinates in [0, 1], got {coords}")
     return problems
+
+
+def relocate(tmp_path: Path) -> Path:
+    """Move the written dataset in ``tmp_path / "out"`` and hide the source in ``tmp_path / "src"``.
+
+    Loading from the new place with the source gone shows the output stands on
+    its own: every image it lists is read from inside it. Check the output for
+    absolute paths of the test folder (#157) before moving it.
+    """
+    if (tmp_path / "src").exists():
+        (tmp_path / "src").rename(tmp_path / "src-gone")
+    moved = tmp_path / "moved" / "dataset"
+    moved.parent.mkdir()
+    return (tmp_path / "out").rename(moved)
+
+
+def tree_digest(root: Path) -> dict[str, str]:
+    """``{relative path: sha256}`` of every file under ``root``."""
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -574,3 +575,164 @@ class TestHuggingFaceVisionODWriterTaxonomyNames:
         assert rows[0]["objects"]["categories"] == [2, 10, 5]
         reloaded = load_od(dest, dataset_format="huggingface_vision")
         assert [d.category_id for d in reloaded.samples[0].detections] == [2, 10, 5]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "no issue yet: a box named as its id as text (2: '2') is written as the name, so a reload renumbers "
+        "the classes in text order ('10' before '2'). The natural #155 fix names such boxes, so fix this with it."
+    ),
+)
+def test_od_classes_named_as_their_ids_keep_their_ids(tmp_path: Path) -> None:
+    (tmp_path / "a.jpg").write_bytes(_JPEG)
+    sample = ImageObjectDetectionSample(
+        image_id="a.jpg",
+        path_or_uri=str(tmp_path / "a.jpg"),
+        file_name="a.jpg",
+        split="train",
+        detections=(
+            ObjectDetectionAnnotation(bbox=(1.0, 2.0, 3.0, 4.0), category_id=2, category_name="2"),
+            ObjectDetectionAnnotation(bbox=(5.0, 6.0, 7.0, 8.0), category_id=10, category_name="10"),
+        ),
+    )
+    taxonomy = Taxonomy(entries=(CategoryEntry(source_id=2, name="2"), CategoryEntry(source_id=10, name="10")))
+    dataset = ObjectDetectionDataset(samples=(sample,), dataset_metadata=DatasetMetadata(taxonomy=taxonomy))
+
+    write(dataset, tmp_path / "out", output_format="huggingface_vision")
+    reloaded = load_od(tmp_path / "out", dataset_format="huggingface_vision")
+
+    assert [(d.category_id, d.category_name) for d in reloaded.samples[0].detections] == [(2, "2"), (10, "10")]
+
+
+class TestHuggingFaceVisionOdAppend:
+    """#130 case 2: appending keeps the rows already in the metadata files."""
+
+    @staticmethod
+    def _one(name: str, *, split: str | None = None, category: str = "car") -> ObjectDetectionDataset:
+        taxonomy = Taxonomy(entries=(CategoryEntry(source_id=0, name=category),))
+        sample = ImageObjectDetectionSample(
+            image_id=name,
+            file_name=f"{name}.jpg",
+            image_bytes=_JPEG + name.encode(),
+            width=64,
+            height=48,
+            split=split,
+            detections=(ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=0, category_name=category),),
+        )
+        return ObjectDetectionDataset(samples=(sample,), dataset_metadata=DatasetMetadata(taxonomy=taxonomy))
+
+    @pytest.mark.parametrize("metadata_format", ["jsonl", "csv"])
+    def test_append_keeps_earlier_rows(self, tmp_path: Path, metadata_format: str) -> None:
+        out = tmp_path / "out"
+        for name in ("a", "b"):
+            write(
+                self._one(name), out, output_format="huggingface_vision", mode="append", metadata_format=metadata_format
+            )
+
+        ds = load_od(out, dataset_format="huggingface_vision")
+
+        assert [s.image_id for s in ds.samples] == ["data/a.jpg", "data/b.jpg"]
+        assert all(len(s.detections) == 1 for s in ds.samples)
+
+    def test_append_adds_new_splits_and_keeps_old_ones(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(self._one("a", split="train"), out, output_format="huggingface_vision")
+        write(self._one("b", split="test", category="bus"), out, output_format="huggingface_vision", mode="append")
+        write(self._one("c", split="train", category="bus"), out, output_format="huggingface_vision", mode="append")
+
+        ds = load_od(out, dataset_format="huggingface_vision")
+
+        assert [(s.image_id, s.detections[0].category_name) for s in ds.samples] == [
+            ("train/a.jpg", "car"),
+            ("train/c.jpg", "bus"),
+            ("test/b.jpg", "bus"),
+        ]
+
+    def test_append_never_overwrites_an_image(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(self._one("a"), out, output_format="huggingface_vision")
+        before = (out / "data" / "a.jpg").read_bytes()
+        clash = self._one("a", category="bus")
+        clash = replace(clash, samples=tuple(replace(s, image_bytes=b"other") for s in clash.samples))
+
+        write(clash, out, output_format="huggingface_vision", mode="append")
+
+        assert (out / "data" / "a.jpg").read_bytes() == before
+        ds = load_od(out, dataset_format="huggingface_vision")
+        assert [(s.image_id, s.detections[0].category_name) for s in ds.samples] == [
+            ("data/a-1.jpg", "bus"),
+            ("data/a.jpg", "car"),
+        ]
+
+    def test_append_with_another_metadata_format_is_refused(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(self._one("a"), out, output_format="huggingface_vision")
+        before = sorted(p.relative_to(out).as_posix() for p in out.rglob("*"))
+
+        with pytest.raises(ValueError, match="pass metadata_format='jsonl'"):
+            write(self._one("b"), out, output_format="huggingface_vision", mode="append", metadata_format="csv")
+
+        assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*")) == before
+
+    @pytest.mark.parametrize(
+        ("metadata_format", "metadata"),
+        [
+            ("jsonl", '{"file_name": "a.jpg"\n'),
+            ("jsonl", '["not", "an", "object"]\n'),
+            ("csv", "file_name,objects\na.jpg,{},extra\n"),
+        ],
+        ids=["truncated-json", "not-an-object", "csv-extra-column"],
+    )
+    def test_append_to_malformed_metadata_is_refused_before_writing(
+        self, tmp_path: Path, metadata_format: str, metadata: str
+    ) -> None:
+        out = tmp_path / "out"
+        write(self._one("a"), out, output_format="huggingface_vision", metadata_format=metadata_format)
+        (out / "data" / f"metadata.{metadata_format}").write_text(metadata, encoding="utf-8")
+        before = sorted(p.relative_to(out).as_posix() for p in out.rglob("*"))
+
+        # Into another split, so no image directory but the malformed one's is touched.
+        with pytest.raises(ValueError, match=rf"cannot append to .*metadata\.{metadata_format}"):
+            write(
+                self._one("b", split="train"),
+                out,
+                output_format="huggingface_vision",
+                mode="append",
+                metadata_format=metadata_format,
+            )
+
+        assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*")) == before
+
+    def test_append_to_parquet_metadata_is_refused(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        (out / "train").mkdir(parents=True)
+        (out / "train" / "metadata.parquet").write_bytes(b"PAR1")
+
+        with pytest.raises(ValueError, match="parquet metadata"):
+            write(self._one("b"), out, output_format="huggingface_vision", mode="append")
+
+        assert sorted(p.name for p in (out / "train").iterdir()) == ["metadata.parquet"]
+        assert not (out / "data").exists()
+
+    def test_append_to_a_root_metadata_file_is_refused(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        (out / "img").mkdir(parents=True)
+        (out / "img" / "x.jpg").write_bytes(_JPEG)
+        (out / "metadata.jsonl").write_text('{"file_name": "img/x.jpg", "objects": {"bbox": [], "categories": []}}\n')
+
+        with pytest.raises(ValueError, match="root-level metadata file"):
+            write(self._one("b"), out, output_format="huggingface_vision", mode="append")
+
+    def test_append_after_an_empty_write_replaces_the_placeholder(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        empty = ObjectDetectionDataset(samples=())
+        write(empty, out, output_format="huggingface_vision")
+        assert (out / "metadata.jsonl").is_file()
+
+        write(self._one("a"), out, output_format="huggingface_vision", mode="append")
+        write(empty, out, output_format="huggingface_vision", mode="append")
+
+        assert not (out / "metadata.jsonl").exists()
+        assert [s.image_id for s in load_od(out, dataset_format="huggingface_vision").samples] == ["data/a.jpg"]

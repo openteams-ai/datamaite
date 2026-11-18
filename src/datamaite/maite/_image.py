@@ -10,6 +10,7 @@ from typing import IO, Any
 
 import numpy as np
 
+from datamaite._image_header import read_image_header, to_display_frame
 from datamaite._io import MAX_DECODED_IMAGE_PIXELS, decode_image_bytes, decode_image_path
 from datamaite._safetensors import MAX_ENCODED_IMAGE_BYTES, _to_uint8, load_image_hwc
 from datamaite._upath import sanitized_uri, to_dataset_path
@@ -21,7 +22,8 @@ from datamaite.records import ImageRecord
 #
 # * ``"rgb"`` (default) -- 3-channel RGB: grayscale is replicated, alpha dropped.
 # * ``"gray"`` -- one luma channel, ``(1, H, W)``.
-# * ``"native"`` -- the stored bands and dtype, in stored (RGB(A)) order. TIFFs
+# * ``"native"`` -- the stored bands and dtype, in stored (RGB(A)) order, turned
+#   by the EXIF orientation as the other modes are. TIFFs
 #   with more than one band, other than plain RGB, decode with ``tifffile``, so
 #   any band count works (multispectral, SAR); everything else uses OpenCV's
 #   1/3/4 channels.
@@ -134,18 +136,25 @@ def _decode_encoded(
         if multiband is not None:
             return multiband
 
-    # "native" reads IMREAD_UNCHANGED (neither flag); OpenCV skips EXIF
-    # orientation in that mode, so native keeps the stored pixel grid (#76).
+    # "native" reads IMREAD_UNCHANGED (neither flag), in which OpenCV skips the
+    # EXIF orientation, so it is applied after decoding, as rgb and gray apply it.
     flags = {"color": color_mode == "rgb", "gray": color_mode == "gray"}
     if sample.image_bytes is not None:
-        decoded = decode_image_bytes(sample.image_bytes, **flags)
+        decoded = _in_display_frame(
+            decode_image_bytes(sample.image_bytes, **flags), sample.image_bytes, storage_options, color_mode
+        )
     elif sample.path_or_uri is not None:
-        # Keyed by mode too: the cache holds the raw decode, which differs per mode.
+        # Keyed by mode too: the cache holds the decode, which differs per mode.
         cache_key = (sample.path_or_uri, color_mode)
         if base_cache is not None and cache_key in base_cache:
             decoded = base_cache[cache_key]
         else:
-            decoded = decode_image_path(sample.path_or_uri, storage_options, **flags)
+            decoded = _in_display_frame(
+                decode_image_path(sample.path_or_uri, storage_options, **flags),
+                sample.path_or_uri,
+                storage_options,
+                color_mode,
+            )
             if decoded is not None and base_cache is not None:
                 base_cache.clear()
                 base_cache[cache_key] = decoded
@@ -160,6 +169,26 @@ def _decode_encoded(
     # The cache holds BGR (OpenCV's order); flip to RGB per caller, above the
     # shared region crop. Both are views, so this allocates nothing.
     return decoded[:, :, ::-1]
+
+
+def _in_display_frame(
+    decoded: np.ndarray | None, source: bytes | str, storage_options: Mapping[str, Any] | None, color_mode: str
+) -> np.ndarray | None:
+    """A native decode turned to the EXIF-displayed frame, which sizes and boxes use (#133).
+
+    OpenCV already applies the orientation in the other modes.
+    """
+    if decoded is None or color_mode != "native":
+        return decoded
+    try:
+        header = read_image_header(source, storage_options)
+    except OSError:
+        return decoded
+    if header is None or header.orientation == 1:
+        return decoded
+    hwc = decoded[:, :, None] if decoded.ndim == 2 else decoded
+    oriented = to_display_frame(hwc, header.orientation)
+    return oriented[:, :, 0] if decoded.ndim == 2 else oriented
 
 
 def _require_cv2(task_name: str, extra: str) -> None:

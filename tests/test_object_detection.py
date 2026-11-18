@@ -354,3 +354,37 @@ class TestOdDatumMetadataExtras:
         sample = ImageObjectDetectionSample(image_id=7, path_or_uri=str(img), width=5, height=3)
         _img, _t, meta = ObjectDetectionDataset(samples=(sample,))[0]
         assert meta == {"id": 7, "height": 3, "width": 5}
+
+
+class TestIntegralClassIds:
+    """#134 case 1: NumPy and pandas class ids are integers too."""
+
+    def test_numpy_category_ids_become_maite_labels(self) -> None:
+        np = pytest.importorskip("numpy")
+        from datamaite.maite._od import _target
+
+        sample = ImageObjectDetectionSample(
+            image_id="a",
+            detections=(
+                ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=np.int64(1), category_name="car"),
+                ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=np.int32(0)),
+                ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=np.uint8(2)),
+            ),
+        )
+        labels = _target(sample).labels
+        assert labels.tolist() == [1, 0, 2]
+        assert labels.dtype == np.int64
+
+    def test_bool_and_text_ids_stay_unlabelled(self) -> None:
+        pytest.importorskip("numpy")
+        from datamaite.maite._od import _target
+
+        sample = ImageObjectDetectionSample(
+            image_id="a",
+            detections=(
+                ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=True),  # type: ignore[arg-type]
+                ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id="1"),
+                ObjectDetectionAnnotation(bbox=(1, 1, 5, 5), category_id=None),
+            ),
+        )
+        assert _target(sample).labels.tolist() == [-1, -1, -1]

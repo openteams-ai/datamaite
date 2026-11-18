@@ -242,3 +242,77 @@ class TestHmieWriter:
         assert not list(out.rglob("seq_mp4/*"))  # not mislabelled as mp4
         # The annotation filename embeds the .ts video name so the loader pairs them.
         assert any(".ts_" in p.name for p in out.rglob("*.json"))
+
+
+def _one_box_sequence(video_id: int, name: str) -> VideoSequence:
+    from datamaite.model import BoxAnnotation
+
+    box = BoxAnnotation(
+        track_uuid="t",
+        track_id=1,
+        category_id=0,
+        category_uri=name,
+        category_name=name,
+        bbox=(1, 1, 5, 5),
+        attributes={},
+        frame_index=0,
+        timestamp=0.0,
+    )
+    return VideoSequence(
+        video_id=video_id,
+        video_path=None,
+        fps=30.0,
+        num_frames=1,
+        duration=None,
+        annotation_path=f"{name}.json",
+        boxes=[box],
+    )
+
+
+def _dataset(*seqs: VideoSequence) -> BoxTrackDataset:
+    return BoxTrackDataset(sequences=seqs, categories={s.boxes[0].category_uri: 0 for s in seqs})
+
+
+def _labels(root: Path) -> list[str]:
+    return sorted(s.boxes[0].category_uri for s in load_hmie(root).sequences)
+
+
+class TestHmieSnippetNames:
+    """#130 cases 3 and 4: every written sequence gets its own snippet."""
+
+    def test_append_keeps_the_earlier_snippets(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(_dataset(_one_box_sequence(0, "car")), out, output_format="hmie")
+        write(_dataset(_one_box_sequence(0, "truck")), out, output_format="hmie", mode="append")
+
+        assert _labels(out) == ["car", "truck"]
+        assert sorted(p.name for p in out.iterdir()) == ["out_000000_000000", "out_000001_000000"]
+
+    def test_sequences_sharing_a_video_id_get_their_own_snippets(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(
+            _dataset(_one_box_sequence(0, "car"), _one_box_sequence(0, "truck"), _one_box_sequence(1, "bus")),
+            out,
+            output_format="hmie",
+        )
+
+        assert _labels(out) == ["bus", "car", "truck"]
+        assert len(list(out.iterdir())) == 3
+
+    def test_replace_still_reuses_the_video_id_names(self, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        write(_dataset(_one_box_sequence(0, "car")), out, output_format="hmie")
+        write(_dataset(_one_box_sequence(0, "truck")), out, output_format="hmie", mode="replace")
+
+        assert _labels(out) == ["truck"]
+        assert [p.name for p in out.iterdir()] == ["out_000000_000000"]
+
+    def test_an_existing_snippet_is_never_written_into(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from datamaite._formats.hmie import writer as hmie_writer
+
+        out = tmp_path / "out"
+        (out / "out_000000_000000").mkdir(parents=True)
+        monkeypatch.setattr(hmie_writer, "_snippet_prefix", lambda *_args: "out_000000")
+
+        with pytest.raises(FileExistsError, match="refusing to overwrite"):
+            write(_dataset(_one_box_sequence(0, "car")), out, output_format="hmie", mode="append")

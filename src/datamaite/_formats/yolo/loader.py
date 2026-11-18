@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import math
-import struct
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -29,6 +28,8 @@ import yaml
 
 from datamaite._formats.yolo._common import (
     IMAGE_EXTENSIONS,
+    OD_SPLIT_KEYS,
+    RESERVED_YAML_KEYS,
     SPLIT_ALIASES,
     infer_split,
     normalize_extensions,
@@ -36,8 +37,11 @@ from datamaite._formats.yolo._common import (
     relative_posix,
     safe_children,
     split_sort_key,
+    ultralytics_split_path,
     within,
 )
+from datamaite._formats.yolo._common import names_from_yaml as _names_from_yaml
+from datamaite._image_header import read_image_header
 from datamaite._io import list_files, resolve_path, resource_key
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import is_remote_path, storage_options_for, to_dataset_path
@@ -57,9 +61,6 @@ from datamaite.taxonomy import CategoryEntry, Taxonomy
 logger = logging.getLogger(__name__)
 
 _YOLO_YAML_NAMES = ("data.yaml", "data.yml", "dataset.yaml", "dataset.yml")
-_OD_SPLIT_KEYS = ("train", "val", "test")
-_SOFS = frozenset({0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF})
-_MAX_JPEG_HEADER_SCAN = 256 * 1024
 
 
 @register_loader
@@ -144,7 +145,7 @@ class YoloImageClassificationLoader(Loader):
             class_name_list = [name for _, name in _names_from_yaml(yaml_data.get("names"))]
             declared_splits = tuple(
                 split_name
-                for split_name in _OD_SPLIT_KEYS
+                for split_name in OD_SPLIT_KEYS
                 if yaml_data.get(split_name) not in (None, "", [], ())
                 and (selected_splits is None or split_name in selected_splits)
             )
@@ -276,7 +277,7 @@ class YoloObjectDetectionLoader(Loader):
             # would quietly hand back a different dataset than the caller asked for.
             return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
         yaml_data = _read_data_yaml(yaml_path) if yaml_path is not None else {}
-        selected_splits = _normalize_split_selection(split)
+        selected_splits = _normalize_split_selection(split, keep_unknown=True)
         labels_base = resolve_path(root_path, ann_dir) if ann_dir is not None else None
         records = _discover_od_records(
             root_path,
@@ -294,10 +295,11 @@ class YoloObjectDetectionLoader(Loader):
                 return ObjectDetectionDataset(samples=(), dataset_metadata=DatasetMetadata(source_dataset="yolo"))
             taxonomy = _build_od_taxonomy(names, ())
             declared_splits = tuple(
-                split_name
-                for split_name in _OD_SPLIT_KEYS
-                if yaml_data.get(split_name) not in (None, "", [], ())
-                and (selected_splits is None or split_name in selected_splits)
+                ordered_unique(
+                    split_name
+                    for split_name, _key in _yaml_split_keys(yaml_data, yaml_path)
+                    if selected_splits is None or split_name in selected_splits
+                )
             )
             return ObjectDetectionDataset(
                 samples=(),
@@ -678,7 +680,9 @@ def _resolve_yaml_path(root: Path, yaml_file: str | Path | None) -> Path | None:
     return None
 
 
-def _normalize_split_selection(split: str | Collection[str] | None) -> frozenset[str] | None:
+def _normalize_split_selection(
+    split: str | Collection[str] | None, *, keep_unknown: bool = False
+) -> frozenset[str] | None:
     """Normalize the requested split(s) to canonical keys.
 
     Returns ``None`` only when no selection was requested (load every split). An
@@ -686,6 +690,9 @@ def _normalize_split_selection(split: str | Collection[str] | None) -> frozenset
     resolves to nothing must select *nothing*, never everything -- silently
     widening ``split="bogus"`` or ``split=[]`` back to all splits would leak
     training data into an evaluation run.
+
+    With ``keep_unknown`` (detection), a name that is not a train/val/test
+    alias is kept as given, since data.yaml can declare a split of any name.
     """
     if split is None:
         return None
@@ -696,11 +703,14 @@ def _normalize_split_selection(split: str | Collection[str] | None) -> frozenset
         canonical = infer_split(str(value))
         if canonical is None:
             unknown.append(str(value))
+            if keep_unknown:
+                resolved.add(str(value))
         else:
             resolved.add(canonical)
     if unknown:
         logger.warning(
-            "YOLO: ignoring unrecognized split(s) %s; recognized values are %s",
+            "YOLO: %s unrecognized split(s) %s; recognized values are %s",
+            "keeping, as data.yaml split names," if keep_unknown else "ignoring",
             ", ".join(repr(value) for value in unknown),
             ", ".join(sorted(SPLIT_ALIASES)),
         )
@@ -740,7 +750,7 @@ def _discover_od_records(
     # Source authority is determined from the whole explicit YAML, before split
     # filtering. If it declares only `train` while the caller requests `val`,
     # falling back to root discovery would load a val set the YAML never named.
-    declared_sources = _yaml_declares_image_sources(yaml_data)
+    declared_sources = _yaml_declares_image_sources(yaml_data, yaml_path)
     names_only = bool(_names_from_yaml(yaml_data.get("names"))) and not declared_sources
     if yaml_is_explicit and declared_sources:
         if not records:
@@ -771,20 +781,37 @@ def _discover_od_records(
     return records
 
 
-def _yaml_declares_image_sources(yaml_data: Mapping[str, Any]) -> bool:
+def _yaml_declares_image_sources(yaml_data: Mapping[str, Any], yaml_path: Path | None) -> bool:
     """Whether any split key contains a source declaration, valid or not.
 
     Invalid source values still count as declarations for fail-closed behavior:
     an explicit ``train: 3`` must not silently turn into a root scan.
     """
-    for split in _OD_SPLIT_KEYS:
-        if split not in yaml_data:
+    return bool(_yaml_split_keys(yaml_data, yaml_path))
+
+
+def _yaml_split_keys(yaml_data: Mapping[str, Any], yaml_path: Path | None) -> list[tuple[str, str]]:
+    """``(split, key)`` for each data.yaml key that declares a split's images.
+
+    ``train``, ``val`` and ``test`` count whatever their value. Any other key
+    (``holdout``, or ``validation``, which Ultralytics reads as ``val``) counts
+    when it names image folders that exist, so other settings are not read as
+    splits (#131). Such a key's split is its train/val/test alias, else the key.
+    """
+    keys = [(split, split) for split in OD_SPLIT_KEYS if yaml_data.get(split) not in (None, "", [], ())]
+    if yaml_path is None:
+        return keys
+    base: Path | None = None
+    for key, value in yaml_data.items():
+        if not isinstance(key, str) or key in OD_SPLIT_KEYS or key in RESERVED_YAML_KEYS:
             continue
-        value = yaml_data[split]
-        if value is None or value == "" or value == [] or value == ():
+        values = [value] if isinstance(value, str) else value if isinstance(value, list) else None
+        if not values or not all(isinstance(item, str) and item.strip() for item in values):
             continue
-        return True
-    return False
+        base = base or _yaml_dataset_base(yaml_path, yaml_data)
+        if all(resolve_path(base, item.strip()).is_dir() for item in values):
+            keys.append((infer_split(key) or key, key))
+    return keys
 
 
 def _collect_yaml_records(
@@ -804,10 +831,11 @@ def _collect_yaml_records(
         return False, False
     base = _yaml_dataset_base(yaml_path, yaml_data)
     declared = False
-    for split in _OD_SPLIT_KEYS:
+    for split, key in _yaml_split_keys(yaml_data, yaml_path):
         if splits is not None and split not in splits:
             continue
-        for source in _yaml_split_sources(yaml_data.get(split), base=base, yaml_path=yaml_path, root=root):
+        value = ultralytics_split_path(base, key, yaml_data.get(key))
+        for source in _yaml_split_sources(value, base=base, yaml_path=yaml_path, root=root):
             declared = True
             for record in _records_from_image_source(
                 source,
@@ -1296,113 +1324,17 @@ def _read_data_yaml(path: Path | None) -> dict[str, Any]:
     return dict(data)
 
 
-def _names_from_yaml(raw_names: Any) -> tuple[tuple[int, str], ...]:
-    """Parse YOLO ``names`` into ``(source_id, name)`` pairs.
-
-    Ultralytics normally writes a dense list, but YAML also commonly appears as
-    a mapping (``{0: person, 1: car}``). Preserve mapping keys as source ids so
-    sparse/non-contiguous mappings do not silently relabel detections.
-    """
-    if raw_names is None:
-        return ()
-    if isinstance(raw_names, str):
-        # A quoted collection (``names: "[person, car]"``) arrives as text.
-        try:
-            parsed = yaml.safe_load(raw_names)
-        except yaml.YAMLError:
-            parsed = None
-        if isinstance(parsed, Mapping | Sequence) and not isinstance(parsed, str):
-            return _names_from_yaml(parsed)
-        name = raw_names.strip()
-        return ((0, name),) if name else ()
-    if isinstance(raw_names, Mapping):
-        items: list[tuple[int, str]] = []
-        for key, value in raw_names.items():
-            class_id = _coerce_yaml_int(key)
-            if class_id is None:
-                continue
-            name = str(value).strip()
-            if name:
-                items.append((class_id, name))
-        return tuple(sorted(items))
-    if isinstance(raw_names, Sequence):
-        return tuple((idx, name) for idx, value in enumerate(raw_names) if (name := str(value).strip()))
-    return ()
-
-
-def _coerce_yaml_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
 def _read_image_size(path: Path) -> tuple[int | None, int | None]:
+    """The image's size as OpenCV and Ultralytics decode it: EXIF orientation applied (#133).
+
+    YOLO labels are normalised to that frame, so boxes are de-normalised against it.
+    """
     try:
-        open_kwargs = {"block_size": 64 * 1024} if is_remote_path(path) else {}
-        with path.open("rb", **open_kwargs) as fh:  # type: ignore[call-overload]
-            header = fh.read(32)
-            if header.startswith(b"\x89PNG\r\n\x1a\n") and header[12:16] == b"IHDR":
-                width, height = struct.unpack(">II", header[16:24])
-                return _positive_size(width, height)
-            if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
-                width, height = struct.unpack("<HH", header[6:10])
-                return _positive_size(width, height)
-            if header.startswith(b"BM") and len(header) >= 26:
-                width = struct.unpack("<i", header[18:22])[0]
-                height = abs(struct.unpack("<i", header[22:26])[0])
-                return _positive_size(width, height)
-            if header.startswith(b"\xff\xd8"):
-                return _read_jpeg_size(fh)
-    except (OSError, struct.error) as exc:
+        header = read_image_header(path)
+    except OSError as exc:
         logger.warning("Could not read image dimensions for %s: %s", path, exc)
         return (None, None)
-    logger.warning("Could not determine image dimensions for %s", path)
-    return (None, None)
-
-
-def _read_jpeg_size(fh: Any) -> tuple[int | None, int | None]:  # noqa: C901 - JPEG marker scan is branchy
-    # The SOI marker was consumed into the initial header; start scanning after it.
-    fh.seek(2)
-    while fh.tell() < _MAX_JPEG_HEADER_SCAN:
-        marker_prefix = fh.read(1)
-        if not marker_prefix:
-            return (None, None)
-        if marker_prefix != b"\xff":
-            continue
-        marker = fh.read(1)
-        while marker == b"\xff":
-            marker = fh.read(1)
-        if not marker:
-            return (None, None)
-        marker_value = marker[0]
-        if marker_value in {0x01, 0xD8, 0xD9} or 0xD0 <= marker_value <= 0xD7:
-            continue
-        length_bytes = fh.read(2)
-        if len(length_bytes) != 2:
-            return (None, None)
-        length = struct.unpack(">H", length_bytes)[0]
-        if length < 2:
-            return (None, None)
-        if fh.tell() + length - 2 > _MAX_JPEG_HEADER_SCAN:
-            return (None, None)
-        if marker_value in _SOFS:
-            data = fh.read(length - 2)
-            if len(data) < 5:
-                return (None, None)
-            height, width = struct.unpack(">HH", data[1:5])
-            return _positive_size(width, height)
-        fh.seek(length - 2, 1)
-    return (None, None)
-
-
-def _positive_size(width: int, height: int) -> tuple[int | None, int | None]:
-    if width > 0 and height > 0:
-        return (width, height)
-    return (None, None)
+    if header is None:
+        logger.warning("Could not determine image dimensions for %s", path)
+        return (None, None)
+    return header.display_size

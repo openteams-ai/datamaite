@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any, cast
 
 import numpy as np
@@ -65,10 +66,12 @@ class ObjectDetectionTarget:
     scores: np.ndarray
 
 
-def _label(category_id: int | str | None) -> int:
-    # bool is an int subclass; a stray True must not collapse into label 1.
-    if isinstance(category_id, int) and not isinstance(category_id, bool):
-        return category_id
+def _label(category_id: object) -> int:
+    # Any integral id counts (NumPy and pandas ids such as np.int64 are not
+    # ``int``); bool is integral too, but a stray True must not collapse into
+    # label 1.
+    if isinstance(category_id, Integral) and not isinstance(category_id, bool):
+        return int(category_id)
     return -1
 
 

@@ -10,17 +10,27 @@ from __future__ import annotations
 import json
 import logging
 import math
-from collections.abc import Iterable, Mapping
+import numbers
+import os
+import posixpath
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+import yaml
+
 from datamaite._formats.yolo._common import (
+    OD_SPLIT_KEYS,
+    RESERVED_YAML_KEYS,
     free_target,
     infer_split,
+    names_from_yaml,
     safe_path_part,
     safe_relative_path,
     split_sort_key,
+    ultralytics_split_path,
     unique_target,
 )
 from datamaite._io import (
@@ -28,6 +38,7 @@ from datamaite._io import (
     current_write_mode,
     ensure_directory,
     list_files,
+    resolve_path,
     same_resource,
     sample_image_dimensions,
     source_path,
@@ -49,6 +60,7 @@ from datamaite.writers import Writer, WriterCapabilities, _validate_include_imag
 logger = logging.getLogger(__name__)
 
 _APPEND_INVENTORY_THRESHOLD = 64
+_PLAIN_YAML = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 
 
 @register_writer
@@ -200,6 +212,20 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         dest_path = to_dataset_path(dest, _.get("storage_options"))
         ensure_directory(dest_path)
         projection = _LabelProjection.from_dataset(dataset)
+        # Appending reads the data.yaml there even when it is not rewritten: its class ids are the ones to keep.
+        existing = _existing_od_data_yaml(dest_path)
+        images_folder = "images"
+        if existing is not None:
+            # Appending: keep the written classes and their ids, and add new names after them (#130).
+            projection = projection.onto(existing.names)
+            # Checked now, so an append whose new folders data.yaml can't name is refused before writing.
+            images_folder = _images_folder(dest_path, existing.path) if write_data_yaml else "images"
+            if not write_data_yaml and len(projection.names) > len(existing.names):
+                new = list(projection.names[len(existing.names) :])
+                raise ValueError(
+                    f"cannot append to YOLO dataset with write_data_yaml=False: classes {new} are not in "
+                    f"{dest_path / 'data.yaml'}, which would not be updated to name them"
+                )
         written: list[Path] = []
         used_images: set[Path] = set()
         used_labels: set[Path] = set()
@@ -221,19 +247,22 @@ class YoloObjectDetectionWriter(Writer[ObjectDetectionDataset]):
             )
             if paths is None:
                 continue
-            image_path, label_path = paths
+            image_path, label_path, split = paths
             if image_path is not None:
                 written.append(image_path)
             written.append(label_path)
-            splits_seen.add(label_path.parent.name)
+            # The sample's split, not the label's parent folder, which is a subfolder for nested names (#131).
+            splits_seen.add(split)
 
-        if not splits_seen and projection.names:
+        if not splits_seen and projection.names and existing is None:
             splits_seen.update(dataset.dataset_metadata.splits or (default_split,))
         if write_data_yaml:
+            sources = _split_sources(
+                splits_seen, existing.sources if existing is not None else {}, images_folder=images_folder
+            )
             data_yaml = dest_path / "data.yaml"
             data_yaml.write_text(
-                _od_data_yaml(splits=tuple(sorted(splits_seen, key=split_sort_key)), names=list(projection.names)),
-                encoding="utf-8",
+                _od_data_yaml(sources=sources, names=list(projection.names), existing=existing), encoding="utf-8"
             )
             written.append(data_yaml)
         return written
@@ -440,8 +469,13 @@ class _LabelProjection:
                     continue
                 seen.add(source_id)
                 discovered.append((source_id, detection.category_name or str(source_id)))
+        # Integer ids in numeric order (2 before 10), then any others as text (#134).
         discovered.sort(
-            key=lambda item: (0 if isinstance(item[0], int) and not isinstance(item[0], bool) else 1, str(item[0]))
+            key=lambda item: (
+                (0, int(item[0]), "")
+                if isinstance(item[0], numbers.Integral) and not isinstance(item[0], bool)
+                else (1, 0, str(item[0]))
+            )
         )
         by_name: dict[str, int] = {}
         for index, (_, name) in enumerate(discovered):
@@ -450,6 +484,24 @@ class _LabelProjection:
             names=tuple(name for _, name in discovered),
             by_source_id={source_id: index for index, (source_id, _) in enumerate(discovered)},
             by_name=by_name,
+        )
+
+    def onto(self, names: Sequence[str]) -> _LabelProjection:
+        """This projection renumbered onto ``names``: classes match by name, and new names follow them."""
+        merged = list(names)
+        position = {}
+        for index, name in enumerate(merged):
+            position.setdefault(name, index)
+        remap: dict[int, int] = {}
+        for index, name in enumerate(self.names):
+            if name not in position:
+                position[name] = len(merged)
+                merged.append(name)
+            remap[index] = position[name]
+        return _LabelProjection(
+            names=tuple(merged),
+            by_source_id={source_id: remap[index] for source_id, index in self.by_source_id.items()},
+            by_name=dict(position),
         )
 
     def resolve(self, detection: ObjectDetectionAnnotation) -> int | None:
@@ -477,7 +529,7 @@ def _write_od_sample(
     used_images: set[Path],
     used_labels: set[Path],
     inventoried_dirs: set[Path] | None,
-) -> tuple[Path | None, Path] | None:
+) -> tuple[Path | None, Path, str] | None:
     try:
         split = safe_path_part(sample.split or default_split, field="split")
         rel_image = _safe_od_image_rel(sample, split=split)
@@ -533,7 +585,7 @@ def _write_od_sample(
     ensure_directory(label_target.parent)
     label_target.write_text("\n".join(label_lines) + ("\n" if label_lines else ""), encoding="utf-8")
     used_labels.add(label_target)
-    return (image_path, label_target)
+    return (image_path, label_target, split)
 
 
 def _safe_od_image_rel(sample: ImageObjectDetectionSample, *, split: str) -> PurePosixPath:
@@ -689,14 +741,167 @@ def _format_float(value: float, *, precision: int) -> str:
     return text
 
 
-def _od_data_yaml(*, splits: tuple[str, ...], names: list[str]) -> str:
-    lines = ["# Generated by datamaite", "datamaite_task: od", f"path: {json.dumps('.')}"]
-    if splits:
-        if "train" in splits:
-            lines.append("train: images/train")
-        if "val" in splits:
-            lines.append("val: images/val")
-        if "test" in splits:
-            lines.append("test: images/test")
+@dataclass(frozen=True)
+class _ExistingDataYaml:
+    """What an append must keep from the data.yaml already at the destination."""
+
+    names: tuple[str, ...]
+    sources: Mapping[str, tuple[str, ...]]  # data.yaml split key -> image folders
+    path: str | None  # its ``path:``, which the split folders are relative to
+    has_nc: bool  # whether it has ``nc:``, which is then rewritten with the new class count
+    others: Mapping[str, Any]  # every other key, such as Roboflow's ``roboflow:``, kept as it is
+
+
+def _existing_od_data_yaml(dest: Path) -> _ExistingDataYaml | None:
+    """The destination's data.yaml when appending, or ``None`` when not appending or there is none.
+
+    Raises ``ValueError`` before anything is written when the file can't be
+    appended to, so a refused append leaves the dataset as it was.
+    """
+    if current_write_mode() != "append":
+        return None
+    path = dest / "data.yaml"
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"cannot append to YOLO dataset: could not read {path}: {exc}") from exc
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError(f"cannot append to YOLO dataset: {path} is not a mapping")
+    task = data.get("datamaite_task")
+    if task is not None and str(task).lower() != Task.OD.value:
+        raise ValueError(f"cannot append object detection data to {path}, which declares task {task!r}")
+    pairs = names_from_yaml(data.get("names"))
+    if [class_id for class_id, _ in pairs] != list(range(len(pairs))):
+        raise ValueError(
+            f"cannot append to YOLO dataset: the names in {path} are not numbered 0..n-1, "
+            "so new classes have no free ids to take"
+        )
+    raw_path = data.get("path")
+    path = raw_path.strip() if isinstance(raw_path, str) and raw_path.strip() else None
+    sources = _yaml_split_sources(data, resolve_path(dest, path))
+    others = {str(key): value for key, value in data.items() if key not in sources and key not in _REWRITTEN_YAML_KEYS}
+    return _ExistingDataYaml(
+        names=tuple(name for _, name in pairs), sources=sources, path=path, has_nc="nc" in data, others=others
+    )
+
+
+#: The data.yaml keys an append writes itself; it keeps every other key as it is.
+_REWRITTEN_YAML_KEYS = frozenset({"path", "names", "nc", "datamaite_task"})
+
+
+def _yaml_split_sources(data: Mapping[Any, Any], base: Path) -> dict[str, tuple[str, ...]]:
+    """The data.yaml keys that list image folders or files, which an append keeps as splits.
+
+    As the loader reads them: train, val and test always, any other key only when
+    it names folders that exist. A missing ``../x`` that Ultralytics reads as
+    ``x`` is kept as ``x``, so it still resolves once the key lists more folders.
+    """
+    sources: dict[str, tuple[str, ...]] = {}
+    for key, value in data.items():
+        if not isinstance(key, str) or key in RESERVED_YAML_KEYS:
+            continue
+        value = ultralytics_split_path(base, key, value)
+        values = [value] if isinstance(value, str) else value if isinstance(value, list) else None
+        if not values or not all(isinstance(item, str) and item.strip() for item in values):
+            continue
+        folders = tuple(item.strip() for item in values)
+        if key in OD_SPLIT_KEYS or all(resolve_path(base, folder).is_dir() for folder in folders):
+            sources[key] = folders
+    return sources
+
+
+def _images_folder(dest: Path, yaml_path: str | None) -> str:
+    """``dest/images`` as data.yaml names it: relative to the base its ``path:`` resolves to.
+
+    That is ``images`` when ``path:`` is the destination, and for example
+    ``../out/images`` when an append keeps a ``path: ../shared``. Relative, so the
+    dataset can still be moved. Raises ``ValueError``, before anything is written,
+    when ``dest`` can't be reached from that base by a relative path.
+    """
+    base = resolve_path(dest, yaml_path)
+    if is_remote_path(dest) or is_remote_path(base):
+        relative = _remote_relative(dest, base)
+    else:
+        try:
+            relative = os.path.relpath(dest.resolve(), base.resolve()).replace(os.sep, "/")
+        except ValueError:  # Windows: another drive
+            relative = None
+    if relative is None:
+        raise ValueError(
+            f"cannot append to YOLO dataset: {dest} can't be reached by a relative path from its "
+            f"data.yaml path {yaml_path!r}"
+        )
+    return "images" if relative == "." else f"{relative}/images"
+
+
+def _remote_relative(dest: Path, base: Path) -> str | None:
+    """``dest`` relative to ``base`` on the same remote filesystem and bucket, or ``None``."""
+    if getattr(dest, "protocol", None) != getattr(base, "protocol", None):
+        return None
+    dest_parts = PurePosixPath(str(getattr(dest, "path", dest))).parts
+    base_parts = PurePosixPath(str(getattr(base, "path", base))).parts
+    if not dest_parts or not base_parts or dest_parts[0] != base_parts[0]:
+        return None
+    return posixpath.relpath("/" + "/".join(dest_parts), "/" + "/".join(base_parts))
+
+
+_YEAR_SUFFIX = re.compile(r"(?<=\D)\d{4}$")
+
+
+def _split_sources(
+    splits: Iterable[str], existing: Mapping[str, tuple[str, ...]], *, images_folder: str
+) -> dict[str, tuple[str, ...]]:
+    """data.yaml split keys and their image folders for every split written, after ``existing``'s.
+
+    A split's key is its train/val/test alias (``validation`` and ``valid`` go
+    under ``val``, as Ultralytics reads them), also with a year after it
+    (COCO 2017's ``train2017`` goes under ``train``), or else its own name;
+    splits that share a key are listed together.
+    """
+    sources: dict[str, list[str]] = {key: list(values) for key, values in existing.items()}
+    for split in sorted(splits, key=split_sort_key):
+        key = infer_split(split) or infer_split(_YEAR_SUFFIX.sub("", split)) or split
+        if key in RESERVED_YAML_KEYS:
+            logger.warning("YOLO split %r is a reserved data.yaml key, so data.yaml does not list it", split)
+            continue
+        image_folder = f"{images_folder}/{split}"
+        folders = sources.setdefault(key, [])
+        if image_folder not in folders:
+            folders.append(image_folder)
+    return {key: tuple(sources[key]) for key in sorted(sources, key=split_sort_key)}
+
+
+def _yaml_text(value: str) -> str:
+    """``value`` as a YAML string: bare when YAML reads it back unchanged, else quoted."""
+    if _PLAIN_YAML.fullmatch(value):
+        try:
+            if yaml.safe_load(value) == value:
+                return value
+        except yaml.YAMLError:
+            pass
+    return json.dumps(value)
+
+
+def _od_data_yaml(
+    *, sources: Mapping[str, tuple[str, ...]], names: list[str], existing: _ExistingDataYaml | None = None
+) -> str:
+    path = existing.path if existing is not None else None
+    lines = ["# Generated by datamaite", "datamaite_task: od", f"path: {json.dumps(path or '.')}"]
+    for key, folders in sources.items():
+        value = _yaml_text(folders[0]) if len(folders) == 1 else f"[{', '.join(_yaml_text(f) for f in folders)}]"
+        lines.append(f"{_yaml_text(key)}: {value}")
+    if existing is not None and existing.has_nc:
+        lines.append(f"nc: {len(names)}")
     lines.append(f"names: {json.dumps(names)}")
+    if existing is not None and existing.others:
+        # Kept as the appended dataset found them; JSON is YAML.
+        lines.extend(
+            f"{_yaml_text(key)}: {json.dumps(value, default=str)}"
+            for key, value in existing.others.items()
+            if key not in sources
+        )
     return "\n".join(lines) + "\n"

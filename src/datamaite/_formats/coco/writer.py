@@ -2,8 +2,10 @@
 
 Serialises an :class:`~datamaite.object_detection.ObjectDetectionDataset` as a
 COCO detection root: ``annotations/instances.json`` (the ``info`` / ``licenses``
-/ ``categories`` / ``images`` / ``annotations`` arrays) plus the image files
-copied under ``dest`` at their ``file_name`` paths. The canonical bbox is
+/ ``categories`` / ``images`` / ``annotations`` arrays), or one
+``annotations/instances_<split>.json`` per split when the samples have
+splits, plus the image files copied under ``dest`` at their
+``file_name`` paths. The canonical bbox is
 already COCO's ``[x, y, width, height]`` in absolute pixels, so boxes pass
 through without conversion -- the exact inverse of the loader.
 
@@ -35,6 +37,7 @@ from datamaite.taxonomy import Taxonomy
 from datamaite.writers import Writer, WriterCapabilities, _validate_include_images, register_writer
 
 logger = logging.getLogger(__name__)
+_DEFAULT_ANNOTATION_FILE_NAME = "instances.json"
 
 # Keys the writer emits as typed fields; the attributes round-trip channel must
 # not shadow them. Mirrors the loader's _ANNOTATION_CORE_KEYS.
@@ -110,17 +113,26 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
         dataset: ObjectDetectionDataset,
         dest: str | Path,
         *,
-        annotation_file_name: str = "instances.json",
+        annotation_file_name: str = _DEFAULT_ANNOTATION_FILE_NAME,
         include_images: bool = True,
         **_options: Any,
     ) -> list[Path]:
         """Serialise ``dataset`` under ``dest`` as COCO and return the files written.
 
+        Samples with no split go to one annotation file, which records no
+        split name. Samples with a split go to one file per split,
+        ``instances_<split>.json``, so even a single split keeps its name;
+        samples with no split among them go to ``instances.json``. Image and annotation ids are unique across the
+        files, and every file lists every category.
+
         Parameters
         ----------
         annotation_file_name
-            Bare file name for the JSON under ``dest/annotations/``. Keep an
-            ``instances*.json`` name so the loader's discovery prefers it.
+            Bare file name for the JSON under ``dest/annotations/`` when the
+            samples have no splits. Keep an ``instances*.json`` name so the
+            loader's discovery prefers it. With splits, each split's file is
+            ``instances_<split>.json`` (``instances_val.json``) whatever this
+            is, as the loader reads only ``instances*.json`` files back.
         include_images
             When True (default), copy each sample's image (from
             ``image_bytes`` or ``path_or_uri``) to ``dest/<file_name>``.
@@ -146,18 +158,21 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
 
         written: list[Path] = []
         meta = dataset.dataset_metadata
-        images: list[dict[str, Any]] = []
-        annotations: list[dict[str, Any]] = []
+        file_by_split = _annotation_file_names(dataset.samples, annotation_file_name)
+        images_by_file: dict[str, list[dict[str, Any]]] = {name: [] for name in file_by_split.values()}
+        annotations_by_file: dict[str, list[dict[str, Any]]] = {name: [] for name in file_by_split.values()}
         annotation_ids = _IdAllocator()
         # Source ids already emitted: integers as-is, strings before they get an integer.
         seen_image_ids: set[int | str] = set()
         # COCO image ids are integers, but YOLO/Hugging Face/VisDrone/flat-image
-        # records use string ids (relative paths or stems). Those get fresh
-        # integers that avoid every integer id already in the dataset.
+        # records use string ids (relative paths or stems), and two samples can
+        # share an id. Those get fresh integers that avoid every integer id
+        # already in the dataset.
         assigned_image_ids = _IdAllocator(
             used={image_id for sample in dataset.samples if (image_id := _int_id(sample.image_id)) is not None}
         )
         reassigned: list[int | str] = []
+        duplicated: list[int | str] = []
         renamed: list[tuple[str, str]] = []
         # COCO flattens images to one directory keyed by file_name; two source
         # images with the same name (e.g. YOLO images/train/a.jpg and
@@ -175,12 +190,14 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
                 seen=seen_image_ids,
                 assigned=assigned_image_ids,
                 reassigned=reassigned,
+                duplicated=duplicated,
                 used_file_names=used_file_names,
                 renamed=renamed,
             )
             if image_obj is None:
                 continue
-            images.append(image_obj)
+            target_file = file_by_split[sample.split]
+            images_by_file[target_file].append(image_obj)
             image_id = image_obj["id"]
             for detection in sample.detections:
                 row = _annotation_object(detection, image_id=image_id, ids=annotation_ids)
@@ -188,20 +205,15 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
                     continue
                 if detection.score is not None:
                     dropped_scores += 1
-                annotations.append(row)
+                annotations_by_file[target_file].append(row)
             if include_images:
                 copied = _copy_image(sample, dest=dest, file_name=image_obj["file_name"])
                 if copied is not None:
                     written.append(copied)
 
         # Only possible with include_images=False: copied images were renamed apart.
-        _warn_shared_file_names(images)
-        if reassigned:
-            logger.info(
-                "Assigned integer COCO image ids to %d sample(s) with non-integer ids (e.g. %r)",
-                len(reassigned),
-                reassigned[0],
-            )
+        _warn_shared_file_names([image for images in images_by_file.values() for image in images])
+        _log_new_image_ids(duplicated=duplicated, reassigned=reassigned)
         _warn_renamed(renamed)
         if dropped_scores:
             logger.warning(
@@ -210,17 +222,90 @@ class CocoWriter(Writer[ObjectDetectionDataset]):
                 self.capabilities.lossy_without["score"],
             )
 
-        document = {
-            "info": dict(meta.info),
-            "licenses": [dict(license_obj) for license_obj in meta.licenses],
-            "categories": _category_objects(meta.taxonomy),
-            "images": images,
-            "annotations": annotations,
-        }
-        ann_path = ann_dir / annotation_file_name
-        ann_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
-        written.insert(0, ann_path)
-        return written
+        categories = _category_objects(meta.taxonomy)
+        ann_paths: list[Path] = []
+        for file_name, images in images_by_file.items():
+            document = {
+                "info": dict(meta.info),
+                "licenses": [dict(license_obj) for license_obj in meta.licenses],
+                "categories": categories,
+                "images": images,
+                "annotations": annotations_by_file[file_name],
+            }
+            ann_path = ann_dir / file_name
+            ann_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+            ann_paths.append(ann_path)
+        return ann_paths + written
+
+
+def _log_new_image_ids(*, duplicated: list[int | str], reassigned: list[int | str]) -> None:
+    if duplicated:
+        logger.warning(
+            "Gave %d sample(s) whose image id another sample already has a new COCO image id (e.g. %r)",
+            len(duplicated),
+            duplicated[0],
+        )
+    if reassigned:
+        logger.info(
+            "Assigned integer COCO image ids to %d sample(s) with non-integer ids (e.g. %r)",
+            len(reassigned),
+            reassigned[0],
+        )
+
+
+def _annotation_file_names(
+    samples: Sequence[ImageObjectDetectionSample], annotation_file_name: str
+) -> dict[str | None, str]:
+    """The annotation file each split's samples go to.
+
+    No splits: every sample goes to ``annotation_file_name``. Otherwise
+    ``instances_<split>.json`` per split, even for one split, so its name is
+    kept, and samples with no split go to ``instances.json``: the loader reads
+    only ``instances*.json`` files when there are several, so a custom
+    ``annotation_file_name`` is not used (with a warning). A split name that
+    cannot be part of a file name has ``/``, ``\\`` and ``:`` replaced by ``_``;
+    a name that only differs in case from an earlier one (one file on macOS and
+    Windows) gets a number.
+    """
+    splits = list(dict.fromkeys(sample.split for sample in samples))
+    if splits in ([], [None]):
+        return {None: annotation_file_name}
+    if annotation_file_name != _DEFAULT_ANNOTATION_FILE_NAME:
+        logger.warning(
+            "annotation_file_name=%r is not used: the samples have splits, so each split is written to "
+            "instances_<split>.json, the names the COCO loader reads back",
+            annotation_file_name,
+        )
+        annotation_file_name = _DEFAULT_ANNOTATION_FILE_NAME
+    stem, suffix = PurePosixPath(annotation_file_name).stem, PurePosixPath(annotation_file_name).suffix
+    names: dict[str | None, str] = {}
+    used = {annotation_file_name.casefold()} if None in splits else set()
+    for split in splits:
+        if split is None:
+            names[None] = annotation_file_name
+            continue
+        part = _file_name_part(split)
+        name = f"{stem}_{part}{suffix}"
+        index = 2
+        while name.casefold() in used:
+            name = f"{stem}_{part}_{index}{suffix}"
+            index += 1
+        if name != f"{stem}_{split}{suffix}":
+            logger.warning(
+                "Split %r cannot be a COCO annotation file name as-is; writing it to %s, so it reloads as split %r",
+                split,
+                name,
+                name[len(stem) + 1 : len(name) - len(suffix)],
+            )
+        used.add(name.casefold())
+        names[split] = name
+    return names
+
+
+def _file_name_part(split: str) -> str:
+    """``split`` usable inside a file name: path separators, ``:`` and NUL become ``_``."""
+    part = "".join("_" if char in "/\\:\0" else char for char in str(split))
+    return part if part.strip(".") else part.replace(".", "_") or "_"
 
 
 def _category_objects(taxonomy: Taxonomy | None) -> list[dict[str, Any]]:
@@ -248,13 +333,11 @@ def _image_object(
     seen: set[int | str],
     assigned: _IdAllocator,
     reassigned: list[int | str],
+    duplicated: list[int | str],
     used_file_names: set[str] | None,
     renamed: list[tuple[str, str]],
 ) -> dict[str, Any] | None:
     image_id = _int_id(sample.image_id)
-    if sample.image_id in seen:
-        logger.warning("Skipping duplicate image id %s (keeping the first)", sample.image_id)
-        return None
     if not file_name:
         logger.warning("Skipping sample %s (and its detections): COCO images require a file_name", sample.image_id)
         return None
@@ -265,10 +348,15 @@ def _image_object(
     # ``12:00:00.png``) are kept in the JSON, as the loader keeps them. When the
     # image is copied, the copy and the JSON both use a writable name instead;
     # with no source to copy, the original name still points at the real file.
-    seen.add(sample.image_id)
-    if image_id is None:
+    if sample.image_id in seen:
+        # COCO image ids must be unique: a second sample with the id gets a
+        # fresh one, and its boxes follow it.
+        image_id = assigned.reserve()
+        duplicated.append(sample.image_id)
+    elif image_id is None:
         image_id = assigned.reserve()
         reassigned.append(sample.image_id)
+    seen.add(sample.image_id)
     if used_file_names is not None:
         if not _is_safe_file_name(file_name) and _has_image_source(sample):
             writable = _unique_file_name(_writable_file_name(file_name), used_file_names)

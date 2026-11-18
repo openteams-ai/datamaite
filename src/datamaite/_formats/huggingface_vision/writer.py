@@ -47,7 +47,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
-from datamaite._io import copy_resource, same_resource, source_path
+from datamaite._io import copy_resource, current_write_mode, same_resource, source_path
 from datamaite._types import DatasetFormat, Task
 from datamaite._upath import to_dataset_path
 from datamaite.image_classification import ImageClassificationDataset
@@ -82,6 +82,7 @@ _SPLIT_ALIASES = {
 }
 _CANONICAL_SPLITS = frozenset({"train", "validation", "test"})
 _RESERVED_COLUMNS = frozenset({"file_name", "objects", "width", "height"})
+_METADATA_FILENAMES = ("metadata.csv", "metadata.jsonl", "metadata.parquet")
 
 
 @register_writer
@@ -207,16 +208,29 @@ class HuggingFaceVisionObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         only associates metadata within a split's directory tree, so a
         root-level metadata file would silently lose the ``objects`` column
         on the Hugging Face side once split directories exist.
+
+        With ``write(..., mode="append")`` the new rows are added to the
+        existing metadata files and new images never replace existing ones
+        (a clashing name gets a ``-1`` suffix). Appending raises
+        ``ValueError`` before writing anything when the destination's
+        metadata cannot be extended: a ``metadata_format`` other than the
+        existing files' (Hugging Face refuses mixed metadata extensions),
+        ``metadata.parquet`` files, or a non-empty root-level metadata file.
         """
         fallback_split = _normalize_optional_split(split)
         metadata_format = _validate_metadata_format(metadata_format)
         taxonomy = dataset.dataset_metadata.taxonomy
         dest_path = to_dataset_path(dest, _.get("storage_options"))
+        appending = current_write_mode() == "append"
+        # Appending: every existing metadata file is read first, so a malformed one refuses the append before
+        # anything is written.
+        existing_rows = _check_appendable(dest_path, metadata_format=metadata_format) if appending else {}
         dest_path.mkdir(parents=True, exist_ok=True)
 
         rows_by_dir: dict[str, list[dict[str, Any]]] = {}
         written: list[Path] = []
-        used_paths: set[str] = set()
+        # Appending: the images already there are taken, so none is overwritten.
+        used_paths: set[str] = _existing_image_paths(dest_path) if appending else set()
 
         for sample in dataset.samples:
             record = _od_record_for_sample(
@@ -242,8 +256,11 @@ class HuggingFaceVisionObjectDetectionWriter(Writer[ObjectDetectionDataset]):
         if rows_by_dir:
             for dir_name in sorted(rows_by_dir):
                 metadata_path = dest_path / dir_name / f"metadata.{metadata_format}"
-                _write_metadata(metadata_path, rows_by_dir[dir_name], metadata_format=metadata_format)
+                rows = [*existing_rows.get(dir_name, ()), *rows_by_dir[dir_name]]
+                _write_metadata(metadata_path, rows, metadata_format=metadata_format)
                 written.append(metadata_path)
+        elif appending and _per_directory_metadata(dest_path):
+            logger.warning("No Hugging Face vision OD images were appended to %s", dest_path)
         else:
             metadata_path = dest_path / f"metadata.{metadata_format}"
             _write_metadata(metadata_path, [], metadata_format=metadata_format)
@@ -500,6 +517,100 @@ def _write_metadata(path: Path, rows: list[dict[str, Any]], *, metadata_format: 
         writer = csv.DictWriter(fh, fieldnames=[*fieldnames, *extras])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _read_metadata(path: Path, *, metadata_format: str) -> list[dict[str, Any]]:
+    """Read back a metadata file this writer wrote, to append rows to it.
+
+    Raises ``ValueError`` when the file can't be read as ``metadata_format``.
+    """
+    try:
+        if metadata_format == "jsonl":
+            rows: list[dict[str, Any]] = []
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError(f"line {line_no} is not a JSON object")
+                rows.append(row)
+            return rows
+        with path.open(newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            csv_rows = [dict(row) for row in reader]
+        for row_no, row in enumerate(csv_rows, start=1):
+            # DictReader keeps values beyond the header under the key None, which the writer can't write back.
+            if None in row:
+                raise ValueError(f"row {row_no} has more values than the header has columns")
+        return csv_rows
+    except (OSError, UnicodeDecodeError, ValueError, csv.Error) as exc:
+        raise ValueError(f"cannot append to {path}: {exc}") from exc
+
+
+def _metadata_files_in(path: Path) -> list[Path]:
+    if not path.is_dir():
+        return []
+    names = {child.name.lower(): child for child in path.iterdir() if child.is_file()}
+    return [names[name] for name in _METADATA_FILENAMES if name in names]
+
+
+def _per_directory_metadata(dest: Path) -> list[Path]:
+    if not dest.is_dir():
+        return []
+    return [file for child in dest.iterdir() if child.is_dir() for file in _metadata_files_in(child)]
+
+
+def _check_appendable(dest: Path, *, metadata_format: str) -> dict[str, list[dict[str, Any]]]:
+    """Refuse an append whose rows could not join the destination's metadata, before anything is written.
+
+    Returns each image directory's existing metadata rows, by directory name.
+
+    An empty root-level metadata file (the placeholder this writer leaves when
+    it writes no images) is removed once every check has passed: the loader
+    reads a root-level file instead of the per-directory ones, so it would
+    hide the appended rows.
+    """
+    placeholders: list[Path] = []
+    existing: dict[str, list[dict[str, Any]]] = {}
+    for path in _metadata_files_in(dest):
+        suffix = path.suffix.lower().lstrip(".")
+        if suffix in _METADATA_FORMATS and not _read_metadata(path, metadata_format=suffix):
+            placeholders.append(path)
+            continue
+        raise ValueError(
+            f"cannot append to {dest}: it has a root-level metadata file ({path.name}); this writer keeps "
+            "one metadata file per image directory, and the loader would ignore those next to a root-level one"
+        )
+    for path in _per_directory_metadata(dest):
+        suffix = path.suffix.lower().lstrip(".")
+        if suffix == "parquet":
+            raise ValueError(
+                f"cannot append to {dest}: {path.relative_to(dest).as_posix()} is parquet metadata, which this "
+                "writer cannot extend (it writes metadata.jsonl or metadata.csv)"
+            )
+        if suffix != metadata_format:
+            raise ValueError(
+                f"cannot append metadata_format={metadata_format!r} to {dest}: it already has "
+                f"{path.relative_to(dest).as_posix()}, and Hugging Face refuses mixed metadata file types; "
+                f"pass metadata_format={suffix!r}"
+            )
+        existing[path.parent.name] = _read_metadata(path, metadata_format=suffix)
+    for path in placeholders:
+        path.unlink()
+    return existing
+
+
+def _existing_image_paths(dest: Path) -> set[str]:
+    """The ``<dir>/<file>`` paths already in ``dest``'s first-level directories."""
+    if not dest.is_dir():
+        return set()
+    return {
+        f"{child.name}/{file.name}"
+        for child in dest.iterdir()
+        if child.is_dir()
+        for file in child.iterdir()
+        if file.is_file()
+    }
 
 
 def _copy_image(source: Path | None, dest: Path, *, image_bytes: bytes | None) -> None:

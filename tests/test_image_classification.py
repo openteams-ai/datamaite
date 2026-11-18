@@ -328,3 +328,16 @@ class TestImageClassificationFieldwise:
         # others genuinely avoided the decode path.
         with pytest.raises(ValueError, match="neither path_or_uri nor image_bytes"):
             ds.get_input(0)
+
+
+def test_numpy_class_ids_without_taxonomy_build_the_target() -> None:
+    """#134 case 1: a NumPy integer class id is an index, not a missing label."""
+    from datamaite.maite._ic import _target
+
+    sample = ImageClassificationSample(
+        image_id="a",
+        labels=(ClassificationLabel(category_id=np.int64(2), source_category_id=np.int64(2)),),
+    )
+    assert _target(sample, None).tolist() == [0.0, 0.0, 1.0]
+    flagged = ImageClassificationSample(image_id="b", labels=(ClassificationLabel(category_id=True),))  # type: ignore[arg-type]
+    assert _target(flagged, None).tolist() == []

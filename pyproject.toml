@@ -130,6 +130,8 @@ dev = [
     "pyright>=1.1",
     "maite>=0.9,<0.10",
     "safetensors>=0.4",
+    # Reads the Hugging Face parquet exports in the real-world integration tests.
+    "pyarrow>=14",
 ]
 # Docs toolchain plus notebook/runtime deps. myst-nb executes tutorial
 # notebooks during the Sphinx build, so their imports (cv2 / av / maite) and

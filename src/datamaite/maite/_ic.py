@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from numbers import Integral
 from typing import Any
 
 import numpy as np
@@ -36,8 +37,9 @@ def _candidate_source_id(label: ClassificationLabel) -> int | str | None:
 def _dense_index(label: ClassificationLabel, taxonomy: Taxonomy | None) -> int | None:
     source_id = _candidate_source_id(label)
     if taxonomy is None:
-        if isinstance(source_id, int) and not isinstance(source_id, bool):
-            return source_id
+        # Any integral id counts (NumPy and pandas ids such as np.int64 are not ``int``), except bool.
+        if isinstance(source_id, Integral) and not isinstance(source_id, bool):
+            return int(source_id)
         return None
 
     # Prefer the taxonomy's explicit dense projection when source ids are unique.

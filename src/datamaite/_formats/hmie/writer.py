@@ -54,7 +54,7 @@ class HmieWriter(Writer[BoxTrackDataset]):
     ) -> list[Path]:
         """Serialise ``dataset`` under ``dest`` as HMIE and return files written.
 
-        Each sequence becomes a ``out_<id>_000000/out_<id>_000001/`` snippet
+        Each sequence becomes a ``out_<n>_000000/out_<n>_000001/`` snippet
         with the annotation under ``<labeler>/`` and the (copied) source video
         under ``seq_<container>/`` (the source suffix is preserved, e.g.
         ``seq_mp4/*.mp4`` or ``seq_ts/*.ts``). A sequence with no source video
@@ -66,6 +66,13 @@ class HmieWriter(Writer[BoxTrackDataset]):
         writer creates) are removed first, so re-writing to a destination with
         fewer sequences does not leave stale snippets that ``load_hmie(dest)``
         would then reload. Other contents of ``dest`` are left untouched.
+
+        Every sequence gets its own snippet: ``<n>`` is the sequence's
+        ``video_id`` when that snippet is free, else the next free number.
+        Loaders number ``video_id`` from 0 in every dataset, so a second
+        dataset appended with ``mode="append"``, or two sequences with the
+        same ``video_id``, go to new snippets instead of overwriting the
+        earlier ones. An existing snippet directory is never written into.
         """
         dest = to_dataset_path(dest, _options.get("storage_options"))
         dest.mkdir(parents=True, exist_ok=True)
@@ -76,15 +83,32 @@ class HmieWriter(Writer[BoxTrackDataset]):
                 if stale.is_dir():
                     remove_tree(stale)
         written: list[Path] = []
+        taken: set[str] = set()
         for seq in dataset.sequences:
-            written.extend(_write_sequence(dest, seq, labeler=labeler))
+            name = _snippet_prefix(dest, seq, taken)
+            written.extend(_write_sequence(dest, seq, labeler=labeler, name=name))
         return written
 
 
-def _write_sequence(dest: Path, seq: VideoSequence, *, labeler: str) -> list[Path]:
-    name = f"out_{seq.video_id:06d}"
+def _snippet_prefix(dest: Path, seq: VideoSequence, taken: set[str]) -> str:
+    """A free ``out_<n>`` name for ``seq``: its ``video_id`` when free, else the next free number."""
+    video_id = seq.video_id
+    number = video_id if isinstance(video_id, int) and not isinstance(video_id, bool) and video_id >= 0 else 0
+    while (name := f"out_{number:06d}") in taken or (dest / f"{name}_000000").exists():
+        number += 1
+    if number != video_id:
+        logger.info("Writing HMIE sequence %r as snippet %s: the snippet for its video_id is taken", video_id, name)
+    taken.add(name)
+    return name
+
+
+def _write_sequence(dest: Path, seq: VideoSequence, *, labeler: str, name: str) -> list[Path]:
     snippet_name = f"{name}_000001"
-    snippet_dir = dest / f"{name}_000000" / snippet_name
+    video_dir = dest / f"{name}_000000"
+    snippet_dir = video_dir / snippet_name
+    if video_dir.exists():
+        # _snippet_prefix picked a free name; refuse rather than overwrite one made since.
+        raise FileExistsError(f"HMIE snippet directory already exists, refusing to overwrite it: {video_dir}")
     written: list[Path] = []
 
     # Preserve the source container/suffix: HMIE discovery recognises both

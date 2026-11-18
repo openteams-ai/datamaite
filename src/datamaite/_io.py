@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import io
 import shutil
-import struct
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
@@ -17,6 +17,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
+from datamaite._image_header import parse_image_header, read_image_header
 from datamaite._upath import is_remote_path, local_open_target, storage_options_for, to_dataset_path
 
 _COPY_BUFFER_SIZE = 1024 * 1024
@@ -24,8 +25,6 @@ _COPY_BUFFER_SIZE = 1024 * 1024
 # bounds a tensor span and its H*W*3 output, which is a different budget with a
 # coincidentally equal value -- see _safetensors.MAX_ENCODED_IMAGE_BYTES.
 _MAX_REMOTE_ENCODED_IMAGE_BYTES = 256 * 1024 * 1024
-_MAX_ENCODED_IMAGE_HEADER_BYTES = 256 * 1024
-_INITIAL_ENCODED_IMAGE_HEADER_BYTES = 32
 #: Public: :mod:`datamaite._safetensors` imports this as its pre-read early-out.
 MAX_DECODED_IMAGE_PIXELS = 200_000_000
 _SOURCE_STORAGE_OPTIONS: contextvars.ContextVar[Mapping[str, Any] | None] = contextvars.ContextVar(
@@ -396,108 +395,16 @@ def iter_video_frames(path: str | Path) -> Iterator[np.ndarray]:
             yield frame.to_ndarray(format="bgr24")
 
 
-def _tiff_dimensions(payload: bytes) -> tuple[int, int] | None:
-    if len(payload) < 8 or payload[:2] not in {b"II", b"MM"}:
-        return None
-    endian = "<" if payload[:2] == b"II" else ">"
-    if struct.unpack(f"{endian}H", payload[2:4])[0] != 42:
-        return None
-    offset = struct.unpack(f"{endian}I", payload[4:8])[0]
-    if offset + 2 > len(payload):
-        return None
-    count = struct.unpack(f"{endian}H", payload[offset : offset + 2])[0]
-    values: dict[int, int] = {}
-    for index in range(min(count, 4096)):
-        start = offset + 2 + index * 12
-        if start + 12 > len(payload):
-            break
-        tag, value_type, value_count = struct.unpack(f"{endian}HHI", payload[start : start + 8])
-        if tag not in {256, 257} or value_count != 1:
-            continue
-        if value_type == 3:
-            values[tag] = struct.unpack(f"{endian}H", payload[start + 8 : start + 10])[0]
-        elif value_type == 4:
-            values[tag] = struct.unpack(f"{endian}I", payload[start + 8 : start + 12])[0]
-    return (values[256], values[257]) if 256 in values and 257 in values else None
-
-
-def _webp_dimensions(payload: bytes) -> tuple[int, int] | None:
-    if len(payload) < 30 or not (payload.startswith(b"RIFF") and payload[8:12] == b"WEBP"):
-        return None
-    chunk = payload[12:16]
-    if chunk == b"VP8X":
-        return 1 + int.from_bytes(payload[24:27], "little"), 1 + int.from_bytes(payload[27:30], "little")
-    if chunk == b"VP8L" and payload[20] == 0x2F:
-        bits = int.from_bytes(payload[21:25], "little")
-        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
-    if chunk == b"VP8 ":
-        start = payload.find(b"\x9d\x01\x2a", 20, min(len(payload), 256))
-        if start >= 0 and start + 7 <= len(payload):
-            width, height = struct.unpack("<HH", payload[start + 3 : start + 7])
-            return width & 0x3FFF, height & 0x3FFF
-    return None
-
-
-def _encoded_image_dimensions(payload: bytes) -> tuple[int, int] | None:  # noqa: C901 - bounded format parser
-    """Read common encoded dimensions without allocating a pixel buffer."""
-    try:
-        if payload.startswith(b"\x89PNG\r\n\x1a\n") and payload[12:16] == b"IHDR":
-            return struct.unpack(">II", payload[16:24])
-        if payload.startswith((b"GIF87a", b"GIF89a")):
-            return struct.unpack("<HH", payload[6:10])
-        if payload.startswith(b"BM") and len(payload) >= 26:
-            width = struct.unpack("<i", payload[18:22])[0]
-            return width, abs(struct.unpack("<i", payload[22:26])[0])
-        tiff = _tiff_dimensions(payload)
-        if tiff is not None:
-            return tiff
-        webp = _webp_dimensions(payload)
-        if webp is not None:
-            return webp
-        if payload.startswith(b"\xff\xd8"):
-            offset = 2
-            limit = min(len(payload), 256 * 1024)
-            while offset + 4 <= limit:
-                if payload[offset] != 0xFF:
-                    offset += 1
-                    continue
-                marker = payload[offset + 1]
-                offset += 2
-                if marker in {0x01, 0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
-                    continue
-                length = struct.unpack(">H", payload[offset : offset + 2])[0]
-                if length < 2 or offset + length > limit:
-                    return None
-                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
-                    height, width = struct.unpack(">HH", payload[offset + 3 : offset + 7])
-                    return width, height
-                offset += length
-    except (IndexError, struct.error):
-        return None
-    return None
-
-
 def probe_image_dimensions(
     source: bytes | str | Path, storage_options: Mapping[str, Any] | None = None
 ) -> tuple[int, int] | None:
-    """Read encoded dimensions without decoding pixels or unbounded media."""
-    if isinstance(source, bytes):
-        payload = source[:_INITIAL_ENCODED_IMAGE_HEADER_BYTES]
-    else:
-        payload = read_resource_prefix(source, _INITIAL_ENCODED_IMAGE_HEADER_BYTES, storage_options)
-    dimensions = _positive_dimensions(_encoded_image_dimensions(payload))
-    if dimensions is not None:
-        return dimensions
-    # JPEG marker segments and TIFF IFDs can place dimensions beyond the fixed
-    # header. Retry with a bounded prefix; unusual larger headers fall back to
-    # the caller's existing decode path.
-    if not payload.startswith((b"\xff\xd8", b"II", b"MM")):
-        return None
-    if isinstance(source, bytes):
-        payload = source[:_MAX_ENCODED_IMAGE_HEADER_BYTES]
-    else:
-        payload = read_resource_prefix(source, _MAX_ENCODED_IMAGE_HEADER_BYTES, storage_options)
-    return _positive_dimensions(_encoded_image_dimensions(payload))
+    """Read an image's decoded ``(width, height)`` from its header, without decoding pixels.
+
+    EXIF orientation is applied, as OpenCV applies it when decoding, so this is
+    the size the loaders and the MAITE datasets see.
+    """
+    header = read_image_header(source, storage_options)
+    return header.display_size if header is not None else None
 
 
 def sample_image_dimensions(sample: Any) -> tuple[int, int] | None:
@@ -531,12 +438,6 @@ def sample_image_dimensions(sample: Any) -> tuple[int, int] | None:
         return None
 
 
-def _positive_dimensions(dimensions: tuple[int, int] | None) -> tuple[int, int] | None:
-    if dimensions is None or dimensions[0] <= 0 or dimensions[1] <= 0:
-        return None
-    return dimensions
-
-
 def _imread_flags(cv2: Any, *, color: bool, gray: bool) -> int:
     """OpenCV read flags: ``gray`` wins over ``color``; neither is ``IMREAD_UNCHANGED``."""
     if gray:
@@ -552,7 +453,8 @@ def decode_image_bytes(payload: bytes, *, color: bool = False, gray: bool = Fals
     """
     import cv2  # type: ignore[import-untyped]
 
-    dimensions = _encoded_image_dimensions(payload)
+    header = parse_image_header(io.BytesIO(payload))
+    dimensions = (header.width, header.height) if header is not None else None
     recognized = payload.startswith(
         (b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"BM", b"\xff\xd8", b"II", b"MM", b"RIFF")
     )

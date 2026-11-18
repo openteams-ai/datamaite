@@ -40,11 +40,11 @@ hold the exact rules.
 | `visdrone_video` | MOT | `load_mot(dataset_format="visdrone_video")` | `sequences/<seq>/*.jpg` + `annotations/<seq>.txt` |
 | `tao` | MOT | `load_mot(dataset_format="tao")` | `annotations/<split>.json` (COCO-style tracks) + `frames/<split>/<video>/*.jpg` |
 | `flat_mp4` | MOT | `load_mot(dataset_format="flat_mp4")` | a flat directory of `*.mp4` clips (no annotations) |
-| `coco` | OD | `load_od(dataset_format="coco")` | `annotations/instances.json` + image files |
+| `coco` | OD | `load_od(dataset_format="coco")` | `annotations/instances.json` + image files, or one `annotations/instances_<split>.json` per split (every file is loaded; split `<split>`). Images are found at `file_name` under the root, `images/<split>/`, `<split>/` or `images/`. The writer writes one `instances_<split>.json` per split when samples have splits (one split included), else one `instances.json` |
 | `yolo` | OD | `load_od(dataset_format="yolo")` | `data.yaml` + `images/<split>/…` + `labels/<split>/…` (absent/empty label file ⇒ background image) |
 | `yolo` | IC | `load_ic(dataset_format="yolo")` | `<split>/<class>/**/*.{jpg,png,…}` folder tree — top-level folder names become class labels; images may nest deeper (autodetect stays shallow). `layout="flat"`/`"split"` overrides the split-vs-flat inference when a class is named like a split |
 | `visdrone` | OD / IC | `load_od` / `load_ic(dataset_format="visdrone")` | `images/*.jpg` + `annotations/*.txt` (VisDrone-DET layout) |
-| `huggingface_vision` | OD / IC | `load_od` / `load_ic(dataset_format="huggingface_vision")` | Hugging Face ImageFolder / parquet vision dataset |
+| `huggingface_vision` | OD / IC | `load_od` / `load_ic(dataset_format="huggingface_vision")` | Hugging Face ImageFolder / parquet vision dataset. OD boxes in `objects.bbox` are read as x, y, width, height; pass `bbox_format="xyxy"` for x_min, y_min, x_max, y_max. A label or category of `-1` means "no label" |
 | `huggingface_video_classification` | VC | `load_vc(dataset_format="huggingface_video_classification")` | VideoFolder: `<split>/<class>/*.mp4` (+ optional metadata) |
 | `flat_images` | OD | `load_od(dataset_format="flat_images")` | a flat directory of loose images (`.jpg`/`.png`/`.tif` + aliases, and `.safetensors`) → an unlabeled OD dataset (zero detections, no taxonomy). See the [SafeTensors image layout](https://gitlab.jatic.net/jatic/orchestration-interoperability/datamaite/-/blob/main/README.md#safetensors-image-layout) conventions. **Explicit opt-in only; never autodetected.** |
 
