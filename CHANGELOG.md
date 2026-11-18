@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A conversion test harness for object detection (#150). It checks that
+  loading, writing, converting and appending YOLO and COCO datasets keeps the
+  data: snapshots compare every field reachable from the dataset (images,
+  boxes and their polygons, attributes and ids, image metadata, the taxonomy
+  and its classes, splits, dataset info and licenses) unless its path is
+  excluded or the format declares it lost. One rich generated dataset runs
+  every operation and format pair; edge cases such as a single `val` split,
+  `validation` splits, nested and aliased file names, class ids of 10 and
+  above, a taxonomy out of id order, NumPy ids, EXIF-rotated photos, WebP and
+  TIFF run on the operations they are about, and appends are explicit cases.
+  Written datasets must not contain the absolute path of their source folder
+  (#157), must load after being moved with the source gone, and must pass
+  checks that read their files directly. Known bugs (#130, #131, #133, #134,
+  #151, #152, #153, and #159 to #164, which the harness found) are expected
+  failures only where they explain every difference. How a format joins the
+  harness is documented in `tests/README.md`.
+
 ## [0.7.0] - 2026-10-22
 
 ### Added
